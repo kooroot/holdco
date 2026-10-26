@@ -1,0 +1,9 @@
+id: gtm
+requires: []
+envelopes:
+  - { id: social-posting, scope: posts on company-owned accounts, limit: 5, unit: count, period: weekly, on_exceed: queue_t2 }
+actions:
+  - { id: content.draft, department: gtm, tier: T0, evaluator: gtm.md#post, gates: [], graduation: auto }
+  - { id: content.publish.company, department: gtm, tier: T1, evaluator: gtm.md#post, envelope: social-posting, gates: [verification-approved], graduation: auto }
+  - { id: operator.publish, department: gtm, tier: T3, gates: [], graduation: never }
+  - { id: legal.submit-application, department: gtm, tier: T3, gates: [], graduation: never }

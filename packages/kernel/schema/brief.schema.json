@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://holdco.dev/schema/brief.schema.json",
+  "$comment": "GENERATED from @holdco/kernel src/protocol/brief.ts. Do not edit. Cross-field rules are enforced only by the kernel.",
+  "type": "object",
+  "properties": {
+    "ticket": {
+      "type": "string",
+      "minLength": 1
+    },
+    "brief_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "pattern": {
+      "type": "string",
+      "enum": [
+        "solo",
+        "split",
+        "compete",
+        "sequential"
+      ]
+    },
+    "goal": {
+      "type": "string",
+      "minLength": 10
+    },
+    "purpose": {
+      "type": "string",
+      "minLength": 20
+    },
+    "context_refs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 300
+      },
+      "minItems": 1
+    },
+    "constraints": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "out_of_scope": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "format": {
+          "type": "string",
+          "minLength": 1
+        },
+        "location": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "format",
+        "location"
+      ],
+      "additionalProperties": false
+    },
+    "done_criteria": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 10
+      },
+      "minItems": 1
+    },
+    "stop_conditions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "budget": {
+      "type": "object",
+      "properties": {
+        "max_turns": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "max_spend_usd": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      },
+      "required": [
+        "max_turns",
+        "max_spend_usd"
+      ],
+      "additionalProperties": false
+    },
+    "worktree": {
+      "type": "string",
+      "minLength": 1
+    },
+    "restate_first": {
+      "type": "boolean"
+    },
+    "approach_hint": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "required": [
+    "ticket",
+    "brief_id",
+    "pattern",
+    "goal",
+    "purpose",
+    "context_refs",
+    "constraints",
+    "out_of_scope",
+    "output",
+    "done_criteria",
+    "stop_conditions",
+    "budget"
+  ],
+  "additionalProperties": false
+}

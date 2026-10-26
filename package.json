@@ -1,0 +1,17 @@
+{
+  "name": "holdco-monorepo",
+  "private": true,
+  "type": "module",
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit -p .",
+    "schemas": "bun packages/kernel/src/cli.ts schemas emit",
+    "examples": "bun packages/kernel/src/cli.ts examples emit",
+    "build:hook": "bun build packages/kernel/src/hook.ts --compile --minify --bytecode --outfile packages/kernel/dist/pre-tool-use"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.4",
+    "typescript": "5.9.3"
+  }
+}

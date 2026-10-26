@@ -1,0 +1,6 @@
+# Kernel module: always installed. Verification is required-fixed (docs/design/01-components.md).
+id: base
+requires: []
+envelopes: []
+actions:
+  - { id: verdict.issue, department: verification, tier: T0, evaluator: calibration, gates: [], graduation: never }

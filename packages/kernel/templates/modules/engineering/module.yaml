@@ -1,0 +1,9 @@
+# Merges start at T2 (Constitution 5.1: the strictest tier the risk allows) and earn T1/T0 by graduation.
+id: engineering
+requires: []
+envelopes: []
+actions:
+  - { id: code.branch, department: engineering, tier: T0, evaluator: engineering.md#app, gates: [], graduation: auto }
+  - { id: code.merge.docs, department: engineering, tier: T2, evaluator: engineering.md#docs, gates: [ci-green, verification-approved], graduation: auto }
+  - { id: code.merge.app, department: engineering, tier: T2, evaluator: engineering.md#app, gates: [ci-green, verification-approved], graduation: auto }
+  - { id: code.merge.contracts, department: engineering, tier: T3, evaluator: verification.md#security, gates: [ci-green, verification-approved], graduation: never }

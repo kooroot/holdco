@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "R=\"${CLAUDE_PROJECT_DIR:-$(cd \"$(git rev-parse --git-common-dir 2>/dev/null)/..\" 2>/dev/null && pwd)}\"; B=\"$R/.claude/hooks/pre-tool-use\"; [ -x \"$B\" ] || { echo \"holdco: hook binary missing; failing closed. Operator: holdco build-hook\" >&2; exit 2; }; HOLDCO_COMPANY_ROOT=\"$R\" \"$B\" || exit 2"
+          }
+        ]
+      }
+    ]
+  }
+}

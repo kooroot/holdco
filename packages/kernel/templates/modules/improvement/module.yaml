@@ -1,0 +1,6 @@
+id: improvement
+requires: []
+envelopes: []
+actions:
+  - { id: improvement.merge, department: improvement, tier: T1, evaluator: replay, gates: [replay-gain, canary-clean], graduation: never }
+  - { id: governance.exec-definition-change, department: improvement, tier: T3, gates: [replay-gain], graduation: never }

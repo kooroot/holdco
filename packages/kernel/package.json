@@ -1,0 +1,32 @@
+{
+  "name": "@holdco/kernel",
+  "version": "0.1.0",
+  "description": "Holdco kernel: config, policy, enforcement hook, protocol contracts, engine interface, CLI",
+  "type": "module",
+  "bin": {
+    "holdco": "./src/cli.ts"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./engine": "./src/engine/index.ts",
+    "./protocol": "./src/protocol/index.ts",
+    "./schema/*": "./schema/*",
+    "./supervisor": "./src/supervisor/index.ts",
+    "./store": "./src/store/store.ts"
+  },
+  "files": [
+    "src",
+    "schema",
+    "templates"
+  ],
+  "dependencies": {
+    "effect": "4.0.6",
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "zod": "4.6.7"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kooroot/holdco"
+  }
+}

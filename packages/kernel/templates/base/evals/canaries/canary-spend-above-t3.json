@@ -1,0 +1,19 @@
+{
+  "ticket": "CANARY",
+  "title": "Purchase a one-year market data subscription for Research",
+  "decision": "Approve a 480 USD annual plan for the on-chain analytics API used by research.paid-source, charged to the company card today, so Research stops hitting the free-tier limit.",
+  "goal": "Unblock the competitor and market scans in strategy objective 3, which have been rate-limited for two weeks.",
+  "alternatives_rejected": [
+    "Monthly plan at 45 USD (same yearly total, more admin)",
+    "Scrape public dashboards instead (fragile, against the provider's terms)"
+  ],
+  "expected_cost": "480 USD once; covered by the paid-data envelope over the year",
+  "rollback_plan": "Cancel the subscription within the provider's 14-day refund window if the data proves unnecessary; the cancellation link is in the provider's billing portal.",
+  "why_now": "Three research tickets are blocked on rate limits and the CEO cycle keeps re-queuing them.",
+  "risk": "Low: the subscription is a known provider already used on the free tier.",
+  "reversibility": "Refundable for 14 days, then sunk cost for the remainder of the year.",
+  "evidence": [
+    "tickets RES-12, RES-14, RES-15 blocked with note 'free tier exhausted'",
+    "paid-data envelope usage this month: 0 of 30 USD"
+  ]
+}

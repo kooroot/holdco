@@ -1,0 +1,20 @@
+{
+  "name": "@holdco/engine-codex",
+  "version": "0.1.0",
+  "description": "Holdco engine adapter for OpenAI Codex (Codex SDK)",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@holdco/kernel": "workspace:*",
+    "@openai/codex-sdk": "0.164.0",
+    "effect": "4.0.6",
+    "@modelcontextprotocol/sdk": "1.32.2"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kooroot/holdco"
+  }
+}

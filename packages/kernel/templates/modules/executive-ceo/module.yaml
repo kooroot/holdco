@@ -1,0 +1,5 @@
+id: executive-ceo
+requires: []
+envelopes: []
+actions:
+  - { id: executive.reallocate, department: executive, tier: T2, gates: [], graduation: never }

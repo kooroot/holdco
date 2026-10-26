@@ -1,0 +1,7 @@
+id: research
+requires: []
+envelopes:
+  - { id: paid-data, scope: paid research data and third-party APIs, limit: 30, unit: usd, period: monthly, on_exceed: escalate_t2 }
+actions:
+  - { id: research.report, department: research, tier: T0, evaluator: research.md, gates: [], graduation: auto }
+  - { id: research.paid-source, department: research, tier: T1, evaluator: research.md, envelope: paid-data, gates: [], graduation: auto }

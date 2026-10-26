@@ -1,0 +1,51 @@
+{
+  "permissions": {
+    "deny": [
+      "Edit(/company.yaml)",
+      "Write(/company.yaml)",
+      "Edit(/.holdco/**)",
+      "Write(/.holdco/**)",
+      "Read(/.holdco/**)",
+      "Edit(/CONSTITUTION.md)",
+      "Write(/CONSTITUTION.md)",
+      "Edit(/governance/**)",
+      "Write(/governance/**)",
+      "Edit(/evals/**)",
+      "Write(/evals/**)",
+      "Read(/evals/canaries/**)",
+      "Edit(/control/**)",
+      "Write(/control/**)",
+      "Edit(/AGENTS.md)",
+      "Write(/AGENTS.md)",
+      "Edit(/CLAUDE.md)",
+      "Write(/CLAUDE.md)",
+      "Edit(/.github/**)",
+      "Write(/.github/**)",
+      "Edit(/.claude/settings.json)",
+      "Write(/.claude/settings.json)",
+      "Edit(/.claude/hooks/**)",
+      "Write(/.claude/hooks/**)",
+      "Edit(/.codex/**)",
+      "Write(/.codex/**)",
+      "Edit(/package.json)",
+      "Write(/package.json)",
+      "Edit(/bun.lock)",
+      "Write(/bun.lock)",
+      "Edit(/node_modules/**)",
+      "Write(/node_modules/**)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "R=\"${CLAUDE_PROJECT_DIR:-$(cd \"$(git rev-parse --git-common-dir 2>/dev/null)/..\" 2>/dev/null && pwd)}\"; B=\"$R/.claude/hooks/pre-tool-use\"; [ -x \"$B\" ] || { echo \"holdco: hook binary missing; failing closed. Operator: holdco build-hook\" >&2; exit 2; }; HOLDCO_COMPANY_ROOT=\"$R\" \"$B\" || exit 2"
+          }
+        ]
+      }
+    ]
+  }
+}

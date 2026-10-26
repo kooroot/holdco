@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://holdco.dev/schema/return.schema.json",
+  "$comment": "GENERATED from @holdco/kernel src/protocol/return.ts. Do not edit. Cross-field rules are enforced only by the kernel.",
+  "type": "object",
+  "properties": {
+    "brief_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "done",
+        "partial",
+        "stopped",
+        "restatement"
+      ]
+    },
+    "result": {
+      "type": "string",
+      "minLength": 1
+    },
+    "criteria": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "item": {
+            "type": "string",
+            "minLength": 1
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "met",
+              "not_met",
+              "not_checked"
+            ]
+          },
+          "evidence": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "item",
+          "state"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "assumptions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "deviations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "open_questions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "stop_reason": {
+      "type": "string",
+      "minLength": 1
+    },
+    "cost": {
+      "type": "object",
+      "properties": {
+        "turns": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "spend_usd": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "turns",
+        "spend_usd"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "brief_id",
+    "status",
+    "result",
+    "criteria",
+    "evidence",
+    "assumptions",
+    "deviations",
+    "open_questions"
+  ],
+  "additionalProperties": false
+}

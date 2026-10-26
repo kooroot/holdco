@@ -1,0 +1,4 @@
+id: executive-coo
+requires: [executive-ceo]
+envelopes: []
+actions: []

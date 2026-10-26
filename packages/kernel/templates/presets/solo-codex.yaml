@@ -1,0 +1,83 @@
+# yaml-language-server: $schema=../../schema/preset.schema.json
+#
+# "solo-codex" preset: Codex only. One producing department, a CEO, no COO, no
+# self-improvement. Without a COO there is no second key, so every T2 action is routed to the
+# Operator as T3. Every action starts at the strictest tier its risk allows.
+
+version: 1
+
+company:
+  name: solo-codex-co
+  mission: Build and ship one product with as little of my time as possible.
+  timezone: Asia/Seoul
+
+operator:
+  github: OPERATOR
+
+alerts:
+  channels:
+    - type: slack
+      webhook_env: SLACK_WEBHOOK_URL
+
+runtime:
+  host: macos-launchd
+  tick: 120s
+  max_concurrent_sessions: 2
+  session_timeout: 30m
+  lease_grace: 5m
+  max_attempts: 2
+
+modules:
+  executive: ceo
+  departments: [engineering]
+  improvement: { enabled: false, replay_min_tickets: 20 }
+  auto_graduation: false
+  juniors: { enabled: true, max_per_task: 3 }
+
+engines:
+  codex:
+    auth_env: OPENAI_API_KEY
+    prices:
+    # EXAMPLE PRICES (USD per million tokens). Codex reports tokens, not cost, so the kernel
+    # meters spend from this table. Replace with your provider's current rates before relying
+    # on budgets; doctor checks that every Codex model in use has an entry.
+      gpt-6.1-sol: { input_per_mtok: 5, cached_input_per_mtok: 0.5, output_per_mtok: 40 }
+      gpt-6-astra: { input_per_mtok: 25, cached_input_per_mtok: 2.5, output_per_mtok: 200 }
+
+roles:
+  ceo:           { engine: codex, model: gpt-6.1-sol, effort: high }
+  senior:        { engine: codex, model: gpt-6.1-sol, effort: high }
+  verification:  { engine: codex, model: gpt-6-astra, effort: high }   # differs from every producer's model
+  junior_worker: { engine: codex, model: gpt-6.1-sol, effort: medium }
+  junior_reader: { engine: codex, model: gpt-6.1-sol, effort: low }
+
+budget:
+  monthly_usd: 100
+  session_max_usd: 3
+  shares: { engineering: 0.6, verification: 0.25, executive: 0.15 }
+  provider_cap_set: false
+
+projects:
+  - id: app
+    path: ../app
+    class: core
+    share: 1
+    locked: ["CLAUDE.md", "AGENTS.md", ".github/**"]
+
+policy:
+  windows: { t2_internal: 24h, t2_external: 72h }
+  t3: { spend_per_action_usd: 20, spend_monthly_usd: 50 }
+  inbox: { batch_at: "09:00", timeout: 72h }
+  digest: { day: sun, at: "20:00" }
+  release: { day: sat, at: "12:00", min_gain: 0.02, max_regression: 0.01, watch: 3d, canary_traffic: 0.2 }
+  audit: { weekly_sample: 5, gtm_multiplier: 2, freeze_after_missed: 2 }
+  graduation: { samples: 30, agreement: 0.95, demotion_agreement: 0.85, demotion_window: 20 }
+  tripwires: { dept_spend_spike_x: 3, loop_threshold: 5 }
+  delegation: { max_iterations: 2, restate_threshold: 60m }
+  executive:
+    ceo_cycle: 24h
+    allocation_shift_t2: 0.2
+    canary_rate: 0
+    blocked_after: 12h
+    rubber_stamp_weeks: 4
+    high_disagreement: 0.3

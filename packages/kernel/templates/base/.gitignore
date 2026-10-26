@@ -1,0 +1,17 @@
+# Worktrees are ephemeral: one per session
+.claude/worktrees/
+
+# The hook binary is built locally by the Operator (holdco build-hook), never committed
+.claude/hooks/pre-tool-use
+
+# Dependencies
+node_modules/
+
+# Local overrides and secrets never enter the repo
+.claude/settings.local.json
+.env
+.env.*
+
+# Kernel state: SQLite database, per-session engine homes, transcripts, backups.
+# Never committed, never agent-readable.
+.holdco/

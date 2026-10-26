@@ -1,0 +1,25 @@
+# Merge-time lock. Pair with branch protection: "Require review from Code Owners".
+# `holdco init` writes the Operator's GitHub handle here. Agents must never hold this account's credentials.
+
+# Operator-only: configuration, constitution, governance, evaluation, control, runtime enforcement
+/company.yaml                            @OPERATOR
+/CONSTITUTION.md                         @OPERATOR
+/governance/                             @OPERATOR
+/evals/                                  @OPERATOR
+/control/                                @OPERATOR
+/AGENTS.md                               @OPERATOR
+/CLAUDE.md                               @OPERATOR
+/.github/                                @OPERATOR
+/.claude/settings.json                   @OPERATOR
+/.claude/hooks/                          @OPERATOR
+/.codex/                                 @OPERATOR
+/package.json                            @OPERATOR
+/bun.lock                                @OPERATOR
+
+# Improvement may author; the Operator must approve (Constitution 2.4, 2.5)
+/org/ceo.md                              @OPERATOR
+/org/coo.md                              @OPERATOR
+/org/departments/verification.md         @OPERATOR
+/org/roles/ceo.md                        @OPERATOR
+/org/roles/coo.md                        @OPERATOR
+/org/roles/verification-senior.md        @OPERATOR

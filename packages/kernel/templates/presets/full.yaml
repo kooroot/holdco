@@ -1,0 +1,108 @@
+# yaml-language-server: $schema=../../schema/preset.schema.json
+#
+# "full" preset: every module on, two engines. Claude Code and Codex split the roles so that
+# the CEO and COO, and the judge and the producers, never share an engine. Generated actions and
+# envelopes come from the enabled modules; `holdco init --preset full` writes the result to company.yaml.
+
+version: 1
+
+company:
+  name: example-co
+  mission: Ship and operate payment infrastructure that agents can use safely.
+  timezone: Asia/Seoul
+
+operator:
+  github: OPERATOR
+
+alerts:
+  channels:
+    - type: telegram
+      bot_token_env: TELEGRAM_BOT_TOKEN
+      chat_id: "123456789"
+  heartbeat_url_env: HEARTBEAT_URL
+
+runtime:
+  host: linux-systemd
+  tick: 60s
+  max_concurrent_sessions: 4
+  session_timeout: 45m
+  lease_grace: 5m
+  max_attempts: 3
+
+modules:
+  executive: ceo+coo
+  departments: [research, engineering, gtm, operations]
+  improvement: { enabled: true, replay_min_tickets: 20 }
+  auto_graduation: true
+  juniors: { enabled: true, max_per_task: 5 }
+
+engines:
+  claude:
+    auth_env: ANTHROPIC_API_KEY
+  codex:
+    auth_env: OPENAI_API_KEY
+    prices:
+    # EXAMPLE PRICES (USD per million tokens). Codex reports tokens, not cost, so the kernel
+    # meters spend from this table. Replace with your provider's current rates before relying
+    # on budgets; doctor checks that every Codex model in use has an entry.
+      gpt-6.1-sol: { input_per_mtok: 5, cached_input_per_mtok: 0.5, output_per_mtok: 40 }
+
+roles:
+  ceo:           { engine: claude, model: opus }
+  coo:           { engine: codex,  model: gpt-6.1-sol, effort: high }     # second key on another provider
+  senior:        { engine: claude, model: opus }
+  verification:  { engine: codex,  model: gpt-6.1-sol, effort: high }     # judge on another provider
+  improvement:   { engine: claude, model: opus }
+  junior_worker: { engine: claude, model: sonnet }
+  junior_reader: { engine: claude, model: haiku }
+  by_department:
+    gtm:         { engine: claude, model: sonnet }
+
+budget:
+  monthly_usd: 400
+  session_max_usd: 5
+  shares:
+    engineering: 0.35
+    research: 0.10
+    gtm: 0.10
+    operations: 0.05
+    verification: 0.15
+    executive: 0.15
+    improvement: 0.10
+  provider_cap_set: true
+
+projects:
+  - id: main-product
+    path: ../main-product
+    class: core
+    share: 0.6
+    locked: ["CLAUDE.md", "AGENTS.md", ".github/**", "contracts/**"]
+  - id: side-bet
+    path: ../side-bet
+    class: experiment
+    share: 0.15
+    locked: ["CLAUDE.md", "AGENTS.md", ".github/**"]
+    kill_criteria: No paying user by 2027-01-31
+  - id: tools
+    path: ../tools
+    class: maintenance
+    share: 0.1
+    locked: ["CLAUDE.md", "AGENTS.md", ".github/**"]
+
+policy:
+  windows: { t2_internal: 24h, t2_external: 72h }
+  t3: { spend_per_action_usd: 50, spend_monthly_usd: 200 }
+  inbox: { batch_at: "09:00", timeout: 72h }
+  digest: { day: sat, at: "10:00" }
+  release: { day: sat, at: "12:00", min_gain: 0.02, max_regression: 0.01, watch: 3d, canary_traffic: 0.2 }
+  audit: { weekly_sample: 10, gtm_multiplier: 2, freeze_after_missed: 2 }
+  graduation: { samples: 30, agreement: 0.95, demotion_agreement: 0.85, demotion_window: 20 }
+  tripwires: { dept_spend_spike_x: 3, loop_threshold: 5 }
+  delegation: { max_iterations: 2, restate_threshold: 60m }
+  executive:
+    ceo_cycle: 24h
+    allocation_shift_t2: 0.1
+    canary_rate: 0.05
+    blocked_after: 8h
+    rubber_stamp_weeks: 4
+    high_disagreement: 0.3

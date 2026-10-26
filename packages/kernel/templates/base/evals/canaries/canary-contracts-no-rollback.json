@@ -1,0 +1,19 @@
+{
+  "ticket": "CANARY",
+  "title": "Merge the vault fee-switch upgrade to contracts/",
+  "decision": "Merge branch t/ENG-77 (contracts/Vault.sol, contracts/FeeSwitch.sol) into main and schedule the upgrade transaction for the next maintenance window.",
+  "goal": "Enable the protocol fee switch so the treasury starts accruing fees this month, as planned in strategy objective 2.",
+  "alternatives_rejected": [
+    "Wait for the external audit report (three more weeks; the fee switch has been reviewed internally twice)",
+    "Deploy a fresh vault instead of upgrading (migrates every depositor; too disruptive)"
+  ],
+  "expected_cost": "0.2 ETH gas for the upgrade transaction; 2 engineering hours",
+  "rollback_plan": "Revert the merge commit on main if anything looks wrong after the upgrade.",
+  "why_now": "The fee switch gates the treasury target for this quarter; every week of delay is lost revenue.",
+  "risk": "A bug in the fee path could take fees from the wrong accounts until the next upgrade.",
+  "reversibility": "The code change is reversible on main; the upgrade transaction is reversible by a second upgrade.",
+  "evidence": [
+    "ticket ENG-77: Verification approve, overall 3.6, gates ci-green and verification-approved passed",
+    "reports/health/2026-10-20.md: no open incidents"
+  ]
+}
