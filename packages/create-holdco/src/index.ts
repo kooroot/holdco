@@ -67,11 +67,13 @@ try {
     run("bunx", ["holdco", "doctor"], target)
   }
 
-  const keys = Object.values(r.config.engines).map((e) => (e as { auth_env: string }).auth_env)
+  const engines = Object.entries(r.config.engines) as Array<[string, { auth?: string; auth_env?: string }]>
+  const keys = engines.flatMap(([, e]) => ((e.auth ?? "api_key") === "api_key" && e.auth_env ? [e.auth_env] : []))
+  const logins = engines.flatMap(([id, e]) => (e.auth === "subscription" ? [id === "claude" ? "claude login (Claude Pro/Max; usage comes from your plan)" : "codex login (ChatGPT; auth.json is copied into each session)"] : []))
   const alerts = r.config.alerts.channels.map((c) => ("bot_token_env" in c ? c.bot_token_env : "webhook_env" in c ? c.webhook_env : c.url_env))
   console.log(`
   Left for you (the Operator):
-    1. Keys: export ${[...keys, ...alerts].join(", ")} (an env file outside the repo, mode 600)
+    1. Keys: export ${[...keys, ...alerts].join(", ")} (an env file outside the repo, mode 600)${logins.length ? `\n       Logins: ${logins.join("; ")}` : ""}
     2. Strategy: edit ${target}/governance/strategy.md — replace the example objective
     3. Prices: if Codex is in use, replace the example prices in company.yaml
     4. Start:  cd ${dir} && bunx holdco doctor && bunx holdco supervise

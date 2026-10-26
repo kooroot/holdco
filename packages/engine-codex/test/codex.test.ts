@@ -1,5 +1,8 @@
 /** Codex adapter: options, generated engine home, event folding and cost, checked against the real SDK types. */
 import { describe, expect, test } from "bun:test"
+import { mkdtempSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import * as NodePath from "node:path"
 import type { ThreadEvent } from "@openai/codex-sdk"
 import type { SessionSpec } from "@holdco/kernel/engine"
 import { capabilities, CodexRunState, costUsd, DISABLED_FEATURES, toCodexOptions, toToml, workspaceAccess, wrapperScript } from "../src/index.ts"
@@ -26,6 +29,7 @@ const spec = (over: Partial<SessionSpec> = {}): SessionSpec => ({
   env: { OPENAI_API_KEY: "sk", PATH: "/usr/bin" },
   stateDir: "/w/co/.holdco/sessions/s2",
   price,
+  auth: { mode: "api_key" },
   ...over,
 })
 
@@ -104,6 +108,19 @@ describe("generated engine home", () => {
   })
   test("the kernel's guard binary is the PreToolUse hook", () =>
     expect(JSON.parse(files["hooks.json"]?.body as string).hooks.PreToolUse[0].hooks[0].command).toBe("/w/co/.claude/hooks/pre-tool-use"))
+})
+
+describe("subscription login", () => {
+  test("copies the Operator's auth.json into the session home and sends no API key", () => {
+    const f = NodePath.join(mkdtempSync(NodePath.join(tmpdir(), "codex-auth-")), "auth.json")
+    writeFileSync(f, '{"tokens":{"access_token":"t"}}', { mode: 0o600 })
+    const plan = toCodexOptions(spec({ auth: { mode: "subscription", credentialsFile: f } }), binary)
+    expect(plan.files["auth.json"]?.body).toContain("access_token")
+    expect(plan.files["auth.json"]?.mode).toBe(0o600)
+    expect(plan.codex.apiKey).toBeUndefined()
+    expect(plan.files["config.toml"]?.body).toContain('cli_auth_credentials_store = "file"')
+  })
+  test("api_key mode writes no auth.json", () => expect(toCodexOptions(spec(), binary).files["auth.json"]).toBeUndefined())
 })
 
 describe("toml", () => {

@@ -38,6 +38,7 @@ modules:
     max_per_task: 5
 engines:
   claude:
+    auth: subscription
     auth_env: ANTHROPIC_API_KEY
   codex:
     auth_env: OPENAI_API_KEY

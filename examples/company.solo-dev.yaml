@@ -33,6 +33,7 @@ modules:
     max_per_task: 3
 engines:
   claude:
+    auth: subscription
     auth_env: ANTHROPIC_API_KEY
 roles:
   ceo:

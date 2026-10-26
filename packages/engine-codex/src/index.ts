@@ -103,6 +103,7 @@ export const probe = async (ctx: ProbeContext, binary: CodexBinary = resolveCode
     hookCommand: ctx.hookCommand,
     env: { PATH: process.env["PATH"] ?? "/usr/bin:/bin" },
     stateDir: join(root, "state"),
+    auth: { mode: "api_key" },
   }
   const plan = toCodexOptions(spec, binary)
   writeHome(plan)
@@ -137,7 +138,22 @@ export const probe = async (ctx: ProbeContext, binary: CodexBinary = resolveCode
   return results
 }
 
-export const engine: Engine = { id: "codex", capabilities, run, probe: (ctx) => probe(ctx) }
+/** `codex login status` against the Operator's own CODEX_HOME (never a session home). */
+export const loginStatus = async (env: Record<string, string | undefined>): Promise<ProbeResult> => {
+  let binary: CodexBinary
+  try {
+    binary = resolveCodexBinary()
+  } catch (e) {
+    return { name: "Codex login", ok: false, detail: String(e) }
+  }
+  const home = env["CODEX_HOME"] ?? join(env["HOME"] ?? "", ".codex")
+  const r = spawnSync(binary.path, ["login", "status"], { encoding: "utf8", env: { ...env, CODEX_HOME: home } as NodeJS.ProcessEnv, timeout: 20_000 })
+  const text = `${r.stdout}${r.stderr}`.trim()
+  const ok = r.status === 0 && !/not logged in/i.test(text)
+  return { name: "Codex login (codex login status)", ok, detail: ok ? text.split("\n")[0] : `${text.split("\n")[0] || "not logged in"}; run \`codex login\` as the Operator (auth.json is copied into each session home)` }
+}
+
+export const engine: Engine = { id: "codex", capabilities, run, probe: (ctx) => probe(ctx), loginStatus }
 export { type CodexBinary, resolveCodexBinary, wrapperScript } from "./binary.ts"
 export { codexConfig, codexHome, codexHooks, DISABLED_FEATURES, toCodexOptions, workspaceAccess } from "./options.ts"
 export { CodexRunState, costUsd } from "./outcome.ts"

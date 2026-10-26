@@ -47,8 +47,8 @@ The scarcest resource in a one-person company is the Operator's attention, so ev
 ```yaml
 # company.yaml
 engines:
-  claude: { auth_env: ANTHROPIC_API_KEY }
-  codex:  { auth_env: OPENAI_API_KEY, prices: { gpt-6.1-sol: { input_per_mtok: 5, cached_input_per_mtok: 0.5, output_per_mtok: 40 } } }
+  claude: { auth: subscription }                         # your Claude Pro/Max login; or auth: api_key + auth_env
+  codex:  { auth: api_key, auth_env: OPENAI_API_KEY, prices: { gpt-6.1-sol: { input_per_mtok: 5, cached_input_per_mtok: 0.5, output_per_mtok: 40 } } }
 
 roles:
   ceo:           { engine: claude, model: opus }
@@ -80,7 +80,7 @@ bun packages/create-holdco/src/index.ts ../my-co --github <you> --project ../you
 cd ../my-co && bun link @holdco/kernel @holdco/engine-claude && bunx holdco build-hook && bunx holdco doctor
 ```
 
-Then, with your engine key exported and an objective written into `governance/strategy.md`:
+Then, logged in with `claude login` (or with your API key exported) and an objective written into `governance/strategy.md`:
 
 ```bash
 bunx holdco supervise                                # the company runs; Ctrl-C stops it cleanly

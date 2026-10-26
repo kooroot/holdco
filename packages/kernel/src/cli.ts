@@ -20,7 +20,7 @@ import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readdirSync,
 import { tmpdir } from "node:os"
 import * as NodePath from "node:path"
 import { Cause, Effect, Exit, Schema } from "effect"
-import { assignments, CompanyConfig, ENGINE_IDS, type EngineId, Preset } from "./config/company.ts"
+import { assignments, authMode, CompanyConfig, ENGINE_IDS, type EngineId, Preset } from "./config/company.ts"
 import { compensations } from "./engine/compensation.ts"
 import type { Engine } from "./engine/types.ts"
 import { Brief } from "./protocol/brief.ts"
@@ -111,7 +111,7 @@ const decodeConfig = (file: string): { config?: CompanyConfig; errors: Array<str
 // ── engines ────────────────────────────────────────────────────────────────
 
 /** Load an engine adapter as the company resolves it (its own node_modules), not as the kernel does. */
-const loadEngine = async (id: EngineId, dir: string): Promise<Pick<Engine, "capabilities" | "probe"> | string> => {
+const loadEngine = async (id: EngineId, dir: string): Promise<Pick<Engine, "capabilities" | "probe" | "loginStatus"> | string> => {
   try {
     const path = Bun.resolveSync(`@holdco/engine-${id}`, dir)
     const mod = await import(path)
@@ -187,8 +187,16 @@ const doctor = async (dir: string): Promise<Array<Check>> => {
           rmSync(scratch, { recursive: true, force: true })
         }
       }
-      const auth = config.engines[id]?.auth_env
-      add(`engine '${id}' credentials (${auth})`, auth !== undefined && (process.env[auth] ?? "") !== "", "set it in the env file the service loads")
+      const e = config.engines[id]
+      if (authMode(e) === "api_key") {
+        const auth = e?.auth_env
+        add(`engine '${id}' API key (${auth})`, auth !== undefined && (process.env[auth] ?? "") !== "", "set it in the env file the service loads")
+      } else if (typeof engine !== "string" && engine.loginStatus !== undefined) {
+        const r = await engine.loginStatus(process.env)
+        add(`engine '${id}' subscription: ${r.name}`, r.ok, r.detail)
+      } else {
+        add(`engine '${id}' subscription login`, false, "adapter cannot check login status")
+      }
     }
     add("operator.github is set", config.operator.github !== "OPERATOR", "create-holdco --github <handle>, or edit company.yaml and CODEOWNERS")
     for (const p of config.projects) {

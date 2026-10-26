@@ -52,6 +52,8 @@ const rejections: ReadonlyArray<Mutation> = [
   ["judge identical to a department override", (c) => { c.roles.verification = { ...c.roles.by_department.gtm } }, "roles.by_department.gtm"],
   ["same model on different engines is independent", (c) => { c.roles.verification = { engine: "claude", model: "gpt-6.1-sol" }; c.roles.senior = { engine: "codex", model: "gpt-6.1-sol", effort: "high" } }, ""],
   ["role on an unconfigured engine", (c) => { delete c.engines.codex }, "engine 'codex' is not configured"],
+  ["api_key auth without auth_env", (c) => { c.engines.codex = { auth: "api_key", prices: c.engines.codex.prices } }, "auth_env is required"],
+  ["subscription auth needs no auth_env", (c) => { c.engines.claude = { auth: "subscription" } }, ""],
   ["codex model without a price", (c) => { c.roles.coo = { engine: "codex", model: "gpt-unknown" } }, "no price for codex model 'gpt-unknown'"],
   ["COO enabled without a role", (c) => { delete c.roles.coo }, "roles.coo is required"],
   ["Improvement enabled without a role", (c) => { delete c.roles.improvement }, "roles.improvement is required"],

@@ -4,7 +4,9 @@
  * M3 smoke test; the option mapping and result mapping are unit-tested here.
  */
 import { query, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk"
-import type { Engine, EngineCapabilities, Outcome, SessionEvent, SessionSpec } from "@holdco/kernel/engine"
+import { spawnSync } from "node:child_process"
+import type { Engine, EngineCapabilities, Outcome, ProbeResult, SessionEvent, SessionSpec } from "@holdco/kernel/engine"
+import { resolveClaudeBinary } from "./binary.ts"
 import { toClaudeOptions } from "./options.ts"
 import { aborted, fromResult } from "./outcome.ts"
 
@@ -47,6 +49,24 @@ const run = async (spec: SessionSpec, onEvent: (e: SessionEvent) => void, signal
   return fromResult(result, sessionId)
 }
 
-export const engine: Engine = { id: "claude", capabilities, run }
+/** `claude auth status` with the environment a session would get: subscription login (OAuth) or key. */
+export const loginStatus = async (env: Record<string, string | undefined>): Promise<ProbeResult> => {
+  let bin: string
+  try {
+    bin = resolveClaudeBinary()
+  } catch (e) {
+    return { name: "Claude Code login", ok: false, detail: String(e) }
+  }
+  const r = spawnSync(bin, ["auth", "status"], { encoding: "utf8", env: env as NodeJS.ProcessEnv, timeout: 20_000 })
+  try {
+    const s = JSON.parse(r.stdout) as { loggedIn?: boolean; authMethod?: string }
+    return { name: `Claude Code login (${s.authMethod ?? "unknown"})`, ok: s.loggedIn === true, detail: s.loggedIn ? undefined : "run `claude login` as the Operator, or set CLAUDE_CODE_OAUTH_TOKEN" }
+  } catch {
+    return { name: "Claude Code login", ok: false, detail: (r.stderr || r.stdout).trim().slice(0, 200) || "claude auth status gave no answer" }
+  }
+}
+
+export const engine: Engine = { id: "claude", capabilities, run, loginStatus }
+export { resolveClaudeBinary } from "./binary.ts"
 export { CLAUDE_TOOLS, toClaudeOptions, toolLists } from "./options.ts"
 export { fromResult } from "./outcome.ts"

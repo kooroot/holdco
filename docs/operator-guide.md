@@ -18,7 +18,8 @@ This scaffolds the company, registers your repository as the first project, rend
 
 | Left for you | Where |
 |---|---|
-| Engine keys and alert tokens | an env file outside the repo, mode 600 (`~/.config/holdco/<company>.env`), loaded by the service |
+| Engine access | **Claude: your Pro/Max login** (`claude login` once as the Operator; usage draws from your plan, and Max/Team include monthly API credits that cover the Agent SDK). **Codex: an API key** (`OPENAI_API_KEY`); the ChatGPT login also works (`auth: subscription` copies `~/.codex/auth.json` into each session), but OpenAI recommends keys or Codex access tokens for scripted use, so that is your call. Set per engine in `company.yaml:engines.<id>.auth` |
+| Alert tokens, keys | an env file outside the repo, mode 600 (`~/.config/holdco/<company>.env`), loaded by the service |
 | The strategy's objectives | `governance/strategy.md` (replace the example row; the CEO opens tickets only for objectives listed here) |
 | Codex prices, if Codex is in use | `company.yaml:engines.codex.prices` |
 | A provider-side spend cap | at your model provider, then `budget.provider_cap_set: true` |
@@ -71,7 +72,7 @@ Deploys, publishes, outreach and credential actions have no executor: they reach
 
 ### 1. 만들기 (한 번)
 
-위 명령 하나로 회사를 만들고, 내 레포를 첫 프로젝트로 등록하고, `governance/strategy.md`를 생성하고, 의존성 설치·가드 컴파일·`holdco doctor`까지 끝냅니다. 대신 해줄 수 없는 것은 끝에 출력됩니다. 엔진 키와 알림 토큰(레포 밖 env 파일), 전략의 목표(예시 줄 교체, CEO는 여기 적힌 목표를 위해서만 티켓을 염), Codex 가격, 제공사 측 지출 상한.
+위 명령 하나로 회사를 만들고, 내 레포를 첫 프로젝트로 등록하고, `governance/strategy.md`를 생성하고, 의존성 설치·가드 컴파일·`holdco doctor`까지 끝냅니다. 대신 해줄 수 없는 것은 끝에 출력됩니다. 엔진 접근(Claude는 Pro/Max 로그인 `claude login` 한 번, 사용량은 플랜에서 차감. Codex는 API 키. ChatGPT 로그인도 `auth: subscription`으로 되지만 OpenAI는 스크립트 용도엔 키를 권장), 알림 토큰(레포 밖 env 파일), 전략의 목표(예시 줄 교체, CEO는 여기 적힌 목표를 위해서만 티켓을 염), Codex 가격, 제공사 측 지출 상한.
 
 `holdco doctor`가 통과해야만 돌아갑니다. 설정, 가드(두 엔진의 실제 차단·허용 호출), 이 호스트의 Codex 샌드박스, 키, 프로젝트, 전략, 카나리, 상태 DB를 확인합니다.
 

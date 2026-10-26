@@ -95,6 +95,8 @@ Every decision below was made against the five invariants in `01-components.md`.
 | D47 | `create-holdco` is one shot: scaffold → first project registered → `governance/strategy.md` rendered from `company.yaml` → `bun install` → guard built → doctor. `--github` is required; the remaining Operator inputs are printed | A company that cannot run after one command is not a product | Implemented, tested |
 | D48 | Self-improvement is gated on the Operator's labels: the Improvement cycle stays dormant until `replay_min_tickets` tickets are blind-graded (D20), then opens at most two tickets a week for itself; its merges tag a release; release-watch raises L4 on a demotion within `policy.release.watch` | Without ground truth, "improvement" is drift | Implemented |
 
+| D49 | `engines.<id>.auth: api_key \| subscription`. Claude defaults to the Operator's Pro/Max login (Anthropic: Agent SDK usage draws from plan limits; Max/Team include API credits); Codex defaults to an API key, with `subscription` copying `~/.codex/auth.json` into the session home (OpenAI recommends keys for scripted use). Costs stay in USD at API rates so budgets and tripwires are unchanged; doctor checks `claude auth status` / `codex login status` | Running 24/7 on API billing alone is expensive; a plan the Operator already pays for should be usable where the provider allows it | Implemented, tested |
+
 Findings 1–14 came from an independent review of the first draft; each maps to a decision above or to a correction in the files. A second review of the templates (`docs/reviews/2026-10-26-template-audit.md`) drove the protocol schemas, the tool list, the gate vocabulary and the template rewrite.
 
 ### Decisions left to the Operator
@@ -178,6 +180,8 @@ These are inputs to `init`, not blockers for building: monthly budget, host, fir
 | D46 | 실행기 없는 행동(배포, 게시, 외부 연락, 자격 증명)은 운영자가 수행하고 승인하는 `manual_action` 인박스 항목. v1 실행기는 `merge`와 `branch` | 무엇이 자동화됐는지 정직하게. 조용히 아무것도 안 하는 일은 없음 |
 | D47 | `create-holdco`는 한 번에: 스캐폴드 → 첫 프로젝트 등록 → `company.yaml`에서 `governance/strategy.md` 렌더링 → `bun install` → 가드 빌드 → doctor. `--github`은 필수, 남은 운영자 입력은 출력 | 명령 하나로 돌아가지 않는 회사는 제품이 아님 |
 | D48 | 자기개선은 운영자 라벨에 묶임: 블라인드 채점된 티켓이 `replay_min_tickets`개가 될 때까지 개선 주기는 휴면(D20), 그 뒤 주당 최대 두 개의 자기 티켓을 염. 개선 머지는 릴리스 태그를 만들고, `policy.release.watch` 안의 강등은 L4를 걺 | 정답 없는 "개선"은 표류 |
+
+| D49 | `engines.<id>.auth: api_key \| subscription`. Claude는 운영자의 Pro/Max 로그인이 기본(Anthropic: Agent SDK 사용량은 플랜 한도에서 차감, Max/Team엔 API 크레딧 포함), Codex는 API 키가 기본이고 `subscription`이면 `~/.codex/auth.json`을 세션 홈에 복사(OpenAI는 스크립트 용도엔 키 권장). 비용은 API 요율의 USD로 계속 계산해 예산·트립와이어는 그대로. doctor가 `claude auth status`·`codex login status`를 확인 | API 과금만으로 24/7은 비싸고, 운영자가 이미 내는 플랜을 제공사가 허용하는 범위에서 쓸 수 있어야 함 |
 
 지적 1~14는 초안에 대한 독립 리뷰에서 나왔고, 각각 위 결정이나 파일 수정으로 반영했습니다. 템플릿에 대한 두 번째 리뷰(`docs/reviews/2026-10-26-template-audit.md`)가 프로토콜 스키마, 도구 목록, 게이트 어휘, 템플릿 재작성을 이끌었습니다.
 

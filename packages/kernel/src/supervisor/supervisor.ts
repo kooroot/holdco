@@ -13,7 +13,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import * as NodePath from "node:path"
 import { spawnSync } from "node:child_process"
 import { Exit, Schema } from "effect"
-import { assignmentFor, type CompanyConfig, durationMs, type EngineId, type RoleKind } from "../config/company.ts"
+import { assignmentFor, authMode, type CompanyConfig, durationMs, type EngineId, type RoleKind } from "../config/company.ts"
 import { HOST_DENY_READ, UNREADABLE } from "../policy/paths.ts"
 import { effectiveTier, tierForChange, UnknownAction } from "../policy/tiers.ts"
 import { demotionDue, graduationCheck } from "../policy/graduation.ts"
@@ -734,10 +734,19 @@ export class Supervisor {
     return d
   }
 
+  private engineAuth(engine: EngineId): SessionSpec["auth"] {
+    if (authMode(this.config.engines[engine]) === "api_key") return { mode: "api_key" }
+    const home = this.env["HOME"] ?? "/tmp"
+    return engine === "codex" ? { mode: "subscription", credentialsFile: NodePath.join(this.env["CODEX_HOME"] ?? NodePath.join(home, ".codex"), "auth.json") } : { mode: "subscription" }
+  }
+
   private engineEnv(engine: EngineId): Record<string, string> {
-    const authEnv = this.config.engines[engine]?.auth_env
+    const e = this.config.engines[engine]
+    const authEnv = authMode(e) === "api_key" ? e?.auth_env : undefined
     const out: Record<string, string> = { PATH: this.env["PATH"] ?? "/usr/local/bin:/usr/bin:/bin", HOME: this.env["HOME"] ?? "/tmp" }
     if (authEnv && this.env[authEnv]) out[authEnv] = this.env[authEnv] as string
+    // Claude subscription logins may live in an OAuth token env var instead of ~/.claude
+    if (engine === "claude" && authMode(e) === "subscription" && this.env["CLAUDE_CODE_OAUTH_TOKEN"]) out["CLAUDE_CODE_OAUTH_TOKEN"] = this.env["CLAUDE_CODE_OAUTH_TOKEN"] as string
     for (const k of ["NO_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "SSL_CERT_FILE"]) if (this.env[k]) out[k] = this.env[k] as string
     return out
   }
@@ -782,6 +791,7 @@ export class Supervisor {
       env: this.engineEnv(assignment.engine),
       stateDir: this.sessionDir(p.sessionId),
       ...(price ? { price } : {}),
+      auth: this.engineAuth(assignment.engine),
     }
     return { spec, binding }
   }

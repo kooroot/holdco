@@ -126,12 +126,23 @@ const Price = Schema.Struct({
 })
 export type Price = typeof Price.Type
 
+/**
+ * How an engine authenticates. `api_key`: the variable named by `auth_env` holds the key, metered
+ * by the provider. `subscription`: the Operator's own login (Claude: `claude login`, usage from the
+ * plan's limits; Codex: `codex login`, credentials copied by the kernel into each session's home).
+ * Costs are still accounted in USD at API rates so budgets and tripwires keep working.
+ */
+export const AuthMode = Schema.Literals(["api_key", "subscription"])
+export type AuthMode = typeof AuthMode.Type
+
 const Engines = Schema.Struct({
   /** Claude Code via the Claude Agent SDK. Reports cost itself. */
-  claude: Schema.optionalKey(Schema.Struct({ auth_env: EnvName })),
+  claude: Schema.optionalKey(Schema.Struct({ auth: Schema.optionalKey(AuthMode), auth_env: Schema.optionalKey(EnvName) })),
   /** OpenAI Codex via the Codex SDK. Reports tokens only, so every model used needs a price. */
-  codex: Schema.optionalKey(Schema.Struct({ auth_env: EnvName, prices: Schema.Record(Text, Price) })),
+  codex: Schema.optionalKey(Schema.Struct({ auth: Schema.optionalKey(AuthMode), auth_env: Schema.optionalKey(EnvName), prices: Schema.Record(Text, Price) })),
 })
+
+export const authMode = (e: { auth?: AuthMode | undefined } | undefined): AuthMode => e?.auth ?? "api_key"
 
 export const Effort = Schema.Literals(["low", "medium", "high", "xhigh", "max"])
 
@@ -289,6 +300,11 @@ export const compositionErrors = (c: Draft): Array<string> => {
   }
   for (const d of Object.keys(r.by_department ?? {})) {
     if (!m.departments.includes(d)) errors.push(`roles.by_department.${d}: not an enabled department`)
+  }
+
+  for (const id of ENGINE_IDS) {
+    const e = c.engines[id]
+    if (e !== undefined && authMode(e) === "api_key" && e.auth_env === undefined) errors.push(`engines.${id}: auth_env is required when auth is api_key`)
   }
 
   // Every assignment runs on a configured engine; Codex models need a price to be metered

@@ -60,7 +60,7 @@ const makeSupervisor = (c: ReturnType<typeof company>, engine: FakeEngine, clock
   const sent: Array<string> = []
   const engines = new Map<"claude" | "codex", FakeEngine>([["claude", engine]])
   if (second) engines.set("codex", second)
-  const sup = new Supervisor({ companyRoot: c.dir, config: c.config, engines, store, now: () => clock.now, notifier: { send: async (s, t) => void sent.push(`${s}: ${t}`), heartbeat: async () => {} }, env: { PATH: process.env["PATH"], HOME: base, ANTHROPIC_API_KEY: "x" }, log: () => {} })
+  const sup = new Supervisor({ companyRoot: c.dir, config: c.config, engines, store, now: () => clock.now, notifier: { send: async (s, t) => void sent.push(`${s}: ${t}`), heartbeat: async () => {} }, env: { PATH: process.env["PATH"], HOME: base, ANTHROPIC_API_KEY: "x", OPENAI_API_KEY: "y" }, log: () => {} })
   return { sup, store, sent }
 }
 
@@ -108,7 +108,8 @@ describe("a ticket end to end", () => {
     const senior = engine.runs.find((r) => r.role.kind === "senior")!
     expect(senior.instructions).toContain("# Company Instructions")
     expect(senior.projectRoot).toBe(c.app)
-    expect(Object.keys(senior.env).sort()).toEqual(["ANTHROPIC_API_KEY", "HOME", "PATH"])
+    expect(senior.auth.mode).toBe("subscription") // solo-dev preset: the Operator's Claude plan
+    expect(Object.keys(senior.env).sort()).toEqual(["HOME", "PATH"]) // no key leaks into a subscription session
     expect(senior.sandbox.denyRead.some((p) => p.endsWith(".holdco"))).toBe(true)
     expect(senior.guard({ tool_name: "Write", tool_input: { file_path: NodePath.join(c.dir, "company.yaml") } })?.kind).toBe("locked")
     expect(senior.guard({ tool_name: "Write", tool_input: { file_path: NodePath.join(senior.cwd, "x.ts") } })).toBeUndefined()
@@ -263,6 +264,9 @@ describe("dual control (full preset: COO and judge on a second engine)", () => {
     expect(codex.runs.map((r) => r.role.kind)).toEqual(expect.arrayContaining(["verification", "coo"]))
     expect(claude.runs.map((r) => r.role.kind)).toEqual(expect.arrayContaining(["ceo", "senior"]))
     expect(store.proposal(id)?.review).toMatchObject({ decision: "concur" })
+    const judge = codex.runs.find((r) => r.role.kind === "verification")!
+    expect(judge.auth).toEqual({ mode: "api_key" }) // full preset: Codex stays on an API key
+    expect(judge.env["OPENAI_API_KEY"]).toBe("y")
     expect(store.ticket(id)?.window_closes_at).not.toBeNull()
     expect(existsSync(NodePath.join(c.app, "feature.md"))).toBe(true)
     await sup.stop()

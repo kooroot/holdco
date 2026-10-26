@@ -23,6 +23,7 @@ const spec = (over: Partial<SessionSpec> = {}): SessionSpec => ({
   hookCommand: "/w/co/.claude/hooks/pre-tool-use",
   env: { ANTHROPIC_API_KEY: "k", PATH: "/usr/bin" },
   stateDir: "/w/co/.holdco/sessions/s1",
+  auth: { mode: "api_key" },
   ...over,
 })
 const opts = (s: SessionSpec, events: Array<SessionEvent> = []) => toClaudeOptions(s, new AbortController(), (e) => events.push(e))

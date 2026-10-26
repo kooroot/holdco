@@ -71,6 +71,11 @@ export interface SessionSpec {
   readonly stateDir: string
   /** Token prices for engines that report tokens but not cost (from engines.<id>.prices). */
   readonly price?: Price
+  /**
+   * `api_key`: the key is in `env`. `subscription`: the Operator's own login; `credentialsFile`
+   * (Codex: `~/.codex/auth.json`) is copied by the adapter into the session's engine home.
+   */
+  readonly auth: { readonly mode: "api_key" } | { readonly mode: "subscription"; readonly credentialsFile?: string }
 }
 
 export type SessionEvent =
@@ -126,6 +131,8 @@ export interface Engine {
    * engine's sandbox really enforces what the kernel asks (e.g. a denied path is unreadable).
    */
   probe?(ctx: ProbeContext): Promise<ReadonlyArray<ProbeResult>>
+  /** Optional: is the Operator's subscription login usable on this host? (`holdco doctor`) */
+  loginStatus?(env: Record<string, string | undefined>): Promise<ProbeResult>
 }
 
 export interface ProbeContext {

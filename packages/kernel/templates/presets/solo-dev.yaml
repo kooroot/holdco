@@ -36,7 +36,8 @@ modules:
 
 engines:
   claude:
-    auth_env: ANTHROPIC_API_KEY
+    auth: subscription          # your Claude Pro/Max login (`claude login`); usage comes from the plan. Or: auth: api_key + auth_env
+    auth_env: ANTHROPIC_API_KEY   # used only when auth is api_key
 
 roles:
   ceo:           { engine: claude, model: opus }

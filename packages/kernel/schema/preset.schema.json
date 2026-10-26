@@ -250,19 +250,30 @@
         "claude": {
           "type": "object",
           "properties": {
+            "auth": {
+              "type": "string",
+              "enum": [
+                "api_key",
+                "subscription"
+              ]
+            },
             "auth_env": {
               "type": "string",
               "pattern": "^[A-Z][A-Z0-9_]*$"
             }
           },
-          "required": [
-            "auth_env"
-          ],
           "additionalProperties": false
         },
         "codex": {
           "type": "object",
           "properties": {
+            "auth": {
+              "type": "string",
+              "enum": [
+                "api_key",
+                "subscription"
+              ]
+            },
             "auth_env": {
               "type": "string",
               "pattern": "^[A-Z][A-Z0-9_]*$"
@@ -299,7 +310,6 @@
             }
           },
           "required": [
-            "auth_env",
             "prices"
           ],
           "additionalProperties": false
