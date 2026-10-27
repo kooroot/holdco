@@ -411,8 +411,17 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
         const mode = args.positional[2] as ModelMode
         if (!MODEL_MODES.includes(mode)) throw new OperatorError(`usage: holdco roles preset ${MODEL_MODES.join("|")}`)
         const roles = { ...defaultRoles(mode, { coo: config.modules.executive === "ceo+coo", improvement: config.modules.improvement.enabled, juniors: config.modules.juniors.enabled }), ...(config.roles.by_department ? { by_department: config.roles.by_department } : {}) }
-        // example prices for Codex models the defaults introduce, so the switch is not refused for a missing price
-        const codex = config.engines.codex && { ...config.engines.codex, prices: { ...config.engines.codex.prices } }
+        // The Codex engine is added when the mode needs it: the ChatGPT login when one exists on this
+        // machine (no key to manage), else an API key. Example prices for the models the defaults introduce.
+        const needsCodex = mode !== "claude"
+        const codexHome = process.env["CODEX_HOME"] ?? NodePath.join(process.env["HOME"] ?? "", ".codex")
+        const codexLoggedIn = existsSync(NodePath.join(codexHome, "auth.json"))
+        const codex = config.engines.codex
+          ? { ...config.engines.codex, prices: { ...config.engines.codex.prices } }
+          : needsCodex
+            ? { auth: (codexLoggedIn || !process.env["OPENAI_API_KEY"] ? "subscription" : "api_key") as "subscription" | "api_key", auth_env: "OPENAI_API_KEY", prices: {} as Record<string, { input_per_mtok: number; cached_input_per_mtok: number; output_per_mtok: number }> }
+            : undefined
+        if (codex && !config.engines.codex) console.log(`engines.codex added: ${codex.auth === "subscription" ? "ChatGPT login (codex login; auth.json is copied into each session)" : "API key from OPENAI_API_KEY"}`)
         if (codex) {
           const used = Object.entries(roles).filter(([k]) => k !== "by_department").map(([, a]) => a as { engine: string; model: string })
           for (const a of used) {
@@ -423,6 +432,7 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
         if (Exit.isFailure(exit)) throw new OperatorError(`the ${mode} defaults do not fit this company (is the engine configured under engines?):\n${String(exit.cause)}`)
         saveConfig(dir, exit.value, `roles: ${mode} defaults`)
         for (const kind of ROLE_KINDS) if (exit.value.roles[kind]) console.log(`${kind.padEnd(15)} ${formatAssignment(assignmentFor(exit.value, kind))}`)
+        if (needsCodex && !codexLoggedIn && codex?.auth === "subscription") console.log("note: no ~/.codex/auth.json yet — run `codex login`, then holdco doctor")
       } else throw new OperatorError("usage: holdco models [show] | set <role|senior@dept> <engine:model[:effort]> | preset claude|codex|dual   | prices   (holdco roles is the same command)")
       return true
     }
