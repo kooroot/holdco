@@ -284,6 +284,7 @@ switch (cmd) {
       dir: NodePath.resolve(dir),
       preset,
       kernelVersion: KERNEL_VERSION,
+      ...(existsSync(NodePath.join(import.meta.dir, "..", "..", "create-holdco", "package.json")) ? { packagesDir: NodePath.resolve(import.meta.dir, "..", "..") } : {}),
       git: !has("no-git"),
       ...(github ? { github } : {}),
       ...(name ? { companyName: name } : {}),

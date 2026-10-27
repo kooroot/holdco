@@ -14,6 +14,8 @@ bunx create-holdco my-co --github <you> --project ../your-repo \
   [--preset solo-dev|solo-codex|full] [--name n] [--mission "…"] [--timezone Asia/Seoul]
 ```
 
+Until `@holdco/*` is on npm, run it from a checkout: `git clone https://github.com/kooroot/holdco && cd holdco && bun install`, then `bun packages/create-holdco/src/index.ts <dir> …` with the same flags; the company is linked to the checkout's packages, so `git pull` in the checkout updates it.
+
 This scaffolds the company, registers your repository as the first project, renders `governance/strategy.md`, installs dependencies, compiles the guard binary and runs `holdco doctor`. What it cannot do for you is printed at the end:
 
 | Left for you | Where |
@@ -92,6 +94,8 @@ An action with no entry reaches your inbox as a "manual action" item with the br
 ## 한국어
 
 ### 1. 만들기 (한 번)
+
+`@holdco/*`가 npm에 올라가기 전까지는 체크아웃에서 실행합니다: `git clone https://github.com/kooroot/holdco && cd holdco && bun install` 뒤 `bun packages/create-holdco/src/index.ts <dir> …`(플래그는 같음). 회사는 체크아웃의 패키지에 링크되므로 체크아웃에서 `git pull`하면 같이 갱신됩니다.
 
 위 명령 하나로 회사를 만들고, 내 레포를 첫 프로젝트로 등록하고, `governance/strategy.md`를 생성하고, 의존성 설치·가드 컴파일·`holdco doctor`까지 끝냅니다. 대신 해줄 수 없는 것은 끝에 출력됩니다. 엔진 접근(Claude는 Pro/Max 로그인 `claude login` 한 번, 사용량은 플랜에서 차감. Codex는 API 키. ChatGPT 로그인도 `auth: subscription`으로 되지만 OpenAI는 스크립트 용도엔 키를 권장), 알림 토큰(레포 밖 env 파일), 전략의 목표(예시 줄 교체, CEO는 여기 적힌 목표를 위해서만 티켓을 염), Codex 가격, 제공사 측 지출 상한.
 

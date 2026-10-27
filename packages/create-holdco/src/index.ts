@@ -38,12 +38,17 @@ if (project && !existsSync(resolve(project, ".git"))) {
 
 const run = (cmd: string, args: Array<string>, cwd: string) => spawnSync(cmd, args, { cwd, stdio: "inherit" }).status === 0
 
+/** Running from a Holdco checkout (not an npm install): link the company to these packages. */
+const checkoutPackages = resolve(import.meta.dir, "..", "..")
+const fromCheckout = existsSync(resolve(checkoutPackages, "kernel", "package.json")) && existsSync(resolve(checkoutPackages, "create-holdco", "package.json"))
+
 try {
   const target = resolve(dir)
   const r = scaffold({
     dir: target,
     preset,
     kernelVersion: KERNEL_VERSION,
+    ...(fromCheckout ? { packagesDir: checkoutPackages } : {}),
     git: !argv.includes("--no-git"),
     github,
     ...(flag("name") ? { companyName: flag("name") as string } : {}),
@@ -56,7 +61,8 @@ try {
   console.log(`  preset    ${preset}`)
   console.log(`  modules   ${r.modules.join(", ")}`)
   console.log(`  roles     ${Object.entries(r.config.roles).filter(([k]) => k !== "by_department").map(([k, v]) => `${k}=${(v as { engine: string }).engine}:${(v as { model: string }).model}`).join("  ")}`)
-  console.log(`  projects  ${r.config.projects.map((p) => `${p.id} → ${p.path}`).join(", ") || "none (holdco project add <path>)"}\n`)
+  console.log(`  projects  ${r.config.projects.map((p) => `${p.id} → ${p.path}`).join(", ") || "none (holdco project add <path>)"}`)
+  console.log(`  packages  ${fromCheckout ? `linked from ${checkoutPackages}` : `@holdco/* ${KERNEL_VERSION} from npm`}\n`)
 
   if (!argv.includes("--no-install")) {
     console.log("  installing…")

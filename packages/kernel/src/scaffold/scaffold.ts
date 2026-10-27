@@ -24,6 +24,11 @@ export interface ScaffoldOptions {
   /** `false` skips git init / commit / tag (tests without git). */
   readonly git?: boolean
   readonly kernelVersion: string
+  /**
+   * The `packages/` directory of a Holdco checkout. When set, the company depends on the kernel and
+   * engines there (`link:`) instead of the npm registry — the way to run from source before a release.
+   */
+  readonly packagesDir?: string
 }
 
 export interface ScaffoldResult {
@@ -138,9 +143,10 @@ export const scaffold = (opts: ScaffoldOptions): ScaffoldResult => {
   const owners = NodePath.join(opts.dir, ".github", "CODEOWNERS")
   if (opts.github) writeFileSync(owners, readFileSync(owners, "utf8").replaceAll("@OPERATOR", `@${opts.github.replace(/^@/, "")}`))
 
-  const dependencies: Record<string, string> = { [KERNEL_PACKAGE]: opts.kernelVersion }
+  const spec = (pkg: string) => (opts.packagesDir ? `link:${NodePath.join(opts.packagesDir, pkg.replace("@holdco/", ""))}` : opts.kernelVersion)
+  const dependencies: Record<string, string> = { [KERNEL_PACKAGE]: spec(KERNEL_PACKAGE) }
   for (const id of Object.keys(config.engines) as Array<keyof typeof ENGINE_PACKAGE>) {
-    dependencies[ENGINE_PACKAGE[id]] = opts.kernelVersion
+    dependencies[ENGINE_PACKAGE[id]] = spec(ENGINE_PACKAGE[id])
   }
   writeFileSync(
     NodePath.join(opts.dir, "package.json"),
