@@ -138,7 +138,11 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
       console.log(`\n── ${t.id}: ${final?.state ?? "?"} ──`)
       for (const e of store.events(t.id)) console.log(`  ${new Date(e.at).toISOString().slice(11, 19)}  ${e.from_state ?? "·"} → ${e.to_state}  (${e.actor}) ${e.note ?? ""}`)
       console.log("\nsessions:")
-      for (const s of store.allSessionsSince(now)) console.log(`  ${s.role.padEnd(22)} ${s.engine}:${s.model.padEnd(14)} ${String(s.status ?? "running").padEnd(9)} turns ${String(s.turns).padStart(3)}  $${s.cost_usd.toFixed(3)} (${s.cost_source ?? "?"})${s.report ? "" : "  no structured report"}`)
+      for (const s of store.allSessionsSince(now)) {
+        const rep = s.report ? (JSON.parse(s.report) as Record<string, unknown>) : undefined
+        const note = rep?.["error"] ? `  error: ${String(rep["error"]).split("\n")[0]?.slice(0, 160)}` : rep ? "" : "  no structured report"
+        console.log(`  ${s.role.padEnd(22)} ${s.engine}:${s.model.padEnd(14)} ${String(s.status ?? "running").padEnd(9)} turns ${String(s.turns).padStart(3)}  $${s.cost_usd.toFixed(3)} (${s.cost_source ?? "?"})${note}`)
+      }
       console.log(`\nspend: $${store.spentAll(now).toFixed(3)}`)
       const inbox = store.inboxOpen()
       if (inbox.length) console.log(`inbox: ${inbox.map((i) => `#${i.id} ${i.kind}`).join(", ")}`)

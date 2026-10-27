@@ -1134,7 +1134,8 @@ export class Supervisor {
       }
       if (abort.signal.aborted && outcome.status !== "aborted" && this.now() - now >= spec.limits.timeoutMs) outcome = { ...outcome, status: "timeout" }
       const end = this.now()
-      this.store.endSession(sessionId, { ended_at: end, status: outcome.status, turns: outcome.turns, cost_usd: outcome.costUsd, cost_source: outcome.costSource, report: outcome.report, engine_session_id: outcome.engineSessionId })
+      this.store.endSession(sessionId, { ended_at: end, status: outcome.status, turns: outcome.turns, cost_usd: outcome.costUsd, cost_source: outcome.costSource, report: outcome.report ?? (outcome.error ? { error: outcome.error } : undefined), engine_session_id: outcome.engineSessionId })
+      if (outcome.status === "error") this.log(`${sessionId} (${p.role.role}) ended with an error: ${outcome.error ?? "unknown"}`)
       const spender = this.spenderOf(p.role.kind, p.role.department)
       this.store.charge({ at: end, role: p.role.role, department: spender, project: this.store.ticket(p.ticketId)?.project ?? null, session_id: sessionId, usd: outcome.costUsd, source: outcome.costSource })
       writeFileSync(NodePath.join(spec.stateDir, "outcome.json"), JSON.stringify({ ...outcome, events: undefined }, null, 2))

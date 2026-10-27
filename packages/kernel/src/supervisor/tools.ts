@@ -340,6 +340,8 @@ export class ToolServer {
     this.http = Bun.serve({
       hostname: "127.0.0.1",
       port,
+      // MCP keeps an SSE stream open per session; Bun's default 10 s idle timeout would cut it mid-session
+      idleTimeout: 255,
       fetch: (req) => this.handle(req),
     })
     this.port = this.http.port ?? port
