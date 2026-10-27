@@ -1,6 +1,6 @@
 /** Per-session git worktrees (D22). No two sessions ever share a checkout. */
 import { spawnSync } from "node:child_process"
-import { existsSync, rmSync } from "node:fs"
+import { existsSync, rmSync, symlinkSync } from "node:fs"
 import * as NodePath from "node:path"
 
 export class WorktreeError extends Error {}
@@ -37,6 +37,42 @@ export const createDetachedWorktree = (repo: string, name: string, ref: string):
   if (existsSync(dir)) return dir
   git(repo, ["worktree", "add", "--detach", dir, ref])
   return dir
+}
+
+/**
+ * A fresh worktree has no installed dependencies, so tests and type checks fail there for reasons
+ * that have nothing to do with the change (first live run: "TS2307, cannot resolve workspace
+ * package"). The kernel provisions them outside the sandbox before a session starts: the main
+ * checkout's node_modules is shared by symlink when it exists (no network, instant); otherwise the
+ * lockfile's installer runs once. Returns what it did, for the session's prompt.
+ */
+export const provisionDependencies = (worktree: string, repo: string, log: (line: string) => void = () => {}): string | undefined => {
+  if (existsSync(NodePath.join(worktree, "node_modules"))) return undefined
+  const installers: ReadonlyArray<[lock: string, cmd: Array<string>]> = [
+    ["bun.lock", ["bun", "install", "--frozen-lockfile"]],
+    ["bun.lockb", ["bun", "install", "--frozen-lockfile"]],
+    ["pnpm-lock.yaml", ["pnpm", "install", "--frozen-lockfile"]],
+    ["yarn.lock", ["yarn", "install", "--immutable"]],
+    ["package-lock.json", ["npm", "ci"]],
+  ]
+  const lock = installers.find(([l]) => existsSync(NodePath.join(worktree, l)))
+  if (lock === undefined) return undefined
+  const shared = NodePath.join(repo, "node_modules")
+  if (existsSync(shared)) {
+    try {
+      symlinkSync(shared, NodePath.join(worktree, "node_modules"), "dir")
+      return `node_modules is shared from ${repo} (symlink); do not run the package installer here`
+    } catch (e) {
+      log(`could not link node_modules into ${worktree}: ${String(e)}`)
+    }
+  }
+  const [cmd, ...args] = lock[1] as [string, ...Array<string>]
+  const r = spawnSync(cmd, args, { cwd: worktree, encoding: "utf8", timeout: 10 * 60_000, env: { PATH: process.env["PATH"] ?? "", HOME: process.env["HOME"] ?? "" } })
+  if (r.status !== 0) {
+    log(`${cmd} ${args.join(" ")} in ${worktree} failed: ${(r.stderr || r.stdout).trim().split("\n").at(-1) ?? ""}`)
+    return `dependency install (${cmd} ${args.join(" ")}) failed before the session; checks that need node_modules cannot run`
+  }
+  return `dependencies installed with ${cmd} ${args.join(" ")}`
 }
 
 export const removeWorktree = (repo: string, name: string) => {

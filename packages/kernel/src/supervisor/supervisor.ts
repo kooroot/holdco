@@ -33,7 +33,7 @@ import { consoleNotifier, type Notifier } from "./notify.ts"
 import { Org, projectInstructions } from "./org.ts"
 import { renderDigest } from "./digest.ts"
 import { type SessionBinding, ToolServer, type ToolHost } from "./tools.ts"
-import { changedPaths, createDetachedWorktree, createWorktree, defaultBranch, removeWorktree } from "./worktrees.ts"
+import { changedPaths, createDetachedWorktree, createWorktree, defaultBranch, provisionDependencies, removeWorktree } from "./worktrees.ts"
 
 export interface SupervisorOptions {
   readonly companyRoot: string
@@ -66,6 +66,18 @@ interface Running {
 
 /** Below this much remaining budget a share counts as exhausted: no session could do anything with it. */
 const MIN_SESSION_USD = 0.05
+/** How a judge handles gates and the sandbox; the first live runs rejected sound work over missing network and dependencies. */
+const VERIFICATION_RULES = (gates: ReadonlyArray<string>, ticketId: string): Array<string> => [
+  gates.length
+    ? `Run the required gates (${gates.join(", ")}) with the repository's own commands and record each in \`gates\` with evidence.`
+    : "This action requires no mechanical gate. Run the repository's tests or checks only where the changed files could affect them (a docs-only or data-only change needs none); record what you ran in `gates`.",
+  "The rubric's gate list is advice for scoring; only the gates listed above are required. Do not reject for a gate the action does not require.",
+  "You have no network: remote CI and GitHub are unreachable by design, so cite the local run of the same checks instead; the kernel treats `ci-green` as the local test run. An environmental limit (no network, a tool missing) is reported in the verdict's summary and `gates` evidence, never counted as a failure of the work.",
+  "A LOCKED PATH refusal from the policy hook is not an interrupt and not a finding: skip that path and continue. Searching the company repository is unnecessary; your rubric and the registry are in this prompt.",
+  "Verdicts: approve when the done criteria hold and no required gate failed; reject only for a defect in the work or a required gate that ran and failed; cannot-score only when the done criteria themselves cannot be assessed.",
+  `Score the rubric, then submit with verdict_submit; the verdict must name ticket ${ticketId}.`,
+]
+
 /** Gates the kernel itself evidences (the verdict, the replay gate, the canary), never Verification. */
 const KERNEL_GATES = new Set(["verification-approved", "replay-gain", "canary-clean"])
 const DAY = 86_400_000
@@ -583,6 +595,7 @@ export class Supervisor {
       const action = this.config.actions.find((a) => a.id === t.action)
       const rubricRef = action?.evaluator ?? "engineering.md#app"
       const cwd = createDetachedWorktree(repo, `rp-${tag}-${t.id}`, t.branch as string)
+      provisionDependencies(cwd, repo, this.log)
       const prompt = [
         `# Replay verification of ticket ${t.id}: ${t.title}`,
         `Department: ${t.department}. Action: ${t.action ?? "unknown"}. Rubric: ${rubricRef}. Mechanical gates required: ${(action?.gates ?? []).join(", ") || "none"}.`,
@@ -957,13 +970,14 @@ export class Supervisor {
       cwd = createWorktree(projectRoot, `t-${t.id}`, branch, defaultBranch(projectRoot))
     }
     this.store.db.run("UPDATE tickets SET branch = ? WHERE id = ? AND branch IS NULL", [branch, t.id])
+    const deps = provisionDependencies(cwd, projectRoot ?? this.root, this.log)
     const prior = this.store.sessionsForTicket(t.id).filter((s) => s.report).slice(-2)
     const prompt = [
       `# Ticket ${t.id}: ${t.title}`,
       `Department: ${t.department}${project ? ` · Project: ${project.id} (${project.class})` : " · Repository: the company itself (your worktree is a branch of release " + this.org.tag + ")"}`,
       `Goal: ${t.goal}`, `Why: ${t.why}`, `Done criteria:`, ...t.done_criteria.map((c) => `- ${c}`),
       t.action ? `Registry action the result needs: ${t.action}` : "Registry action: choose the right one from governance/policy.md and pass it to ticket_update.",
-      `Attempt ${t.attempts + 1} of ${this.config.runtime.max_attempts}. Your worktree is ${cwd} on branch ${branch}; commit there. Inspect the branch first: earlier attempts may have left work.`,
+      `Attempt ${t.attempts + 1} of ${this.config.runtime.max_attempts}. Your worktree is ${cwd} on branch ${branch}; commit there. Inspect the branch first: earlier attempts may have left work.${deps ? ` ${deps}.` : ""}`,
       t.state === "in_progress" && t.note ? `Last note on this ticket: ${t.note}` : "",
       prior.length ? `Earlier session reports:\n${prior.map((s) => s.report).join("\n")}` : "",
       "",
@@ -1009,12 +1023,14 @@ export class Supervisor {
     const base = t.department === "improvement" ? this.org.tag : defaultBranch(repo)
     const paths = t.branch ? changedPaths(repo, base, t.branch) : []
     const rubricRef = action?.evaluator ?? "engineering.md#app"
+    const deps = provisionDependencies(cwd, repo, this.log)
+    const gates = action?.gates ?? []
     const prompt = [
       `# Verify ticket ${t.id}: ${t.title}`,
-      `Department: ${t.department}. Action: ${t.action ?? "unknown"}. Rubric: ${rubricRef}. Mechanical gates required: ${(action?.gates ?? []).join(", ") || "none"}.`,
+      `Department: ${t.department}. Action: ${t.action ?? "unknown"}. Rubric: ${rubricRef}. Mechanical gates required by this action: ${gates.join(", ") || "none"}.`,
       `Goal: ${t.goal}`, `Done criteria:`, ...t.done_criteria.map((c) => `- ${c}`),
-      `The branch ${t.branch ?? "(none)"} is checked out read-only at ${cwd}. Files changed versus ${base}: ${paths.length ? paths.join(", ") : "(none)"}.`,
-      "Run every mechanical gate first (tests, linters, schema checks you find in the repository) and record each in `gates`. Then score the rubric. Submit with verdict_submit; the verdict must name ticket " + t.id + ".",
+      `The branch ${t.branch ?? "(none)"} is checked out read-only at ${cwd}. Files changed versus ${base}: ${paths.length ? paths.join(", ") : "(none)"}.${deps ? ` ${deps}.` : ""}`,
+      ...VERIFICATION_RULES(gates, t.id),
       "",
       "## Rubric", this.org.rubric(rubricRef) || "(rubric file missing: return cannot-score)",
     ].join("\n")
@@ -1204,6 +1220,7 @@ export class Supervisor {
     const parentBranch = ticket?.branch ?? `t/${binding.ticketId}`
     const suffix = brief.brief_id.startsWith(`${binding.ticketId}-`) ? brief.brief_id.slice(binding.ticketId.length + 1) : brief.brief_id
     const cwd = reader ? (parentRow?.worktree ?? this.root) : createWorktree(repo, `t-${binding.ticketId}-${suffix}`, `${parentBranch}-${suffix}`, parentBranch)
+    if (!reader) provisionDependencies(cwd, repo, this.log)
     const prompt = [
       `# Brief ${brief.brief_id} for ticket ${brief.ticket}`,
       "```json", JSON.stringify(brief, null, 2), "```",

@@ -106,6 +106,7 @@ Sessions are engine-neutral (D35). The kernel builds one `SessionSpec` and hands
 | Field | Value |
 |---|---|
 | `cwd` | the session's worktree (§8). Department and Verification sessions: a worktree of the project. CEO and COO: the live company checkout, read-only. Improvement: a worktree `imp-<id>` of the company repo |
+| worktree dependencies | before a session starts, the kernel links the main checkout's `node_modules` into the worktree (or runs the lockfile's installer once) so tests and type checks run there; agents never install (`node_modules/` is locked) |
 | `role`, `assignment` | the role file from `org/roles/` at the release tag (kind, department, capabilities, prompt) and its (engine, model, effort) |
 | `instructions` | company `AGENTS.md` + department charter + role prompt + the project's `AGENTS.md` (or `CLAUDE.md`) read as text. Never loaded as engine config |
 | `prompt` | the ticket, its prior returns and the branch state |

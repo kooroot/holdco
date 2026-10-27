@@ -277,6 +277,28 @@ describe("dual control (full preset: COO and judge on a second engine)", () => {
   })
 })
 
+describe("worktree dependencies", () => {
+  test("a fresh worktree shares the main checkout's node_modules by symlink; nothing happens without a lockfile", async () => {
+    const { provisionDependencies, createWorktree } = await import("../src/supervisor/worktrees.ts")
+    const repo = NodePath.join(base, "deps-repo")
+    mkdirSync(NodePath.join(repo, "node_modules", "left-pad"), { recursive: true })
+    git(repo, "init", "-q", "-b", "main")
+    git(repo, "config", "user.email", "t@t")
+    git(repo, "config", "user.name", "t")
+    writeFileSync(NodePath.join(repo, ".gitignore"), "node_modules\n")
+    writeFileSync(NodePath.join(repo, "bun.lock"), "{}\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "init")
+    const wt = createWorktree(repo, "t-X", "t/X", "main")
+    expect(provisionDependencies(wt, repo)).toContain("symlink")
+    expect(existsSync(NodePath.join(wt, "node_modules", "left-pad"))).toBe(true)
+    expect(provisionDependencies(wt, repo)).toBeUndefined() // already there
+    const plain = NodePath.join(base, "deps-plain")
+    mkdirSync(plain)
+    expect(provisionDependencies(plain, plain)).toBeUndefined()
+  })
+})
+
 describe("tool server", () => {
   test("rejects a bad token and unknown sessions", async () => {
     const c = company("auth")
