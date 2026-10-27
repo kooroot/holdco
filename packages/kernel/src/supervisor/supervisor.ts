@@ -771,7 +771,7 @@ export class Supervisor {
       assignment,
       cwd: p.cwd,
       companyRoot: this.root,
-      ...(p.projectRoot ? { projectRoot: p.projectRoot } : { configRoot: this.root }),
+      ...(p.projectRoot ? { projectRoot: p.projectRoot, projectLocked: p.locked ?? [] } : { configRoot: this.root }),
       instructions: this.org.instructions(p.role, p.extra ?? []),
       prompt: p.prompt,
       ...(p.outputSchema ? { outputSchema: p.outputSchema } : {}),

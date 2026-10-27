@@ -63,7 +63,8 @@ const locked = (detail: string) => new Blocked({ kind: "locked", detail })
 
 const judgeWrite = (id: Identity, event: HookEvent, ctx: GuardContext, raw: string): Blocked | undefined => {
   const base = event.cwd ?? ctx.project?.root ?? ctx.companyRoot
-  const isJunior = event.agent_id !== undefined && JUNIOR_WRITERS.has(event.agent_type ?? "")
+  // Claude reports subagent identity on the event; for kernel-run junior sessions the launcher's AGENT_ID says so.
+  const isJunior = (event.agent_id !== undefined && JUNIOR_WRITERS.has(event.agent_type ?? "")) || JUNIOR_WRITERS.has(id.agentId)
 
   const company = locate(raw, ctx.companyRoot, base)
   if (company) {

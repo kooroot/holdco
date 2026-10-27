@@ -59,14 +59,14 @@ The adversary is **an agent in this company**: misaligned, mistaken, or steered 
 
 | # | Risk | Status | Plan |
 |---|---|---|---|
-| R1 | `managedSettings` drops "non-allowlisted keys"; which deny and sandbox keys survive is undocumented | open | M3 spike: start a session with managed deny rules, attempt blocked writes, assert failure. Independent of the answer, L-c now resolves both repositories and blocks Edit/Write into the company root, and L-b covers the shell; L-a is defense in depth, not the only barrier |
+| R1 | `managedSettings` is filtered restrictive-only (deny lists survive, allow lists are dropped) and is dropped entirely on a machine with an admin-managed tier unless that tier opts in (`parentSettingsBehavior: "merge"`); doctor reports the case | narrowed (SDK 0.3.310 docs, 2026-10-27) | M3 spike: start a session with managed deny rules, attempt blocked writes, assert failure. Independent of the answer, L-c now resolves both repositories and blocks Edit/Write into the company root, and L-b covers the shell; L-a is defense in depth, not the only barrier |
 | R2 | Sandbox unavailable on some hosts | open | Doctor fails; sessions refuse to start. No unsandboxed mode in v1 |
 | R3 | Binary hook's shell heuristics are not a sandbox | accepted | It guards only unsupervised sessions; supervised ones rely on L-b |
 | R4 | `total_cost_usd` is an estimate | accepted | Reconciliation; provider cap |
 | R5 | Supervisor and sessions share an OS user | open | M7: sessions as a separate OS user or in a container with the company repo read-only |
 | R6 | The repo token can push arbitrary branches | accepted | Branch protection; merges only by the kernel executor |
 | R7 | The Operator's GitHub account is the root of trust for CODEOWNERS | accepted | 2FA / hardware key; a separate GitHub App for the executor |
-| R8 | Codex configuration keys come from documentation, not SDK types | **narrowed** | Verified on Codex CLI 0.164.0 / Linux: `--strict-config` accepts every key; `codex sandbox` shows denied reads and outside writes fail; two bugs found and fixed (D41). Open: R8a hooks firing under `codex exec` (needs a model turn, M3 smoke); R8b macOS Seatbelt (doctor probe runs there). The profile, not the hook, is the boundary meanwhile |
+| R8 | Codex configuration keys come from documentation, not SDK types | **R8a closed, R8b open** | Verified on Codex CLI 0.164.0 / Linux: `--strict-config` accepts every key; `codex sandbox` shows denied reads and outside writes fail; two bugs found and fixed (D41). R8a closed 2026-10-27: with a mock model endpoint the real CLI issued a shell call and the kernel guard, registered as the PreToolUse hook, blocked locked writes and unreadable reads (see 07-engines.md). Open: R8b macOS Seatbelt (doctor probe runs there) |
 | R9 | Codex reports usage only at turn end, so spend inside a turn is not capped by the engine | accepted | Cap reserved from the share before dispatch; adapter action limit and timeout; reconciliation; provider cap |
 
 ---
@@ -91,4 +91,4 @@ The adversary is **an agent in this company**: misaligned, mistaken, or steered 
 
 ### 4. 남은 위험
 
-위 표와 같습니다. 엔진 레이어가 들어오면서 R8(Codex 설정 키가 SDK 타입이 아니라 문서에서 옴)과 R9(Codex는 턴이 끝날 때만 사용량을 알려줘서 턴 중 지출을 엔진이 막지 못함)가 추가됐습니다. R8은 Codex CLI 0.164.0으로 Linux에서 직접 확인해 크게 줄였습니다. 모든 키가 `--strict-config`를 통과하고, `codex sandbox`로 차단 경로 읽기와 작업 공간 밖 쓰기가 실패하는 것을 확인했으며, 그 과정에서 프로필이 무시되던 버그 두 개를 찾아 고쳤습니다(D41). 남은 것은 `codex exec`에서 훅이 실제로 발동하는지(R8a, M3)와 macOS(R8b)이고, 그동안 경계는 훅이 아니라 권한 프로필입니다. R1의 대체 수단 설명을 바로잡았습니다. 이제 L-c가 두 레포를 모두 해석해 회사 루트로의 Edit/Write를 막고 L-b가 셸 경로를 막으므로, managed 키가 걸러지더라도 L-a는 유일한 방벽이 아니라 추가 방어선입니다.
+위 표와 같습니다. 엔진 레이어가 들어오면서 R8(Codex 설정 키가 SDK 타입이 아니라 문서에서 옴)과 R9(Codex는 턴이 끝날 때만 사용량을 알려줘서 턴 중 지출을 엔진이 막지 못함)가 추가됐습니다. R8은 Codex CLI 0.164.0으로 Linux에서 직접 확인해 크게 줄였습니다. 모든 키가 `--strict-config`를 통과하고, `codex sandbox`로 차단 경로 읽기와 작업 공간 밖 쓰기가 실패하는 것을 확인했으며, 그 과정에서 프로필이 무시되던 버그 두 개를 찾아 고쳤습니다(D41). R8a는 2026-10-27에 닫았습니다. 가짜 모델 엔드포인트로 실제 CLI가 셸 호출을 내게 하고, PreToolUse 훅으로 등록된 커널 가드가 잠긴 경로 쓰기와 읽기 금지 경로를 실제로 막는 것을 확인했습니다(그 과정에서 훅이 회사 루트와 신원을 알 수 있도록 Codex 프로세스 env에 `HOLDCO_*`·`AGENT_*`를 넘기는 버그를 고쳤습니다). R1도 SDK 문서로 좁혔습니다: `managedSettings`는 제한 방향 키만 남기고, 관리자 관리 설정 계층이 있는 머신에서는 그 계층이 `parentSettingsBehavior: "merge"`를 켜지 않으면 통째로 버려지며, doctor가 어느 경우인지 보고합니다. 남은 것은 macOS(R8b)입니다. R1의 대체 수단 설명을 바로잡았습니다. 이제 L-c가 두 레포를 모두 해석해 회사 루트로의 Edit/Write를 막고 L-b가 셸 경로를 막으므로, managed 키가 걸러지더라도 L-a는 유일한 방벽이 아니라 추가 방어선입니다.

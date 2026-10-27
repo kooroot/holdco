@@ -50,6 +50,8 @@ export interface SessionSpec {
   readonly companyRoot: string
   /** Set for project sessions. Project settings, hooks and MCP config are never loaded. */
   readonly projectRoot?: string
+  /** Operator-only globs inside the project (company.yaml projects[].locked), for the guard. */
+  readonly projectLocked?: ReadonlyArray<string>
   /** For company-repo worktrees: the trusted checkout that settings and hooks come from. */
   readonly configRoot?: string
   /** Company AGENTS.md + charter + role prompt + project instructions, assembled by the kernel. */

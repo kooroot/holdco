@@ -144,7 +144,8 @@ const Engines = Schema.Struct({
 
 export const authMode = (e: { auth?: AuthMode | undefined } | undefined): AuthMode => e?.auth ?? "api_key"
 
-export const Effort = Schema.Literals(["low", "medium", "high", "xhigh", "max"])
+/** `ultra` exists only on Codex (maximum reasoning with automatic delegation); rejected for Claude roles. */
+export const Effort = Schema.Literals(["low", "medium", "high", "xhigh", "max", "ultra"])
 
 /** Which engine and model play a role. Any role can run on any configured engine. */
 export const RoleAssignment = Schema.Struct({
@@ -310,6 +311,7 @@ export const compositionErrors = (c: Draft): Array<string> => {
   // Every assignment runs on a configured engine; Codex models need a price to be metered
   const assigned = assignments(c)
   for (const [where, a] of assigned) {
+    if (a.effort === "ultra" && a.engine !== "codex") errors.push(`${where}: effort 'ultra' exists only on codex`)
     if (c.engines[a.engine] === undefined) errors.push(`${where}: engine '${a.engine}' is not configured under engines`)
     if (a.engine === "codex" && c.engines.codex !== undefined && c.engines.codex.prices[a.model] === undefined) {
       errors.push(`${where}: no price for codex model '${a.model}' in engines.codex.prices; spend could not be metered`)

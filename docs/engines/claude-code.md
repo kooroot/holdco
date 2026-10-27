@@ -56,7 +56,7 @@ Confirm on a live session before relying on them (M3):
 
 | Item | Why it matters | Fallback |
 |---|---|---|
-| Which `managedSettings` keys survive filtering (R1) | Deny rules may be dropped | sandbox + in-process guard cover the same paths |
+| `managedSettings` on a machine with an admin-managed tier (R1) | The SDK docs (0.3.310) say: filtered restrictive-only (deny lists kept, allow lists dropped); applied as the sole policy tier when no admin tier exists; **dropped** when one exists unless it sets `parentSettingsBehavior: "merge"`. `holdco doctor` reports which case applies | sandbox + in-process guard cover the same paths |
 | Sandbox available on the host (bubblewrap / Seatbelt) | `failIfUnavailable` refuses to start otherwise | doctor fails first |
 | Exit code 2 blocks the call for the binary hook | Unsupervised sessions | the wrapper exits 2 on every failure |
 

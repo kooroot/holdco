@@ -38,18 +38,19 @@ engines:
   codex:
     auth_env: OPENAI_API_KEY
     prices:
-    # EXAMPLE PRICES (USD per million tokens). Codex reports tokens, not cost, so the kernel
-    # meters spend from this table. Replace with your provider's current rates before relying
-    # on budgets; doctor checks that every Codex model in use has an entry.
-      gpt-6.1-sol: { input_per_mtok: 5, cached_input_per_mtok: 0.5, output_per_mtok: 40 }
-      gpt-6-astra: { input_per_mtok: 25, cached_input_per_mtok: 2.5, output_per_mtok: 200 }
+    # USD per million tokens, OpenAI list prices checked 2026-10-26 (holdco models prices).
+    # Codex reports tokens, not cost, so the kernel meters spend from this table; re-check when
+    # OpenAI changes prices. doctor checks that every Codex model in use has an entry.
+      gpt-6-astra: { input_per_mtok: 10, cached_input_per_mtok: 1, output_per_mtok: 50 }
+      gpt-6.1-sol: { input_per_mtok: 2, cached_input_per_mtok: 0.1, output_per_mtok: 10 }
+      gpt-6-luna:  { input_per_mtok: 0.1, cached_input_per_mtok: 0.01, output_per_mtok: 0.5 }
 
 roles:
   ceo:           { engine: codex, model: gpt-6.1-sol, effort: high }
   senior:        { engine: codex, model: gpt-6.1-sol, effort: high }
   verification:  { engine: codex, model: gpt-6-astra, effort: high }   # differs from every producer's model
   junior_worker: { engine: codex, model: gpt-6.1-sol, effort: medium }
-  junior_reader: { engine: codex, model: gpt-6.1-sol, effort: low }
+  junior_reader: { engine: codex, model: gpt-6-luna, effort: low }
 
 budget:
   monthly_usd: 100

@@ -121,7 +121,18 @@ export const toCodexOptions = (spec: SessionSpec, binary: CodexBinary): CodexPla
   }
   if (spec.assignment.effort !== undefined) thread.modelReasoningEffort = spec.assignment.effort
   const path = [...binary.pathDirs, spec.env["PATH"] ?? ""].filter((p) => p !== "").join(":")
-  const env: Record<string, string> = { ...spec.env, PATH: path, CODEX_HOME: home, HOLDCO_SESSION_TOKEN: spec.tools.token }
+  // The command hook is a child of the codex process and reads these to judge paths and identity
+  // (packages/kernel/src/hook.ts); without them it would treat the worktree as the company root.
+  const env: Record<string, string> = {
+    ...spec.env,
+    PATH: path,
+    CODEX_HOME: home,
+    HOLDCO_SESSION_TOKEN: spec.tools.token,
+    HOLDCO_COMPANY_ROOT: spec.companyRoot,
+    AGENT_ID: spec.role.role,
+    AGENT_DEPT: spec.role.department,
+    ...(spec.projectRoot ? { HOLDCO_PROJECT_ROOT: spec.projectRoot, HOLDCO_PROJECT_LOCKED: JSON.stringify(spec.projectLocked ?? []) } : {}),
+  }
   const authKey = spec.auth.mode === "api_key" ? Object.keys(spec.env).find((k) => /API_KEY$/.test(k)) : undefined
   const codex: CodexOptions = {
     codexPathOverride: `${home}/bin/codex`,

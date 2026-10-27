@@ -9,8 +9,9 @@
  *   worker     junior_worker                              cheap, isolated execution
  *   reader     junior_reader                              cheapest; parallel reading
  *
- * Model names: Claude aliases are resolved by Claude Code (`opus`, `sonnet`, `haiku`, `fable`);
- * Codex names must be real model ids for your account — check with `codex` and adjust prices.
+ * Model names: Claude aliases are resolved by Claude Code (`opus`, `sonnet`, `haiku`, `fable`).
+ * Codex ids were checked against the CLI's model catalog (`codex debug models`, CLI 0.164.0, 2026-10-26):
+ * gpt-6-astra, gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-5.6-*, gpt-5.5 are listed and API-capable.
  */
 import type { EngineId, RoleAssignment } from "./company.ts"
 
@@ -29,15 +30,22 @@ export const MODEL_DEFAULTS: Readonly<Record<EngineId, Readonly<Record<Slot, Rol
     producer: { engine: "codex", model: "gpt-6.1-sol", effort: "high" },
     judge: { engine: "codex", model: "gpt-6-astra", effort: "high" },
     worker: { engine: "codex", model: "gpt-6.1-sol", effort: "medium" },
-    reader: { engine: "codex", model: "gpt-6.1-sol", effort: "low" },
+    reader: { engine: "codex", model: "gpt-6-luna", effort: "low" },
   },
 }
 
-/** Example prices (USD per million tokens) for the Codex defaults. Replace with your provider's rates; doctor warns while these remain. */
+/**
+ * Codex list prices, USD per million tokens, standard tier (≤272K input). Checked 2026-10-26 against
+ * three independent price tables synced from OpenAI's pricing page (benchlm.ai, morphllm.com,
+ * cloudinsight.cc; all agree). Re-check when OpenAI announces a change; `holdco models prices` prints these.
+ */
 export const EXAMPLE_PRICES = {
-  "gpt-6.1-sol": { input_per_mtok: 5, cached_input_per_mtok: 0.5, output_per_mtok: 40 },
-  "gpt-6-astra": { input_per_mtok: 25, cached_input_per_mtok: 2.5, output_per_mtok: 200 },
+  "gpt-6-astra": { input_per_mtok: 10, cached_input_per_mtok: 1, output_per_mtok: 50 },
+  "gpt-6.1-sol": { input_per_mtok: 2, cached_input_per_mtok: 0.1, output_per_mtok: 10 },
+  "gpt-6-sol": { input_per_mtok: 2, cached_input_per_mtok: 0.2, output_per_mtok: 10 },
+  "gpt-6-luna": { input_per_mtok: 0.1, cached_input_per_mtok: 0.01, output_per_mtok: 0.5 },
 } as const
+export const PRICES_CHECKED_ON = "2026-10-26"
 
 /** How the roles are split across engines. */
 export type ModelMode = "claude" | "codex" | "dual"
@@ -69,7 +77,7 @@ export const defaultRoles = (mode: ModelMode, opts: { coo: boolean; improvement:
       ? { ceo: c.executive, ...(opts.coo ? { coo: { engine: "claude", model: "sonnet" } } : {}), senior: c.producer, verification: c.judge, improvement: c.producer, junior_worker: c.worker, junior_reader: c.reader }
       : mode === "codex"
         ? { ceo: x.executive, ...(opts.coo ? { coo: x.judge } : {}), senior: x.producer, verification: x.judge, improvement: x.producer, junior_worker: x.worker, junior_reader: x.reader }
-        : { ceo: c.executive, ...(opts.coo ? { coo: x.executive } : {}), senior: c.producer, verification: x.executive, improvement: c.producer, junior_worker: c.worker, junior_reader: c.reader }
+        : { ceo: c.executive, ...(opts.coo ? { coo: x.executive } : {}), senior: c.producer, verification: x.judge, improvement: c.producer, junior_worker: c.worker, junior_reader: c.reader }
   if (!opts.improvement) delete base.improvement
   if (!opts.juniors) {
     delete base.junior_worker
@@ -82,8 +90,8 @@ export const defaultRoles = (mode: ModelMode, opts: { coo: boolean; improvement:
 export const parseAssignment = (s: string): RoleAssignment => {
   const [engine, model, effort] = s.split(":")
   if ((engine !== "claude" && engine !== "codex") || !model) throw new Error(`expected engine:model[:effort], got '${s}'`)
-  if (effort !== undefined && !["low", "medium", "high", "xhigh", "max"].includes(effort)) throw new Error(`unknown effort '${effort}'`)
-  const e = effort as "low" | "medium" | "high" | "xhigh" | "max" | undefined
+  if (effort !== undefined && !["low", "medium", "high", "xhigh", "max", "ultra"].includes(effort)) throw new Error(`unknown effort '${effort}'`)
+  const e = effort as RoleAssignment["effort"]
   return e === undefined ? { engine, model } : { engine, model, effort: e }
 }
 

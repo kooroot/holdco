@@ -8,7 +8,7 @@ import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs"
 import * as NodePath from "node:path"
 import { Exit, Schema } from "effect"
 import { assignmentFor, CompanyConfig, type EngineId, ENGINE_IDS, ROLE_KINDS, type RoleKind, type Tier } from "../config/company.ts"
-import { defaultRoles, EXAMPLE_PRICES, formatAssignment, MODEL_DEFAULTS, MODEL_MODES, type ModelMode, parseAssignment } from "../config/models.ts"
+import { defaultRoles, EXAMPLE_PRICES, formatAssignment, MODEL_DEFAULTS, MODEL_MODES, type ModelMode, parseAssignment, PRICES_CHECKED_ON } from "../config/models.ts"
 import type { Engine } from "../engine/types.ts"
 import { renderCompanyYaml } from "../scaffold/scaffold.ts"
 import { Store, type Ticket } from "../store/store.ts"
@@ -314,6 +314,13 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
         console.log("\ndefaults per engine (slot → model):")
         for (const id of ENGINE_IDS) console.log(`  ${id.padEnd(7)} ${Object.entries(MODEL_DEFAULTS[id]).map(([slot, a]) => `${slot}=${a.model}${a.effort ? `/${a.effort}` : ""}`).join("  ")}`)
         console.log("\nchange: holdco models set <role|senior@dept> <engine:model[:effort]>   ·   holdco models preset claude|codex|dual   (roles = models)")
+      } else if (sub === "prices") {
+        console.log(`Codex list prices known to this kernel (USD per million tokens, checked ${PRICES_CHECKED_ON}):`)
+        for (const [m, p] of Object.entries(EXAMPLE_PRICES)) console.log(`  ${m.padEnd(13)} input ${p.input_per_mtok}  cached ${p.cached_input_per_mtok}  output ${p.output_per_mtok}`)
+        if (config.engines.codex) {
+          console.log("\ncompany.yaml:engines.codex.prices:")
+          for (const [m, p] of Object.entries(config.engines.codex.prices)) console.log(`  ${m.padEnd(13)} input ${p.input_per_mtok}  cached ${p.cached_input_per_mtok}  output ${p.output_per_mtok}`)
+        }
       } else if (sub === "set") {
         const target = args.positional[2] ?? ""
         const value = args.positional[3] ?? (() => { throw new OperatorError("usage: holdco roles set <role|senior@dept> <engine:model[:effort]>") })()
@@ -346,7 +353,7 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
         if (Exit.isFailure(exit)) throw new OperatorError(`the ${mode} defaults do not fit this company (is the engine configured under engines?):\n${String(exit.cause)}`)
         saveConfig(dir, exit.value, `roles: ${mode} defaults`)
         for (const kind of ROLE_KINDS) if (exit.value.roles[kind]) console.log(`${kind.padEnd(15)} ${formatAssignment(assignmentFor(exit.value, kind))}`)
-      } else throw new OperatorError("usage: holdco models [show] | set <role|senior@dept> <engine:model[:effort]> | preset claude|codex|dual   (holdco roles is the same command)")
+      } else throw new OperatorError("usage: holdco models [show] | set <role|senior@dept> <engine:model[:effort]> | preset claude|codex|dual   | prices   (holdco roles is the same command)")
       return true
     }
     case "service": {

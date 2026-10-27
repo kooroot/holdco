@@ -217,8 +217,12 @@ const doctor = async (dir: string): Promise<Array<Check>> => {
       add(`canary proposals present (${n})`, n > 0, "add Proposal JSON files under evals/canaries/ or the COO is never tested", true)
     }
     if (config.engines.codex) {
-      const example = Object.values(config.engines.codex.prices).some((p) => p.input_per_mtok === 5 && p.cached_input_per_mtok === 0.5 && p.output_per_mtok === 40)
-      add("codex prices are not the preset's example values", !example, "replace engines.codex.prices with your provider's rates", true)
+      const { EXAMPLE_PRICES, PRICES_CHECKED_ON } = await import("./config/models.ts")
+      const stale = Object.entries(config.engines.codex.prices).filter(([m, p]) => {
+        const k = EXAMPLE_PRICES[m as keyof typeof EXAMPLE_PRICES]
+        return k !== undefined && (k.input_per_mtok !== p.input_per_mtok || k.output_per_mtok !== p.output_per_mtok)
+      })
+      add(`codex prices match the list prices known to this kernel (checked ${PRICES_CHECKED_ON})`, stale.length === 0, `differs for ${stale.map(([m]) => m).join(", ")}; fine if OpenAI changed prices, otherwise run holdco models prices`, true)
     }
     try {
       const { Store } = await import("./store/store.ts")

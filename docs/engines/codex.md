@@ -59,10 +59,12 @@ The bottom of the table is why the adapter never sets the SDK's `sandboxMode` (i
 
 | # | Item | Plan |
 |---|---|---|
-| R8a | Hooks fire in `codex exec` through the wrapper (only observable with a model turn) | M3 smoke: a session asked to patch `governance/` must produce a `blocked` event; until then the profile alone is the boundary |
+| R8a | **Closed.** Verified without a model: a mock Responses API (local `model_providers.mock`) made CLI 0.164.0 call `exec` → `tools.exec_command`; the kernel guard ran as the PreToolUse hook (`tool_name: "Bash"`, `tool_input.command`), exit 2 blocked writes to the company's `governance/`, reads of `.holdco/` and writes to the project's `.codex/`, and let a worktree write through. The hook is a child of the codex process, so the adapter now passes `HOLDCO_COMPANY_ROOT`, `HOLDCO_PROJECT_ROOT`, `HOLDCO_PROJECT_LOCKED`, `AGENT_ID`, `AGENT_DEPT` in its env | Codex 0.164 runs tools in "code mode": the model calls `exec` with JavaScript that invokes `tools.exec_command`; hooks still fire per shell command. Note also that `codex exec` appends `[projects.<cwd>] trust_level = "trusted"` to the session's `config.toml` — harmless because the home is per session |
 | R8b | Profile enforcement on macOS (Seatbelt) | the doctor probe runs there; Linux verified so far |
 | — | Usage arrives only at turn end | the adapter limits actions and time; the ledger reconciles against billing |
 | — | Example prices in presets | replace with your provider's current rates; the schema refuses a Codex model with no price |
+
+Model ids and prices: `codex debug models` (CLI 0.164.0) lists `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-sol`, `gpt-6-luna`, `gpt-5.6-*`, `gpt-5.5` with effort levels low…ultra; list prices in `config/models.ts` were checked on 2026-10-26 against three price tables synced from OpenAI's pricing page (benchlm.ai, morphllm.com, cloudinsight.cc).
 
 Sources: Codex hooks and permissions documentation (developers.openai.com/codex/hooks, /codex/permissions), Codex SDK 0.164.0 source (`dist/index.js`: argument construction, binary resolution).
 

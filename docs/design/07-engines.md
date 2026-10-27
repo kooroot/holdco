@@ -125,9 +125,9 @@ Native subagents are off (Claude: `Agent`/`Task` disallowed; Codex: `multi_agent
 
 | # | Item | Plan |
 |---|---|---|
-| R8a | Codex hooks actually fire under `codex exec` with the wrapper (needs a model turn) | M3 live smoke: a session told to patch `governance/` must produce a `blocked` event |
+| R8a | **Closed 2026-10-27.** Codex hooks fire under `codex exec --dangerously-bypass-hook-trust`: verified with a mock Responses API that made the real CLI 0.164.0 issue a code-mode `exec` → `exec_command` shell call. The kernel's compiled guard received `tool_name: "Bash"` with the command, exit 2 blocked it ("Command blocked by PreToolUse hook"), and the target file was untouched — for an absolute-path write into the company's `governance/`, a read of `.holdco/`, and a write to the project's `.codex/`; an ordinary worktree write passed. Found and fixed on the way: the hook needs `HOLDCO_COMPANY_ROOT`, `HOLDCO_PROJECT_ROOT/LOCKED`, `AGENT_ID/DEPT` in the codex process env, else it mistakes the worktree for the company | Live smoke with a real model still worthwhile for prompt quality, not for enforcement |
 | R8b | Profile enforcement on macOS (Seatbelt) | doctor probe runs there too; verified on Linux only so far |
-| R1 | Which `managedSettings` keys survive on Claude | M3 spike; sandbox and in-process guard already cover |
+| R1 | **Narrowed 2026-10-27** from the Agent SDK 0.3.310 type docs: `managedSettings` is filtered restrictive-only — denylists are kept, permissive arrays dropped — and applies as the sole policy tier when the machine has no admin-managed tier. With an admin tier (MDM / `managed-settings.json`) present it is **dropped** unless that tier sets `parentSettingsBehavior: "merge"`. The Claude adapter's doctor probe now reports which case applies, plus the sandbox dependencies (`bwrap`, `socat`) | Live confirmation of a blocked `Edit` still pending; sandbox and in-process guard cover the same paths either way |
 | — | Codex config keys can change between CLI versions | engine package pins the SDK (and with it the CLI); the doctor probe runs `--strict-config` on every start |
 
 ---

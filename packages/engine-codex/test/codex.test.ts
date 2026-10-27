@@ -56,6 +56,13 @@ describe("options", () => {
     expect(plan.codex.env?.["PATH"]).toBe("/opt/codex/codex-path:/usr/bin")
   })
   test("structured output is requested", () => expect(plan.turn.outputSchema).toEqual({ type: "object" }))
+  test("the command hook inherits what it needs to judge paths and identity", () => {
+    const e = toCodexOptions(spec({ projectLocked: ["contracts/**"] }), binary).codex.env ?? {}
+    expect(e["HOLDCO_COMPANY_ROOT"]).toBe("/w/co")
+    expect(e["HOLDCO_PROJECT_ROOT"]).toBe("/w/app")
+    expect(e["HOLDCO_PROJECT_LOCKED"]).toBe('["contracts/**"]')
+    expect([e["AGENT_ID"], e["AGENT_DEPT"]]).toEqual(["verification-senior", "verification"])
+  })
 })
 
 describe("wrapper", () => {

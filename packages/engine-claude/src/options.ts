@@ -92,7 +92,8 @@ export const toClaudeOptions = (
     abortController,
     env: { ...spec.env },
   }
-  if (spec.assignment.effort !== undefined) options.effort = spec.assignment.effort
+  // `ultra` is Codex-only (the config schema rejects it for Claude roles); map defensively to `max`
+  if (spec.assignment.effort !== undefined) options.effort = spec.assignment.effort === "ultra" ? "max" : spec.assignment.effort
   if (spec.configRoot !== undefined) options.projectConfigRoot = spec.configRoot
   if (spec.outputSchema !== undefined) options.outputFormat = { type: "json_schema", schema: spec.outputSchema }
   return options
