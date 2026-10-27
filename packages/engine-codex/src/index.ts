@@ -64,8 +64,11 @@ const run = async (spec: SessionSpec, onEvent: (e: SessionEvent) => void, signal
     }
   } catch (e) {
     if (!controller.signal.aborted) {
-      onEvent({ kind: "error", message: String(e) })
-      return { ...state.outcome(spec.price, false, false), status: "error", error: String(e) }
+      // the SDK's error carries only stderr; the reason usually arrived as an error event on stdout
+      const seen = state.outcome(spec.price, false, false)
+      const message = [String(e).trim(), seen.error].filter((m) => m && m.length > 0).join("\n") + `\n(rerun by hand: CODEX_HOME=${plan.home} ${plan.home}/bin/codex exec --skip-git-repo-check -m ${spec.assignment.model} "say hi")`
+      onEvent({ kind: "error", message })
+      return { ...seen, status: "error", error: message }
     }
   } finally {
     clearTimeout(timer)

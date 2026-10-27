@@ -161,7 +161,7 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
       console.log("\nsessions:")
       for (const s of store.allSessionsSince(now)) {
         const rep = s.report ? (JSON.parse(s.report) as Record<string, unknown>) : undefined
-        const note = rep?.["error"] ? `  error: ${String(rep["error"]).split("\n")[0]?.slice(0, 160)}` : rep ? "" : "  no structured report"
+        const note = rep?.["error"] ? `\n      error: ${String(rep["error"]).trim().split("\n").join("\n             ").slice(0, 1200)}` : rep ? "" : "  no structured report"
         console.log(`  ${s.role.padEnd(22)} ${s.engine}:${s.model.padEnd(14)} ${String(s.status ?? "running").padEnd(9)} turns ${String(s.turns).padStart(3)}  $${s.cost_usd.toFixed(3)} (${s.cost_source ?? "?"})${note}`)
       }
       console.log(`\nspend: $${store.spentAll(now).toFixed(3)}`)
