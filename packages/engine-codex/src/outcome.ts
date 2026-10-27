@@ -86,10 +86,24 @@ export class CodexRunState {
     if (aborted) return { ...base, status: "aborted" }
     if (this.error !== undefined) return { ...base, status: "error", error: this.error }
     if (!wantsReport) return { ...base, status: "success" }
-    try {
-      return { ...base, status: "success", report: JSON.parse(this.finalText) as unknown }
-    } catch {
-      return { ...base, status: "success" } // kernel validates and retries once (compensation: structured output)
-    }
+    const report = extractJson(this.finalText)
+    return report === undefined ? { ...base, status: "success" } /* kernel validates and retries once */ : { ...base, status: "success", report }
   }
+}
+
+/** The JSON object in a final message: the whole text, or a ```json fence, or the last {...} block. */
+export const extractJson = (text: string): unknown => {
+  const candidates = [text.trim()]
+  const fence = /```(?:json)?\s*([\s\S]*?)```/g
+  for (let m = fence.exec(text); m; m = fence.exec(text)) candidates.push((m[1] as string).trim())
+  const first = text.indexOf("{")
+  const last = text.lastIndexOf("}")
+  if (first >= 0 && last > first) candidates.push(text.slice(first, last + 1))
+  for (const c of candidates) {
+    try {
+      const v = JSON.parse(c) as unknown
+      if (v !== null && typeof v === "object") return v
+    } catch {}
+  }
+  return undefined
 }

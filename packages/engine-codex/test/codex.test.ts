@@ -6,6 +6,8 @@ import * as NodePath from "node:path"
 import type { ThreadEvent } from "@openai/codex-sdk"
 import type { SessionSpec } from "@holdco/kernel/engine"
 import { capabilities, CodexRunState, costUsd, DISABLED_FEATURES, toCodexOptions, toToml, workspaceAccess, wrapperScript } from "../src/index.ts"
+import { strictCompatible } from "../src/options.ts"
+import { extractJson } from "../src/outcome.ts"
 import { compensations } from "../../kernel/src/engine/compensation.ts"
 
 const price = { input_per_mtok: 5, cached_input_per_mtok: 0.5, output_per_mtok: 40 }
@@ -56,6 +58,19 @@ describe("options", () => {
     expect(plan.codex.env?.["PATH"]).toBe("/opt/codex/codex-path:/usr/bin")
   })
   test("structured output is requested", () => expect(plan.turn.outputSchema).toEqual({ type: "object" }))
+  test("a schema OpenAI's strict mode cannot express (a map) goes into the prompt instead; the final message is parsed", () => {
+    const verdictLike = { type: "object", properties: { scores: { type: "object", additionalProperties: { type: "integer" } }, summary: { type: "string" } }, required: ["scores", "summary"], additionalProperties: false }
+    expect(strictCompatible(verdictLike)).toBe(false)
+    expect(strictCompatible({ type: "object", properties: { a: { type: "string" } }, required: ["a"], additionalProperties: false })).toBe(true)
+    expect(strictCompatible({ type: "object", properties: { a: { type: "string" } }, required: [], additionalProperties: false })).toBe(false)
+    const p = toCodexOptions(spec({ outputSchema: verdictLike }), binary)
+    expect(p.turn.outputSchema).toBeUndefined()
+    expect(p.input).toContain("exactly one JSON object matching this JSON Schema")
+    expect(p.input).toContain('"additionalProperties":{"type":"integer"}')
+    expect(extractJson('Here is the verdict:\n```json\n{"scores":{"a":3},"summary":"ok"}\n```\nDone.')).toEqual({ scores: { a: 3 }, summary: "ok" })
+    expect(extractJson('text before {"a":1} and after')).toEqual({ a: 1 })
+    expect(extractJson("no json here")).toBeUndefined()
+  })
   test("the command hook inherits what it needs to judge paths and identity", () => {
     const e = toCodexOptions(spec({ projectLocked: ["contracts/**"] }), binary).codex.env ?? {}
     expect(e["HOLDCO_COMPANY_ROOT"]).toBe("/w/co")

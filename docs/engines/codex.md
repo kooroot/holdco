@@ -22,7 +22,7 @@
 | Juniors | kernel sessions via `delegate_start`; `features.multi_agent = false` | D37 |
 | Limits | adapter aborts after `maxTurns` completed actions or at `timeoutMs`; `signal` for interrupts | `index.ts` |
 | Cost | tokens × `engines.codex.prices` (cached input at its rate; reasoning is part of output) | `costUsd` |
-| Structured result | `outputSchema` on the turn; final message parsed, kernel validates | `CodexRunState` |
+| Structured result | `outputSchema` on the turn when the schema is strict-compatible (every object closed, all properties required); a schema with a map (Verdict `scores`) is placed in the prompt and the final message is parsed instead — OpenAI's API rejects such schemas, which ended judge sessions with exit 1 on the first live run (2026-10-27); kernel validates either way | `strictCompatible`, `extractJson`, `CodexRunState` |
 
 ### 2. The generated home
 

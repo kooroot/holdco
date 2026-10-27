@@ -107,6 +107,27 @@ export const codexHome = (spec: SessionSpec, binary: CodexBinary): CodexPlan["fi
     : {}),
 })
 
+/**
+ * OpenAI structured outputs accept only "strict" schemas: every object lists its properties, all
+ * required, `additionalProperties: false`. A map (`additionalProperties: <schema>`, as in a
+ * Verdict's `scores`) cannot be expressed, and the API rejects the request — which ended Codex
+ * judge sessions with exit 1 on the first live run. Such schemas go into the prompt instead and
+ * the final message is parsed (the kernel validates and retries once).
+ */
+export const strictCompatible = (schema: unknown): boolean => {
+  if (Array.isArray(schema)) return schema.every(strictCompatible)
+  if (schema === null || typeof schema !== "object") return true
+  const o = schema as Record<string, unknown>
+  if (o["type"] === "object") {
+    const ap = o["additionalProperties"]
+    if (ap !== undefined && ap !== false) return false
+    const props = (o["properties"] ?? {}) as Record<string, unknown>
+    const req = (o["required"] ?? []) as Array<string>
+    if (Object.keys(props).some((k) => !req.includes(k))) return false
+  }
+  return Object.values(o).every(strictCompatible)
+}
+
 export const toCodexOptions = (spec: SessionSpec, binary: CodexBinary): CodexPlan => {
   const home = `${spec.stateDir}/codex-home`
   const caps = spec.role.capabilities
@@ -139,11 +160,15 @@ export const toCodexOptions = (spec: SessionSpec, binary: CodexBinary): CodexPla
     env,
     ...(authKey ? { apiKey: spec.env[authKey] as string } : {}),
   }
+  const strict = spec.outputSchema !== undefined && strictCompatible(spec.outputSchema)
+  const schemaInPrompt = spec.outputSchema !== undefined && !strict
+    ? `\n\n---\n\nYour final message must be exactly one JSON object matching this JSON Schema and nothing else (no prose, no code fence):\n${JSON.stringify(spec.outputSchema)}`
+    : ""
   return {
     codex,
     thread,
-    turn: spec.outputSchema === undefined ? {} : { outputSchema: spec.outputSchema },
-    input: `${spec.instructions}\n\n---\n\n${spec.prompt}`,
+    turn: strict ? { outputSchema: spec.outputSchema } : {},
+    input: `${spec.instructions}\n\n---\n\n${spec.prompt}${schemaInPrompt}`,
     files: codexHome(spec, binary),
     home,
   }
