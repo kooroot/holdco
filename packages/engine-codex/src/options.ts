@@ -70,10 +70,15 @@ export const codexConfig = (spec: SessionSpec): TomlTable => {
   const network: Record<string, TomlValue> = { enabled: domains.length > 0 }
   if (domains.length > 0) network["domains"] = Object.fromEntries(domains.map((d) => [d, "allow"]))
 
-  const company: TomlTable =
-    spec.tools.kind === "http"
+  // Company tools are pre-approved: with approval_policy "never", an MCP tool left at the default
+  // approval mode is refused ("requires approval, but approval policy is never") — the kernel's
+  // tool server, not Codex, decides what each session may do (per-session token, role-scoped tools).
+  const company: TomlTable = {
+    ...(spec.tools.kind === "http"
       ? { url: spec.tools.url, bearer_token_env_var: "HOLDCO_SESSION_TOKEN" }
-      : { command: spec.tools.command, args: [...spec.tools.args], env: { HOLDCO_SESSION_TOKEN: spec.tools.token } }
+      : { command: spec.tools.command, args: [...spec.tools.args], env: { HOLDCO_SESSION_TOKEN: spec.tools.token } }),
+    default_tools_approval_mode: "approve",
+  }
 
   const features: Record<string, TomlValue> = { hooks: true }
   for (const f of DISABLED_FEATURES) features[f] = false

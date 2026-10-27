@@ -9,7 +9,7 @@ export class Blocked extends Data.TaggedError("Blocked")<{
     return this.kind === "interrupt"
       ? `INTERRUPT: ${this.detail} Stop now. Do not retry or route around this. ` +
           "You may write a note after complying (Constitution Art. 7)."
-      : `LOCKED PATH: ${this.detail} Propose the change as an issue for the Operator instead.`
+      : `LOCKED PATH: ${this.detail} Propose the change as an issue for the Operator instead. This is not an interrupt: continue with the rest of your task.`
   }
 }
 

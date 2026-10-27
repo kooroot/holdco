@@ -87,3 +87,10 @@ SDK에 들어 있는 Codex CLI 0.164.0 바이너리로 Linux에서 모델 호출
 ### 4. 아직 열린 것
 
 위 표와 같습니다. 래퍼를 통한 훅이 `codex exec`에서 실제로 발동하는지는 모델 호출이 있어야 보이므로 M3에서 확인하고, 그 전까지는 권한 프로필만으로 경계를 지킵니다. macOS 집행, 턴 종료 시에만 오는 사용량, 프리셋의 예시 가격도 남아 있습니다.
+
+### Live findings (2026-10-27, first dual run on macOS)
+
+- `approval_policy = "never"` refuses MCP tool calls left at Codex's default approval mode ("requires approval, but approval policy is never"); the company server is configured with `default_tools_approval_mode = "approve"`. The kernel's tool server, not Codex, scopes what a session may call.
+- OpenAI structured outputs reject schemas with maps; see the Structured result row.
+- The macOS sandbox probe (R8b) passed: config loads strictly, the permission profile applies, denied paths are unreadable, writes outside the workspace fail.
+- The ChatGPT login works for sessions (`auth: subscription`, auth.json copied into the session home).

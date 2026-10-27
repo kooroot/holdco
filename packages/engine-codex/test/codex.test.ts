@@ -126,6 +126,7 @@ describe("generated engine home", () => {
   })
   test("company tools via MCP with a session token from the environment", () => {
     expect(config).toContain("[mcp_servers.company]")
+    expect(config).toContain('default_tools_approval_mode = "approve"') // else "requires approval, but approval policy is never"
     expect(config).toContain('bearer_token_env_var = "HOLDCO_SESSION_TOKEN"')
   })
   test("the kernel's guard binary is the PreToolUse hook", () =>
