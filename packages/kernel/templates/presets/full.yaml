@@ -47,6 +47,7 @@ engines:
     # meters spend from this table. Replace with your provider's current rates before relying
     # on budgets; doctor checks that every Codex model in use has an entry.
       gpt-6.1-sol: { input_per_mtok: 5, cached_input_per_mtok: 0.5, output_per_mtok: 40 }
+      gpt-6-astra: { input_per_mtok: 25, cached_input_per_mtok: 2.5, output_per_mtok: 200 }
 
 roles:
   ceo:           { engine: claude, model: opus }

@@ -47,6 +47,10 @@ engines:
         input_per_mtok: 5
         cached_input_per_mtok: 0.5
         output_per_mtok: 40
+      gpt-6-astra:
+        input_per_mtok: 25
+        cached_input_per_mtok: 2.5
+        output_per_mtok: 200
 roles:
   ceo:
     engine: claude

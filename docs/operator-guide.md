@@ -55,6 +55,7 @@ Or write objectives into `governance/strategy.md` and let the CEO open tickets. 
 | `holdco rollback <action-log-id>` | revert a merge within or after its challenge window; the action type is demoted and a follow-up ticket opens |
 | `holdco promote <action>` | apply an approved graduation (one tier down) to `company.yaml` |
 | `holdco release` | tag the organization as a new release (sessions always run from the latest tag) |
+| `holdco roles` · `roles set <role> <engine:model[:effort]>` · `roles preset claude\|codex\|dual` | see and change which engine and model plays each role; validated (the judge never shares a producer's model). The defaults table is in `docs/design/02-config.md` |
 
 Commands that loosen anything (`inbox approve`, `resume`, `promote`, `rollback`, `ticket unblock`) refuse to run without an interactive terminal; agents have none.
 

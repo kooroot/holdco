@@ -5,6 +5,7 @@ import { assignmentFor, CompanyConfig, durationMs } from "../src/config/company.
 import { effectiveTier, UnknownAction } from "../src/policy/tiers.ts"
 import { assemble } from "../src/scaffold/assemble.ts"
 import { loadPreset, presetNames } from "../src/scaffold/templates.ts"
+import { defaultRoles, formatAssignment, parseAssignment } from "../src/config/models.ts"
 
 const STRICT = { errors: "all", onExcessProperty: "error" } as const
 const build = (preset: string): any => {
@@ -101,4 +102,19 @@ describe("durationMs", () => {
     expect(durationMs("24h")).toBe(86_400_000)
     expect(durationMs("3d")).toBe(259_200_000)
   })
+})
+
+describe("model defaults are the single source of truth", () => {
+  const strip = (r: Record<string, unknown>) => Object.fromEntries(Object.entries(r).filter(([k]) => k !== "by_department"))
+  test("solo-dev = claude defaults", () => expect(strip(loadPreset("solo-dev").roles as Record<string, unknown>)).toEqual(defaultRoles("claude", { coo: false, improvement: false, juniors: true })))
+  test("solo-codex = codex defaults", () => expect(strip(loadPreset("solo-codex").roles as Record<string, unknown>)).toEqual(defaultRoles("codex", { coo: false, improvement: false, juniors: true })))
+  test("full = dual defaults", () => expect(strip(loadPreset("full").roles as Record<string, unknown>)).toEqual(defaultRoles("dual", { coo: true, improvement: true, juniors: true })))
+  test("every mode's defaults validate with a COO and juniors", () => {
+    for (const mode of ["claude", "codex", "dual"] as const) {
+      const c = build("full")
+      c.roles = { ...defaultRoles(mode, { coo: true, improvement: true, juniors: true }) } as Record<string, unknown>
+      expect(message(c)).toBe("")
+    }
+  })
+  test("engine:model:effort round-trips", () => expect(formatAssignment(parseAssignment("codex:gpt-6.1-sol:high"))).toBe("codex:gpt-6.1-sol:high"))
 })

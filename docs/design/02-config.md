@@ -84,6 +84,28 @@ roles:
     gtm:         { engine: claude, model: sonnet }
 ```
 
+### Model defaults
+
+One table in the kernel (`packages/kernel/src/config/models.ts`) is the standard; the presets are generated from it (a test fails if they drift), `holdco roles preset <mode>` applies it, and the Operator overrides any cell with `holdco roles set` or by editing `company.yaml`.
+
+| Slot | Plays | Claude Code | Codex |
+|---|---|---|---|
+| executive | CEO (and a COO on the same engine) | `opus` | `gpt-6.1-sol` / high |
+| producer | department seniors, Improvement | `opus` | `gpt-6.1-sol` / high |
+| judge | Verification — must differ from every producer | `fable` | `gpt-6-astra` / high |
+| worker | `junior_worker` | `sonnet` | `gpt-6.1-sol` / medium |
+| reader | `junior_reader` | `haiku` | `gpt-6.1-sol` / low |
+
+Three modes assemble the `roles` block from those slots:
+
+| Mode | Preset | CEO | COO | Seniors / Improvement | Judge | Juniors | Why |
+|---|---|---|---|---|---|---|---|
+| `claude` | `solo-dev` | opus | sonnet (if on) | opus | **fable** | sonnet / haiku | one provider; the judge is still a different model |
+| `codex` | `solo-codex` | sol | astra (if on) | sol | **astra** | sol medium / low | same, on Codex |
+| `dual` | `full` | Claude opus | **Codex sol** | Claude opus | **Codex sol** | Claude sonnet / haiku | the second key and the judge sit on another provider, so their errors are not the producers' errors |
+
+Overrides: `holdco roles set senior claude:sonnet`, `holdco roles set senior@gtm claude:haiku`, `holdco roles set verification codex:gpt-6-astra:high`. Every change is validated: the judge may not share a producer's (engine, model), the COO may not share the CEO's, and a Codex model needs a price. Claude aliases are resolved by Claude Code; Codex ids and the example prices must be checked against your account.
+
 A role kind says what a session may do (its capabilities come from its role file in `org/roles/`); the assignment says what runs it. Independence is compared on the pair (engine, model), so the same model name on two engines counts as different. Putting the judge or the COO on a second provider is not required, but it makes their errors less correlated with the producers', and `doctor` warns when CEO and COO share an engine. See `07-engines.md` for what each engine guarantees and what the kernel adds.
 
 ### Effective tier
@@ -131,6 +153,10 @@ The supervisor watches `company.yaml`. A changed file is validated first; if inv
 ### 구성 규칙
 
 위 표의 규칙을 `compositionErrors`가 모두 강제하며, 위반 사항을 첫 번째 하나가 아니라 한 번에 전부 보고합니다.
+
+### 모델 기본값
+
+커널의 표 하나(`packages/kernel/src/config/models.ts`)가 기준입니다. 프리셋은 거기서 생성되고(어긋나면 테스트 실패), `holdco roles preset <모드>`가 그 표를 적용하고, 운영자는 `holdco roles set`이나 `company.yaml` 편집으로 어느 칸이든 바꿉니다. 슬롯은 다섯 개: executive(CEO, 같은 엔진의 COO), producer(부서 시니어, 개선), judge(검증, 모든 생산자와 달라야 함), worker(주니어 작업자), reader(주니어 리더). Claude는 opus/opus/fable/sonnet/haiku, Codex는 gpt-6.1-sol(high)/gpt-6.1-sol(high)/gpt-6-astra(high)/gpt-6.1-sol(medium)/gpt-6.1-sol(low). 모드는 `claude`(solo-dev), `codex`(solo-codex), `dual`(full: 생산과 CEO는 Claude, COO와 심판은 Codex. 두 번째 열쇠와 심판이 다른 제공사에 있어 생산자와 같은 오류를 내지 않음). 변경은 `holdco roles set senior claude:sonnet`, `holdco roles set senior@gtm claude:haiku`처럼 하고, 모두 검증됩니다(심판은 생산자와, COO는 CEO와 (엔진, 모델)이 달라야 하고, Codex 모델은 가격 필요). Claude 별칭은 Claude Code가 해석하고, Codex 모델 ID와 예시 가격은 계정 기준으로 확인해야 합니다.
 
 ### 엔진과 역할
 

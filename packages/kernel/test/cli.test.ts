@@ -95,6 +95,16 @@ describe("operator commands", () => {
     expect(r.status).toBe(0)
     expect(r.stdout).toMatch(/launchd|systemd|Label|ExecStart/)
   })
+  test("roles: show, set with validation, preset", () => {
+    expect(holdco("roles").stdout).toContain("verification    claude:fable")
+    expect(holdco("roles", "set", "senior", "claude:sonnet").status).toBe(0)
+    const refused = holdco("roles", "set", "verification", "claude:sonnet")
+    expect(refused.status).toBe(1)
+    expect(refused.stderr).toContain("may not share a producer")
+    expect(holdco("roles", "set", "senior@engineering", "claude:opus:high").stdout).toContain("senior@engineering → claude:opus:high")
+    expect(holdco("roles", "preset", "claude").stdout).toContain("senior          claude:opus")
+    expect(holdco("config", "check", "company.yaml").status).toBe(0)
+  })
   test("release tags r1", () => {
     expect(holdco("release", "--note", "test").status).toBe(0)
     expect(sh("git", ["tag"]).stdout).toContain("r1")

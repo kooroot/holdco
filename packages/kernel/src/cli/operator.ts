@@ -7,7 +7,8 @@ import { spawnSync } from "node:child_process"
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs"
 import * as NodePath from "node:path"
 import { Exit, Schema } from "effect"
-import { CompanyConfig, type EngineId, ENGINE_IDS, type Tier } from "../config/company.ts"
+import { assignmentFor, CompanyConfig, type EngineId, ENGINE_IDS, ROLE_KINDS, type RoleKind, type Tier } from "../config/company.ts"
+import { defaultRoles, EXAMPLE_PRICES, formatAssignment, MODEL_DEFAULTS, MODEL_MODES, type ModelMode, parseAssignment } from "../config/models.ts"
 import type { Engine } from "../engine/types.ts"
 import { renderCompanyYaml } from "../scaffold/scaffold.ts"
 import { Store, type Ticket } from "../store/store.ts"
@@ -298,6 +299,53 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
       const next = Schema.decodeUnknownSync(CompanyConfig)({ ...config, projects: [...config.projects.filter((p) => p.id !== id), project] })
       saveConfig(dir, next, `project add ${id}`)
       console.log(`project ${id} registered at ${project.path} (${cls}, share ${share})`)
+      return true
+    }
+    case "roles": {
+      const config = loadConfig(dir)
+      if (sub === undefined || sub === "show") {
+        console.log("role            engine:model[:effort]        (company.yaml:roles)")
+        for (const kind of ROLE_KINDS) {
+          const a = config.roles[kind]
+          if (a) console.log(`${kind.padEnd(15)} ${formatAssignment(a)}`)
+        }
+        for (const [dept, a] of Object.entries(config.roles.by_department ?? {})) console.log(`${`senior@${dept}`.padEnd(15)} ${formatAssignment(a)}`)
+        console.log("\ndefaults per engine (slot → model):")
+        for (const id of ENGINE_IDS) console.log(`  ${id.padEnd(7)} ${Object.entries(MODEL_DEFAULTS[id]).map(([slot, a]) => `${slot}=${a.model}${a.effort ? `/${a.effort}` : ""}`).join("  ")}`)
+        console.log("\nchange: holdco roles set <role|senior@dept> <engine:model[:effort]>   ·   holdco roles preset claude|codex|dual")
+      } else if (sub === "set") {
+        const target = args.positional[2] ?? ""
+        const value = args.positional[3] ?? (() => { throw new OperatorError("usage: holdco roles set <role|senior@dept> <engine:model[:effort]>") })()
+        const a = parseAssignment(value)
+        let roles: CompanyConfig["roles"]
+        if (target.startsWith("senior@")) {
+          const dept = target.slice(7)
+          roles = { ...config.roles, by_department: { ...(config.roles.by_department ?? {}), [dept]: a } }
+        } else {
+          if (!(ROLE_KINDS as ReadonlyArray<string>).includes(target)) throw new OperatorError(`unknown role '${target}'; one of ${ROLE_KINDS.join(", ")} or senior@<dept>`)
+          roles = { ...config.roles, [target as RoleKind]: a }
+        }
+        const exit = Schema.decodeUnknownExit(CompanyConfig, { errors: "all" })({ ...config, roles })
+        if (Exit.isFailure(exit)) throw new OperatorError(`refused:\n${String(exit.cause)}`)
+        saveConfig(dir, exit.value, `roles: ${target} → ${value}`)
+        console.log(`${target} → ${value} (company.yaml committed; applies to sessions started from the next tick)`)
+      } else if (sub === "preset") {
+        const mode = args.positional[2] as ModelMode
+        if (!MODEL_MODES.includes(mode)) throw new OperatorError(`usage: holdco roles preset ${MODEL_MODES.join("|")}`)
+        const roles = { ...defaultRoles(mode, { coo: config.modules.executive === "ceo+coo", improvement: config.modules.improvement.enabled, juniors: config.modules.juniors.enabled }), ...(config.roles.by_department ? { by_department: config.roles.by_department } : {}) }
+        // example prices for Codex models the defaults introduce, so the switch is not refused for a missing price
+        const codex = config.engines.codex && { ...config.engines.codex, prices: { ...config.engines.codex.prices } }
+        if (codex) {
+          const used = Object.entries(roles).filter(([k]) => k !== "by_department").map(([, a]) => a as { engine: string; model: string })
+          for (const a of used) {
+            if (a.engine === "codex" && codex.prices[a.model] === undefined && a.model in EXAMPLE_PRICES) codex.prices[a.model] = EXAMPLE_PRICES[a.model as keyof typeof EXAMPLE_PRICES]
+          }
+        }
+        const exit = Schema.decodeUnknownExit(CompanyConfig, { errors: "all" })({ ...config, roles, engines: { ...config.engines, ...(codex ? { codex } : {}) } })
+        if (Exit.isFailure(exit)) throw new OperatorError(`the ${mode} defaults do not fit this company (is the engine configured under engines?):\n${String(exit.cause)}`)
+        saveConfig(dir, exit.value, `roles: ${mode} defaults`)
+        for (const kind of ROLE_KINDS) if (exit.value.roles[kind]) console.log(`${kind.padEnd(15)} ${formatAssignment(assignmentFor(exit.value, kind))}`)
+      } else throw new OperatorError("usage: holdco roles [show] | set <role|senior@dept> <engine:model[:effort]> | preset claude|codex|dual")
       return true
     }
     case "service": {
