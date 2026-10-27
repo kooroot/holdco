@@ -301,7 +301,8 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
       console.log(`project ${id} registered at ${project.path} (${cls}, share ${share})`)
       return true
     }
-    case "roles": {
+    case "roles":
+    case "models": {
       const config = loadConfig(dir)
       if (sub === undefined || sub === "show") {
         console.log("role            engine:model[:effort]        (company.yaml:roles)")
@@ -312,7 +313,7 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
         for (const [dept, a] of Object.entries(config.roles.by_department ?? {})) console.log(`${`senior@${dept}`.padEnd(15)} ${formatAssignment(a)}`)
         console.log("\ndefaults per engine (slot → model):")
         for (const id of ENGINE_IDS) console.log(`  ${id.padEnd(7)} ${Object.entries(MODEL_DEFAULTS[id]).map(([slot, a]) => `${slot}=${a.model}${a.effort ? `/${a.effort}` : ""}`).join("  ")}`)
-        console.log("\nchange: holdco roles set <role|senior@dept> <engine:model[:effort]>   ·   holdco roles preset claude|codex|dual")
+        console.log("\nchange: holdco models set <role|senior@dept> <engine:model[:effort]>   ·   holdco models preset claude|codex|dual   (roles = models)")
       } else if (sub === "set") {
         const target = args.positional[2] ?? ""
         const value = args.positional[3] ?? (() => { throw new OperatorError("usage: holdco roles set <role|senior@dept> <engine:model[:effort]>") })()
@@ -345,7 +346,7 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
         if (Exit.isFailure(exit)) throw new OperatorError(`the ${mode} defaults do not fit this company (is the engine configured under engines?):\n${String(exit.cause)}`)
         saveConfig(dir, exit.value, `roles: ${mode} defaults`)
         for (const kind of ROLE_KINDS) if (exit.value.roles[kind]) console.log(`${kind.padEnd(15)} ${formatAssignment(assignmentFor(exit.value, kind))}`)
-      } else throw new OperatorError("usage: holdco roles [show] | set <role|senior@dept> <engine:model[:effort]> | preset claude|codex|dual")
+      } else throw new OperatorError("usage: holdco models [show] | set <role|senior@dept> <engine:model[:effort]> | preset claude|codex|dual   (holdco roles is the same command)")
       return true
     }
     case "service": {

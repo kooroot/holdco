@@ -102,7 +102,8 @@ describe("operator commands", () => {
     expect(refused.status).toBe(1)
     expect(refused.stderr).toContain("may not share a producer")
     expect(holdco("roles", "set", "senior@engineering", "claude:opus:high").stdout).toContain("senior@engineering → claude:opus:high")
-    expect(holdco("roles", "preset", "claude").stdout).toContain("senior          claude:opus")
+    expect(holdco("models", "preset", "claude").stdout).toContain("senior          claude:opus")
+    expect(holdco("models").stdout).toEqual(holdco("roles").stdout)
     expect(holdco("config", "check", "company.yaml").status).toBe(0)
   })
   test("release tags r1", () => {
