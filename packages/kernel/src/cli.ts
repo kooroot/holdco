@@ -177,7 +177,7 @@ const doctor = async (dir: string): Promise<Array<Check>> => {
   if (config) {
     for (const id of Object.keys(config.engines) as Array<EngineId>) {
       const engine = await loadEngine(id, dir)
-      add(`engine '${id}' adapter installed`, typeof engine !== "string", typeof engine === "string" ? engine : undefined)
+      add(`engine '${id}' adapter installed`, typeof engine !== "string", typeof engine === "string" ? `${engine.split("\n")[0]}; run holdco models preset <mode> again or add @holdco/engine-${id} to package.json and bun install` : undefined)
       if (typeof engine !== "string" && engine.probe !== undefined && executable) {
         const scratch = mkdtempSync(NodePath.join(tmpdir(), `holdco-probe-${id}-`))
         try {

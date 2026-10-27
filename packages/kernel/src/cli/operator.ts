@@ -60,6 +60,27 @@ const loadEngines = async (config: CompanyConfig, dir: string): Promise<Map<Engi
 const fmtTicket = (t: Ticket) => `${t.id.padEnd(9)} ${t.state.padEnd(22)} ${(t.approval_stage ?? "").padEnd(14)} p${t.priority} ${t.department.padEnd(12)} ${t.title}${t.interrupt_flag ? `  [${t.interrupt_flag}]` : ""}`
 const ago = (ms: number) => (ms < 3_600_000 ? `${Math.round(ms / 60_000)}m` : ms < 86_400_000 ? `${Math.round(ms / 3_600_000)}h` : `${Math.round(ms / 86_400_000)}d`)
 
+/**
+ * The company's package.json must carry an adapter per configured engine. Adds any missing
+ * `@holdco/engine-<id>` the way the kernel itself is depended on (`link:` from a checkout, or the
+ * same version from npm) and installs it when the company already has node_modules.
+ */
+const ensureEngineDeps = (dir: string, config: CompanyConfig) => {
+  const path = NodePath.join(dir, "package.json")
+  if (!existsSync(path)) return
+  const pkg = JSON.parse(readFileSync(path, "utf8")) as { dependencies?: Record<string, string> }
+  const deps = pkg.dependencies ?? {}
+  const kernel = deps["@holdco/kernel"] ?? "*"
+  const missing = (Object.keys(config.engines) as Array<EngineId>).map((id) => `@holdco/engine-${id}`).filter((name) => deps[name] === undefined)
+  if (missing.length === 0) return
+  for (const name of missing) deps[name] = kernel.startsWith("link:") ? `link:${name}` : kernel
+  writeFileSync(path, `${JSON.stringify({ ...pkg, dependencies: deps }, null, 2)}\n`)
+  if (!existsSync(NodePath.join(dir, "node_modules"))) return
+  console.log(`installing ${missing.join(", ")}…`)
+  const r = spawnSync("bun", ["install"], { cwd: dir, stdio: "inherit" })
+  if (r.status !== 0) throw new OperatorError(`bun install failed; run it in ${dir} and retry`)
+}
+
 export const runOperator = async (cmd: string, args: Args, dir: string): Promise<boolean> => {
   const now = Date.now()
   const sub = args.positional[1]
@@ -431,6 +452,7 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
         const exit = Schema.decodeUnknownExit(CompanyConfig, { errors: "all" })({ ...config, roles, engines: { ...config.engines, ...(codex ? { codex } : {}) } })
         if (Exit.isFailure(exit)) throw new OperatorError(`the ${mode} defaults do not fit this company (is the engine configured under engines?):\n${String(exit.cause)}`)
         saveConfig(dir, exit.value, `roles: ${mode} defaults`)
+        ensureEngineDeps(dir, exit.value)
         for (const kind of ROLE_KINDS) if (exit.value.roles[kind]) console.log(`${kind.padEnd(15)} ${formatAssignment(assignmentFor(exit.value, kind))}`)
         if (needsCodex && !codexLoggedIn && codex?.auth === "subscription") console.log("note: no ~/.codex/auth.json yet — run `codex login`, then holdco doctor")
       } else throw new OperatorError("usage: holdco models [show] | set <role|senior@dept> <engine:model[:effort]> | preset claude|codex|dual   | prices   (holdco roles is the same command)")

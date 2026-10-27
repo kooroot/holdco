@@ -111,6 +111,7 @@ describe("operator commands", () => {
     expect(dual.stdout).toContain("engines.codex added")
     expect(dual.stdout).toContain("verification    codex:gpt-6-astra:high")
     expect(readFileSync(NodePath.join(co, "company.yaml"), "utf8")).toMatch(/codex:\n\s+auth: (subscription|api_key)/)
+    expect((JSON.parse(readFileSync(NodePath.join(co, "package.json"), "utf8")) as { dependencies: Record<string, string> }).dependencies["@holdco/engine-codex"]).toBe("link:@holdco/engine-codex")
     expect(holdco("models", "preset", "claude").stdout).toContain("senior          claude:opus")
     expect(holdco("models").stdout).toEqual(holdco("roles").stdout)
     expect(holdco("config", "check", "company.yaml").status).toBe(0)
