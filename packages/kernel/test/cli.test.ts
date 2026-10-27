@@ -44,8 +44,8 @@ describe("create-holdco", () => {
     expect(readFileSync(NodePath.join(co, ".github", "CODEOWNERS"), "utf8")).not.toContain("@OPERATOR")
     // run from a checkout: the company links to these packages instead of the registry
     const pkg = JSON.parse(readFileSync(NodePath.join(co, "package.json"), "utf8")) as { dependencies: Record<string, string> }
-    expect(pkg.dependencies["@holdco/kernel"]).toBe(`link:${NodePath.resolve(import.meta.dir, "..", "..", "kernel")}`)
-    expect(pkg.dependencies["@holdco/engine-claude"]).toMatch(/^link:/)
+    expect(pkg.dependencies["@holdco/kernel"]).toBe("link:@holdco/kernel")
+    expect(pkg.dependencies["@holdco/engine-claude"]).toBe("link:@holdco/engine-claude")
     expect(r.stdout).toContain("linked from")
     sh("git", ["config", "user.email", "t@t"])
     sh("git", ["config", "user.name", "t"])

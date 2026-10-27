@@ -65,6 +65,12 @@ try {
   console.log(`  packages  ${fromCheckout ? `linked from ${checkoutPackages}` : `@holdco/* ${KERNEL_VERSION} from npm`}\n`)
 
   if (!argv.includes("--no-install")) {
+    if (fromCheckout) {
+      // register the checkout's packages as global bun links, so the company's link: deps resolve
+      for (const pkg of ["kernel", "engine-claude", "engine-codex"]) {
+        if (spawnSync("bun", ["link"], { cwd: resolve(checkoutPackages, pkg), stdio: "pipe" }).status !== 0) throw new Error(`bun link failed in packages/${pkg}`)
+      }
+    }
     console.log("  installing…")
     if (!run("bun", ["install"], target)) throw new Error("bun install failed")
     console.log("  building the guard…")

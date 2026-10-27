@@ -26,7 +26,8 @@ export interface ScaffoldOptions {
   readonly kernelVersion: string
   /**
    * The `packages/` directory of a Holdco checkout. When set, the company depends on the kernel and
-   * engines there (`link:`) instead of the npm registry — the way to run from source before a release.
+   * engines through `bun link` (`link:@holdco/<pkg>`) instead of the npm registry — the way to run
+   * from source before a release. The caller registers the links (`bun link` in each package).
    */
   readonly packagesDir?: string
 }
@@ -143,7 +144,9 @@ export const scaffold = (opts: ScaffoldOptions): ScaffoldResult => {
   const owners = NodePath.join(opts.dir, ".github", "CODEOWNERS")
   if (opts.github) writeFileSync(owners, readFileSync(owners, "utf8").replaceAll("@OPERATOR", `@${opts.github.replace(/^@/, "")}`))
 
-  const spec = (pkg: string) => (opts.packagesDir ? `link:${NodePath.join(opts.packagesDir, pkg.replace("@holdco/", ""))}` : opts.kernelVersion)
+  // From a checkout: `link:<name>` resolves the global links `bun link` registered in each package
+  // (create-holdco does that); a path-based link: or file: does not survive the packages' workspace deps.
+  const spec = (pkg: string) => (opts.packagesDir ? `link:${pkg}` : opts.kernelVersion)
   const dependencies: Record<string, string> = { [KERNEL_PACKAGE]: spec(KERNEL_PACKAGE) }
   for (const id of Object.keys(config.engines) as Array<keyof typeof ENGINE_PACKAGE>) {
     dependencies[ENGINE_PACKAGE[id]] = spec(ENGINE_PACKAGE[id])

@@ -280,11 +280,13 @@ switch (cmd) {
     const github = flag("github")
     const name = flag("name")
     const project = flag("project")
+    const checkout = existsSync(NodePath.join(import.meta.dir, "..", "..", "create-holdco", "package.json")) ? NodePath.resolve(import.meta.dir, "..", "..") : undefined
+    if (checkout) for (const pkg of ["kernel", "engine-claude", "engine-codex"]) spawnSync("bun", ["link"], { cwd: NodePath.join(checkout, pkg), stdio: "pipe" })
     const result = scaffold({
       dir: NodePath.resolve(dir),
       preset,
       kernelVersion: KERNEL_VERSION,
-      ...(existsSync(NodePath.join(import.meta.dir, "..", "..", "create-holdco", "package.json")) ? { packagesDir: NodePath.resolve(import.meta.dir, "..", "..") } : {}),
+      ...(checkout ? { packagesDir: checkout } : {}),
       git: !has("no-git"),
       ...(github ? { github } : {}),
       ...(name ? { companyName: name } : {}),
