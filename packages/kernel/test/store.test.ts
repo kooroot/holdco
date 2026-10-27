@@ -77,3 +77,20 @@ describe("inbox, labels, demotions", () => {
     expect(s.demotions("code.merge.app")).toBe(0)
   })
 })
+
+describe("migrations", () => {
+  test("a database created by the first schema gains the columns added later", () => {
+    const { Database } = require("bun:sqlite") as typeof import("bun:sqlite")
+    const path = `${require("node:os").tmpdir()}/holdco-migrate-${Date.now()}.db`
+    const old = new Database(path)
+    old.exec("CREATE TABLE releases (tag TEXT PRIMARY KEY, at INTEGER NOT NULL, watch_until INTEGER NOT NULL, changes TEXT NOT NULL); INSERT INTO releases VALUES ('r0', 1, 2, 'init');")
+    old.exec("CREATE TABLE inbox (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, ticket_id TEXT, payload TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', created_at INTEGER NOT NULL, decided_at INTEGER, note TEXT); INSERT INTO inbox(kind, payload, created_at) VALUES ('t3', '{}', 1);")
+    old.close()
+    const store = new Store(path)
+    expect(store.latestRelease()?.tag).toBe("r0")
+    expect(store.inboxOpen()[0]?.urgency).toBe("routine")
+    expect(store.candidate()).toBeUndefined()
+    store.close()
+    require("node:fs").rmSync(path, { force: true })
+  })
+})

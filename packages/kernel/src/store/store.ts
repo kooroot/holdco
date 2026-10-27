@@ -170,6 +170,18 @@ export const TRANSITIONS: Readonly<Record<TicketState, ReadonlyArray<TicketState
   rolled_back: [],
 }
 
+/**
+ * Columns added after the first schema. `CREATE TABLE IF NOT EXISTS` never alters an existing
+ * table, so each is added here when missing; the list only grows (D53, D52).
+ */
+const ADDED_COLUMNS: ReadonlyArray<readonly [table: string, column: string, ddl: string]> = [
+  ["releases", "status", "TEXT NOT NULL DEFAULT 'released'"],
+  ["releases", "promoted_to", "TEXT"],
+  ["sessions", "release", "TEXT"],
+  ["inbox", "urgency", "TEXT NOT NULL DEFAULT 'routine'"],
+  ["inbox", "batched_at", "INTEGER"],
+]
+
 export class Store {
   readonly db: Database
   constructor(readonly path: string) {
@@ -177,6 +189,7 @@ export class Store {
     this.db = new Database(path, { create: true })
     this.db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;")
     this.db.exec(SCHEMA)
+    this.migrate()
   }
   static open(companyRoot: string): Store {
     return new Store(NodePath.join(companyRoot, ".holdco", "state.db"))
@@ -184,6 +197,13 @@ export class Store {
   static exists(companyRoot: string): boolean {
     return existsSync(NodePath.join(companyRoot, ".holdco", "state.db"))
   }
+  private migrate() {
+    for (const [table, column, ddl] of ADDED_COLUMNS) {
+      const cols = this.db.query<{ name: string }, []>(`PRAGMA table_info(${table})`).all().map((c) => c.name)
+      if (!cols.includes(column)) this.db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`)
+    }
+  }
+
   close() {
     this.db.close()
   }
