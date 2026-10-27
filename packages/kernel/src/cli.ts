@@ -193,8 +193,9 @@ const doctor = async (dir: string): Promise<Array<Check>> => {
         const auth = e?.auth_env
         add(`engine '${id}' API key (${auth})`, auth !== undefined && (process.env[auth] ?? "") !== "", "set it in the env file the service loads")
       } else if (typeof engine !== "string" && engine.loginStatus !== undefined) {
-        const r = await engine.loginStatus(process.env)
-        add(`engine '${id}' subscription: ${r.name}`, r.ok, r.detail)
+        const { sessionEnv } = await import("./supervisor/supervisor.ts")
+        const r = await engine.loginStatus(sessionEnv(config, id, process.env))
+        add(`engine '${id}' subscription, as a session sees it: ${r.name}`, r.ok, r.ok ? undefined : `${r.detail ?? ""}; for headless use run \`claude setup-token\` and put CLAUDE_CODE_OAUTH_TOKEN in the env file`.replace(/^; /, ""))
       } else {
         add(`engine '${id}' subscription login`, false, "adapter cannot check login status")
       }

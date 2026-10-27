@@ -65,8 +65,9 @@ export const toClaudeOptions = (
     allowedTools: tools.allowed,
     disallowedTools: tools.disallowed,
     mcpServers: { company: companyServer(spec) },
+    // Every call is gated by the PreToolUse hook; a canUseTool callback would be shadowed by the bare
+    // allowedTools entries (SDK warning CLAUDE_SDK_CAN_USE_TOOL_SHADOWED) and is therefore not set.
     hooks: { PreToolUse: [{ matcher: "*", hooks: [preToolUseHook(spec, onEvent)] }] },
-    canUseTool: async () => ({ behavior: "allow" }),
     sandbox: {
       enabled: true,
       failIfUnavailable: true,

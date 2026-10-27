@@ -81,6 +81,24 @@ const decode = <S extends Schema.Codec<any, any, never, never>>(s: S, v: unknown
   return Exit.isSuccess(exit) ? (exit.value as S["Type"]) : undefined
 }
 
+/**
+ * The environment a session's engine process gets (D14): PATH, HOME, the engine's own credential
+ * (API key, or the OAuth token for a Claude subscription), proxy settings — nothing else. Doctor
+ * checks logins with exactly this, so a login that only works in the Operator's shell shows up there.
+ */
+export const sessionEnv = (config: CompanyConfig, engine: EngineId, env: Record<string, string | undefined>): Record<string, string> => {
+  const e = config.engines[engine]
+  const authEnv = authMode(e) === "api_key" ? e?.auth_env : undefined
+  const out: Record<string, string> = { PATH: env["PATH"] ?? "/usr/local/bin:/usr/bin:/bin", HOME: env["HOME"] ?? "/tmp" }
+  for (const k of ["USER", "LOGNAME", "TMPDIR", "LANG", "TERM"]) if (env[k]) out[k] = env[k] as string
+  if (authEnv && env[authEnv]) out[authEnv] = env[authEnv] as string
+  // Claude subscription logins may live in an OAuth token env var (`claude setup-token`) instead of the keychain
+  if (engine === "claude" && authMode(e) === "subscription" && env["CLAUDE_CODE_OAUTH_TOKEN"]) out["CLAUDE_CODE_OAUTH_TOKEN"] = env["CLAUDE_CODE_OAUTH_TOKEN"] as string
+  if (engine === "codex" && env["CODEX_HOME"]) out["CODEX_HOME"] = env["CODEX_HOME"] as string
+  for (const k of ["NO_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "SSL_CERT_FILE"]) if (env[k]) out[k] = env[k] as string
+  return out
+}
+
 export class Supervisor {
   readonly config: CompanyConfig
   readonly root: string
@@ -1039,14 +1057,7 @@ export class Supervisor {
   }
 
   private engineEnv(engine: EngineId): Record<string, string> {
-    const e = this.config.engines[engine]
-    const authEnv = authMode(e) === "api_key" ? e?.auth_env : undefined
-    const out: Record<string, string> = { PATH: this.env["PATH"] ?? "/usr/local/bin:/usr/bin:/bin", HOME: this.env["HOME"] ?? "/tmp" }
-    if (authEnv && this.env[authEnv]) out[authEnv] = this.env[authEnv] as string
-    // Claude subscription logins may live in an OAuth token env var instead of ~/.claude
-    if (engine === "claude" && authMode(e) === "subscription" && this.env["CLAUDE_CODE_OAUTH_TOKEN"]) out["CLAUDE_CODE_OAUTH_TOKEN"] = this.env["CLAUDE_CODE_OAUTH_TOKEN"] as string
-    for (const k of ["NO_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "SSL_CERT_FILE"]) if (this.env[k]) out[k] = this.env[k] as string
-    return out
+    return sessionEnv(this.config, engine, this.env)
   }
 
   private buildSpec(p: { sessionId: string; ticketId: string; role: RoleDefinition; cwd: string; prompt: string; outputSchema?: Record<string, unknown>; cap: number; projectRoot?: string; locked?: ReadonlyArray<string>; extra?: ReadonlyArray<[string, string]>; parent?: string; maxTurns?: number; org: Org }): { spec: SessionSpec; binding: SessionBinding } {
