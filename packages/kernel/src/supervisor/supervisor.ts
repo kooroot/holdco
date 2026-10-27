@@ -28,7 +28,7 @@ import { CeoCycleReport, Proposal } from "../protocol/approval.ts"
 import { Verdict } from "../protocol/verdict.ts"
 import { END_STATES, Store, type Ticket } from "../store/store.ts"
 import { clear as clearInterrupt, raise as raiseInterrupt, readControl } from "./control.ts"
-import { executorKind, mergeBranch } from "./executors.ts"
+import { executorKind, mergeBranch, mergeViaGithub, runExecutor } from "./executors.ts"
 import { consoleNotifier, type Notifier } from "./notify.ts"
 import { Org, projectInstructions } from "./org.ts"
 import { renderDigest } from "./digest.ts"
@@ -58,11 +58,16 @@ interface Running {
   readonly cap: number
   readonly promise: Promise<void>
   readonly startedAt: number
+  /** The release tag whose organization this session runs on (canary sessions run on the candidate, D53). */
+  readonly release: string
+  readonly org: Org
   toolErrors: Map<string, number>
 }
 
 /** Below this much remaining budget a share counts as exhausted: no session could do anything with it. */
 const MIN_SESSION_USD = 0.05
+/** Gates the kernel itself evidences (the verdict, the replay gate, the canary), never Verification. */
+const KERNEL_GATES = new Set(["verification-approved", "replay-gain", "canary-clean"])
 const DAY = 86_400_000
 const WEEK = 7 * DAY
 const SECRET = /(sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{30,}|AKIA[0-9A-Z]{16}|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|xox[abp]-[A-Za-z0-9-]{20,})/
@@ -89,6 +94,8 @@ export class Supervisor {
   private readonly env: Record<string, string | undefined>
   private readonly log: (line: string) => void
   private org: Org
+  /** The candidate organization (`rc-<n>`) while one is under canary (D53). */
+  private candidate: Org | undefined
   private halted = false
   private readonly delegations = new Map<string, Promise<{ brief_id: string; status: string; result: unknown }>>()
   private lastJob = new Map<string, number>()
@@ -105,8 +112,18 @@ export class Supervisor {
     this.log = opts.log ?? ((l) => console.log(l))
     this.org = Org.load(opts.companyRoot)
     this.org.roles() // fail fast on a broken role file at the release tag
+    const rc = this.store.candidate()
+    if (rc) {
+      try {
+        this.candidate = new Org(opts.companyRoot, rc.tag)
+        this.candidate.roles()
+      } catch {
+        this.store.setReleaseStatus(rc.tag, "withdrawn")
+        this.candidate = undefined
+      }
+    }
     this.tools = new ToolServer(this.toolHost(), opts.port ?? 0)
-    for (const k of ["ceo", "coo", "improvement", "digest", "release", "audit", "tripwires", "graduation"]) {
+    for (const k of ["ceo", "coo", "improvement", "digest", "release", "audit", "tripwires", "graduation", "inbox-batch"]) {
       const v = this.store.getMeta(`job:${k}`)
       if (v !== undefined) this.lastJob.set(k, Number(v))
     }
@@ -192,6 +209,7 @@ export class Supervisor {
 
   /** L4 is one-shot (D26): restore org files from the previous release, tag, clear the entry. */
   private executeL4(it: Interrupt, now: number) {
+    if (this.candidate) this.withdrawCandidate(`L4: ${it.reason ?? ""}`, now)
     const tags = spawnSync("git", ["tag", "--list", "r*", "--sort=-creatordate"], { cwd: this.root, encoding: "utf8" }).stdout.split("\n").filter((s) => s.trim())
     const previous = tags[1]
     if (previous) {
@@ -210,8 +228,10 @@ export class Supervisor {
     for (const t of this.store.ticketsIn(["awaiting_approval"])) this.routeApproval(t, now)
     this.inboxTimeouts(now)
     this.escalateBlocked(now)
+    this.inboxAlerts(now)
     this.finalizeWindows(now)
     this.releaseWatch(now)
+    this.candidateWatch(now)
   }
 
   /** verified → execute (T0/T1 with gates) or awaiting_approval (T2/T3) (03-runtime §4). */
@@ -237,7 +257,9 @@ export class Supervisor {
     const verdict = this.store.verdictFor(t.id)
     const v = verdict ? (JSON.parse(verdict.payload) as Verdict) : undefined
     const action = this.config.actions.find((a) => a.id === t.action)
-    const missing = (action?.gates ?? []).filter((g) => g !== "verification-approved" && !v?.gates.some((x) => x.gate === g && x.passed))
+    // rollback-tested is evidenced by the kernel when the action's executor declares an undo (D50)
+    const kernelGates = this.config.executors?.[t.action]?.undo !== undefined ? new Set([...KERNEL_GATES, "rollback-tested"]) : KERNEL_GATES
+    const missing = (action?.gates ?? []).filter((g) => !kernelGates.has(g) && !v?.gates.some((x) => x.gate === g && x.passed))
     if (missing.length > 0) {
       this.store.transition(t.id, "rejected", "kernel", `gate(s) not evidenced by Verification: ${missing.join(", ")}`, now)
       this.store.bumpAttempts(t.id, this.config.runtime.max_attempts, "kernel", "gate missing", now)
@@ -302,7 +324,7 @@ export class Supervisor {
       return
     }
     if (review?.decision === "concur" || this.config.modules.executive !== "ceo+coo") {
-      this.store.inboxAdd("t3", t.id, { title: (p?.proposal as Proposal | undefined)?.title ?? t.title, tier, proposal: p?.proposal, review: p?.review, recommendation: review?.decision === "concur" ? "CEO proposes, COO concurs" : "CEO proposes", why_now: (p?.proposal as Proposal | undefined)?.why_now ?? t.why, default: `reject after ${this.config.policy.inbox.timeout}` }, now)
+      this.store.inboxAdd("t3", t.id, { title: (p?.proposal as Proposal | undefined)?.title ?? t.title, tier, proposal: p?.proposal, review: p?.review, recommendation: review?.decision === "concur" ? "CEO proposes, COO concurs" : "CEO proposes", why_now: (p?.proposal as Proposal | undefined)?.why_now ?? t.why, default: `reject after ${this.config.policy.inbox.timeout}` }, now, review?.decision === "object" && this.isCore(t) ? "urgent" : "routine")
     }
   }
 
@@ -310,12 +332,16 @@ export class Supervisor {
     const kind = executorKind(t.action as string)
     const project = this.config.projects.find((p) => p.id === t.project)
     const repo = project?.path ? this.resolveProject(project.path) : this.root
+    const declared = this.config.executors?.[t.action as string]
     if (kind === "merge") {
       if (t.branch === null) {
         this.store.transition(t.id, "blocked", "kernel", "no branch to merge", now)
         return
       }
-      const r = mergeBranch(repo, t.branch, `${t.id}: ${t.title} (${t.action}, ${tier})`)
+      const message = `${t.id}: ${t.title} (${t.action}, ${tier})`
+      const r = project?.merge === "github"
+        ? mergeViaGithub({ repo, branch: t.branch, title: message, body: `${t.goal}\n\nVerdict: ${this.store.verdictFor(t.id)?.verdict ?? "none"}\n\nOpened by Holdco for ticket ${t.id}.`, waitMs: durationMs(project.merge_wait ?? "20m"), env: this.executorEnvFor(["GH_TOKEN", "GITHUB_TOKEN"]), now: this.now })
+        : mergeBranch(repo, t.branch, message)
       if (!r.ok) {
         this.store.transition(t.id, "rejected", "kernel", `merge failed: ${r.error}`, now)
         this.store.bumpAttempts(t.id, this.config.runtime.max_attempts, "kernel", "merge failed", now)
@@ -324,7 +350,22 @@ export class Supervisor {
       const id = this.store.logAction({ at: now, actor: "kernel", ticket_id: t.id, action: t.action as string, effective_tier: tier, forced_by: forcedBy, inputs: { branch: t.branch }, outputs: r.outputs, undo: r.undo })
       const window = tier === "T2" ? now + durationMs(this.config.policy.windows.t2_internal) : null
       this.store.transition(t.id, "done", "kernel", `merged (${tier}); action-log ${id}`, now, { window_closes_at: window })
-      if (t.department === "improvement") this.store.setMeta("release_pending", "1")
+      if (t.department === "improvement") this.onImprovementMerged(t, now)
+      if (project) removeWorktree(repo, `t-${t.id}`)
+      void this.notifier.send("info", `${t.id} done: ${t.title} (${t.action}, ${tier})`)
+    } else if (declared !== undefined) {
+      // Operator-declared executor (D50): the kernel runs it with the declared env names only
+      const cwd = declared.cwd === "company" ? this.root : repo
+      const r = runExecutor({ executor: declared, action: t.action as string, cwd, placeholders: { branch: t.branch, ticket: t.id, deliverable: this.deliverableOf(t) }, env: this.env })
+      if (!r.ok) {
+        this.store.logAction({ at: now, actor: "kernel", ticket_id: t.id, action: t.action as string, effective_tier: tier, forced_by: forcedBy, inputs: { branch: t.branch }, outputs: r.outputs, undo: {} })
+        this.store.transition(t.id, "rejected", "kernel", `executor failed: ${r.error}`, now)
+        this.store.bumpAttempts(t.id, this.config.runtime.max_attempts, "kernel", "executor failed", now)
+        return
+      }
+      const id = this.store.logAction({ at: now, actor: "kernel", ticket_id: t.id, action: t.action as string, effective_tier: tier, forced_by: forcedBy, inputs: { branch: t.branch, deliverable: this.deliverableOf(t) }, outputs: r.outputs, undo: r.undo })
+      const window = tier === "T2" ? now + durationMs(this.config.policy.windows.t2_internal) : null
+      this.store.transition(t.id, "done", "kernel", `executed ${t.action} (${tier}); action-log ${id}`, now, { window_closes_at: window })
       if (project) removeWorktree(repo, `t-${t.id}`)
       void this.notifier.send("info", `${t.id} done: ${t.title} (${t.action}, ${tier})`)
     } else if (kind === "branch") {
@@ -333,11 +374,206 @@ export class Supervisor {
     } else {
       // no executor: the Operator performs it by hand and closes the ticket
       if (!this.store.inboxOpen().some((i) => i.ticket_id === t.id && i.kind === "manual_action")) {
-        this.store.inboxAdd("manual_action", t.id, { title: `Run ${t.action} for ${t.id} by hand`, branch: t.branch, note: "no executor for this action in this version; approve once done, reject to decline" }, now)
+        this.store.inboxAdd("manual_action", t.id, { title: `Run ${t.action} for ${t.id} by hand`, branch: t.branch, note: `no executor declared for ${t.action} in company.yaml:executors; approve once done, reject to decline` }, now)
       }
       if (t.state !== "awaiting_approval") this.store.transition(t.id, "awaiting_approval", "kernel", `no executor for ${t.action}; Operator runs it`, now, { approval_stage: "inbox" })
       const decided = this.store.db.query<{ status: string }, [string]>("SELECT status FROM inbox WHERE ticket_id = ? AND kind = 'manual_action' ORDER BY id DESC LIMIT 1").get(t.id)
       if (decided?.status === "approved") this.store.transition(t.id, "done", "operator", "performed by the Operator", now)
+    }
+  }
+
+  /** The deliverable path a department session recorded on the ticket (`ticket_update` note "deliverable: <path>"). */
+  private deliverableOf(t: Ticket): string | null {
+    const notes = [t.note ?? "", ...this.store.events(t.id).map((e) => e.note ?? "").reverse()]
+    for (const n of notes) {
+      const m = /deliverable:\s*(\S+)/.exec(n)
+      if (m?.[1]) return m[1]
+    }
+    return null
+  }
+
+  private executorEnvFor(names: ReadonlyArray<string>): Record<string, string> {
+    const out: Record<string, string> = { PATH: this.env["PATH"] ?? "/usr/local/bin:/usr/bin:/bin", HOME: this.env["HOME"] ?? "/tmp" }
+    for (const k of [...names, "NO_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "SSL_CERT_FILE"]) if (this.env[k]) out[k] = this.env[k] as string
+    return out
+  }
+
+  // ── releases: candidate → canary → promotion (D53) and the replay gate (D54) ──
+
+  /** An Improvement merge becomes a candidate release `rc-<n>`; the replay gate runs first when judge-side files changed. */
+  private onImprovementMerged(t: Ticket, now: number) {
+    if (this.candidate) {
+      // one candidate at a time: a second merge during a canary becomes the next candidate after this one settles
+      this.store.setMeta("release_pending", "1")
+      return
+    }
+    this.createCandidate(`${t.id}: ${t.title}`, now)
+  }
+
+  private createCandidate(note: string, now: number) {
+    const n = this.nextReleaseNumber()
+    const tag = `rc-${n}`
+    const r = spawnSync("git", ["tag", "-a", tag, "-m", `candidate: ${note}`], { cwd: this.root, encoding: "utf8" })
+    if (r.status !== 0) {
+      void this.notifier.send("critical", `candidate tag failed: ${r.stderr}`)
+      this.store.setMeta("release_pending", "1")
+      return
+    }
+    this.store.setMeta("release_pending", "0")
+    const changed = changedPaths(this.root, this.org.tag, tag)
+    this.store.addRelease(tag, now, now + durationMs(this.config.policy.release.watch), note, "candidate")
+    try {
+      this.candidate = new Org(this.root, tag)
+      this.candidate.roles()
+    } catch (e) {
+      this.candidate = new Org(this.root, tag)
+      this.withdrawCandidate(`broken organization: ${String(e)}`, now)
+      return
+    }
+    const judgeSide = changed.some((p) => p.startsWith("evals/rubrics/") || p === "org/departments/verification.md" || p === "org/roles/verification-senior.md")
+    if (judgeSide) {
+      this.store.setMeta(`replay:${tag}`, "pending")
+      void this.notifier.send("info", `candidate ${tag} changes the judge; replay gate running before any canary traffic`)
+      this.startReplays(tag, now)
+    } else {
+      void this.notifier.send("info", `candidate ${tag}: ${Math.round(this.config.policy.release.canary_traffic * 100)}% of production sessions run on it for ${this.config.policy.release.watch}`)
+    }
+  }
+
+  private nextReleaseNumber(): number {
+    const tags = spawnSync("git", ["tag", "--list", "r*"], { cwd: this.root, encoding: "utf8" }).stdout.split("\n").map((s) => s.trim())
+    const nums = tags.map((t) => /^r(\d+)$/.exec(t)?.[1] ?? /^rc-(\d+)$/.exec(t)?.[1]).filter((x): x is string => x !== undefined).map(Number)
+    return Math.max(0, ...nums) + 1
+  }
+
+  /** Does this production session run on the candidate? Verification and executives never do. */
+  private releaseFor(kind: RoleKind): Org {
+    if (!this.candidate || this.store.getMeta(`replay:${this.candidate.tag}`) === "pending") return this.org
+    if (kind !== "senior" && kind !== "junior_worker" && kind !== "junior_reader") return this.org
+    return Math.random() < this.config.policy.release.canary_traffic ? this.candidate : this.org
+  }
+
+  /** Promote or withdraw the candidate once its watch window has passed; withdraw early on an attributable demotion. */
+  private candidateWatch(now: number) {
+    const rc = this.store.candidate()
+    if (rc === undefined || this.candidate === undefined) return
+    if (this.store.getMeta(`replay:${rc.tag}`) === "pending") return
+    const onCandidate = this.store.sessionsOnRelease(rc.tag, rc.at)
+    const demotions = this.store.allDemotions().filter((d) => d.since >= rc.at)
+    if (demotions.length > 0) {
+      this.withdrawCandidate(`demotion of ${demotions.map((d) => d.action).join(", ")} during the canary`, now)
+      return
+    }
+    if (now < rc.watch_until) return
+    const rate = (sessions: ReadonlyArray<{ ticket_id: string }>) => {
+      const ids = new Set(sessions.map((s) => s.ticket_id))
+      const verdicts = this.store.verdictsSince(rc.at).filter((v) => ids.has(v.ticket_id))
+      return verdicts.length === 0 ? 0 : verdicts.filter((v) => v.verdict === "reject").length / verdicts.length
+    }
+    const baseline = rate(this.store.sessionsOnRelease(this.org.tag, rc.at))
+    const candidateRate = rate(onCandidate)
+    if (onCandidate.length > 0 && candidateRate > baseline + this.config.policy.release.max_regression) {
+      this.withdrawCandidate(`rejection rate ${candidateRate.toFixed(2)} vs baseline ${baseline.toFixed(2)} (+${this.config.policy.release.max_regression} allowed)`, now)
+      return
+    }
+    this.promoteCandidate(now, `canary ${onCandidate.length} session(s), reject ${candidateRate.toFixed(2)} vs ${baseline.toFixed(2)}`)
+  }
+
+  private promoteCandidate(now: number, why: string) {
+    const rc = this.store.candidate()
+    if (rc === undefined) return
+    const pending = this.store.getMeta("release_pending") === "1"
+    const tag = this.release(`promoted ${rc.tag}: ${why}`, now)
+    if (tag === undefined) return
+    void this.notifier.send("info", `candidate ${rc.tag} promoted to ${tag} (${why})`)
+    if (pending) this.createCandidate("improvement merged during the previous canary", now)
+  }
+
+  /** `holdco release withdraw`. */
+  withdraw(why: string, now: number) {
+    this.withdrawCandidate(why, now)
+  }
+
+  /** Revert `main` to the current release's organization and mark the candidate withdrawn. */
+  private withdrawCandidate(why: string, now: number) {
+    const rc = this.store.candidate()
+    if (rc === undefined) return
+    const paths = changedPaths(this.root, this.org.tag, "HEAD").filter((p) => /^(org|protocols|improvement|evals)\//.test(p))
+    for (const p of paths) {
+      const existed = spawnSync("git", ["cat-file", "-e", `${this.org.tag}:${p}`], { cwd: this.root }).status === 0
+      spawnSync("git", existed ? ["checkout", this.org.tag, "--", p] : ["rm", "-q", "--", p], { cwd: this.root })
+    }
+    if (paths.length > 0) spawnSync("git", ["commit", "-qam", `withdraw ${rc.tag}: ${why}`], { cwd: this.root })
+    this.store.setReleaseStatus(rc.tag, "withdrawn")
+    this.candidate = undefined
+    this.store.setMeta("release_pending", "0")
+    const t = this.store.allTickets().find((x) => x.department === "improvement" && x.state === "done" && x.updated_at >= rc.at)
+    this.store.inboxAdd("candidate_withdrawn", t?.id ?? null, { title: `Candidate ${rc.tag} withdrawn: ${why}`, changes: rc.changes, note: "main was reverted to the current release; approve to open a follow-up ticket for Improvement, reject to leave it" }, now, "urgent")
+    void this.notifier.send("critical", `candidate ${rc.tag} withdrawn: ${why}`)
+  }
+
+  /** Replay gate (D54): re-judge labeled tickets with the candidate's judge and compare agreement. */
+  private startReplays(tag: string, now: number) {
+    const candidate = this.candidate
+    if (!candidate) return
+    const labels = this.store.labelRows().slice(0, this.config.policy.audit.weekly_sample * 4)
+    const sample = labels.filter((l) => {
+      const t = this.store.ticket(l.ticket_id)
+      if (!t?.branch) return false
+      const project = this.config.projects.find((p) => p.id === t.project)
+      const repo = project?.path ? this.resolveProject(project.path) : this.root
+      return spawnSync("git", ["rev-parse", "--verify", "--quiet", t.branch], { cwd: repo }).status === 0
+    })
+    if (sample.length === 0) {
+      this.store.setMeta(`replay:${tag}`, "skipped")
+      void this.notifier.send("warning", `replay gate for ${tag}: no labeled ticket has a live branch; the canary decides alone`)
+      return
+    }
+    this.store.setMeta(`replay:${tag}:remaining`, String(sample.length))
+    for (const l of sample) {
+      const t = this.store.ticket(l.ticket_id) as Ticket
+      const project = this.config.projects.find((p) => p.id === t.project)
+      const repo = project?.path ? this.resolveProject(project.path) : this.root
+      const action = this.config.actions.find((a) => a.id === t.action)
+      const rubricRef = action?.evaluator ?? "engineering.md#app"
+      const cwd = createDetachedWorktree(repo, `rp-${tag}-${t.id}`, t.branch as string)
+      const prompt = [
+        `# Replay verification of ticket ${t.id}: ${t.title}`,
+        `Department: ${t.department}. Action: ${t.action ?? "unknown"}. Rubric: ${rubricRef}. Mechanical gates required: ${(action?.gates ?? []).join(", ") || "none"}.`,
+        `Goal: ${t.goal}`, `Done criteria:`, ...t.done_criteria.map((c) => `- ${c}`),
+        `The branch ${t.branch} is checked out read-only at ${cwd}. Judge it as if it were new; submit with verdict_submit naming ticket ${t.id}.`,
+        "", "## Rubric", candidate.rubric(rubricRef) || "(rubric file missing: return cannot-score)",
+      ].join("\n")
+      const role = candidate.role("verification")
+      void this.startSession({ ticketId: t.id, role, cwd, prompt, outputSchema: jsonSchema(Verdict), org: candidate, spender: "improvement", replay: true, ...(project ? { projectRoot: repo, locked: project.locked } : {}), onOutcome: (o) => {
+        const v = decode(Verdict, o.report)
+        const recorded = this.store.verdictFor(t.id)?.verdict ?? "none"
+        this.store.addReplay({ candidate: tag, at: this.now(), ticket_id: t.id, operator_verdict: l.operator_verdict, recorded_verdict: recorded, candidate_verdict: v?.verdict ?? "none", cost_usd: o.costUsd })
+        removeWorktree(repo, `rp-${tag}-${t.id}`)
+        const left = Number(this.store.getMeta(`replay:${tag}:remaining`) ?? 1) - 1
+        this.store.setMeta(`replay:${tag}:remaining`, String(left))
+        if (left <= 0) this.finishReplays(tag, this.now())
+      } })
+    }
+  }
+
+  private finishReplays(tag: string, now: number) {
+    const rows = this.store.replays(tag)
+    const agree = (pick: (r: (typeof rows)[number]) => string, subset = rows) => (subset.length === 0 ? 0 : subset.filter((r) => pick(r) === r.operator_verdict).length / subset.length)
+    const before = agree((r) => r.recorded_verdict)
+    const after = agree((r) => r.candidate_verdict)
+    const byAction = new Map<string, Array<(typeof rows)[number]>>()
+    for (const r of rows) {
+      const a = this.store.ticket(r.ticket_id)?.action ?? "unknown"
+      byAction.set(a, [...(byAction.get(a) ?? []), r])
+    }
+    const regressed = [...byAction.entries()].filter(([, rs]) => agree((r) => r.recorded_verdict, rs) - agree((r) => r.candidate_verdict, rs) > this.config.policy.release.max_regression).map(([a]) => a)
+    this.store.setMeta(`replay:${tag}`, "done")
+    const summary = `agreement ${before.toFixed(2)} → ${after.toFixed(2)} over ${rows.length} replay(s)`
+    if (after < before + this.config.policy.release.min_gain || regressed.length > 0) {
+      this.withdrawCandidate(`replay gate failed: ${summary}${regressed.length ? `; regressed on ${regressed.join(", ")}` : ""}`, now)
+    } else {
+      void this.notifier.send("info", `replay gate passed for ${tag}: ${summary}; canary traffic starts`)
     }
   }
 
@@ -359,7 +595,7 @@ export class Supervisor {
       const decided = this.store.db.query<{ id: number }, [string, number]>("SELECT id FROM inbox WHERE ticket_id = ? AND kind = 'blocked' AND created_at >= ?").get(t.id, t.updated_at)
       if (decided) continue
       if (this.config.modules.executive === "none" || now - t.updated_at > after) {
-        this.store.inboxAdd("blocked", t.id, { title: `${t.id} is blocked: ${t.title}`, note: t.note, why_now: "the department cannot continue without a decision", approve: "releases it to the department with your note", reject: "declines it" }, now)
+        this.store.inboxAdd("blocked", t.id, { title: `${t.id} is blocked: ${t.title}`, note: t.note, why_now: "the department cannot continue without a decision", approve: "releases it to the department with your note", reject: "declines it" }, now, this.isCore(t) && (now - t.updated_at > after || /cannot-score/.test(t.note ?? "")) ? "urgent" : "routine")
       }
     }
     if (this.config.modules.executive === "none") {
@@ -369,6 +605,26 @@ export class Supervisor {
         }
       }
     }
+  }
+
+  private isCore(t: Ticket): boolean {
+    return this.config.projects.find((p) => p.id === t.project)?.class === "core"
+  }
+
+  /** Urgent items alert at once; routine items are summarized once a day (D52). */
+  private inboxAlerts(now: number) {
+    for (const i of this.store.inboxOpen()) {
+      if (i.urgency !== "urgent" || this.store.getMeta(`alerted:${i.id}`) === "1") continue
+      this.store.setMeta(`alerted:${i.id}`, "1")
+      void this.notifier.send("critical", `inbox #${i.id} needs you now: ${String(i.payload["title"] ?? i.kind)} — holdco inbox approve|reject ${i.id}`)
+    }
+  }
+
+  private inboxBatch(now: number) {
+    const items = this.store.inboxUnbatched(now).filter((i) => i.urgency === "routine")
+    if (items.length === 0) return
+    const lines = items.map((i) => `#${i.id} [${i.kind}] ${String(i.payload["title"] ?? "")}`)
+    void this.notifier.send("info", `inbox: ${items.length} item(s) waiting\n${lines.join("\n")}`)
   }
 
   private finalizeWindows(now: number) {
@@ -395,6 +651,20 @@ export class Supervisor {
     return true
   }
 
+  /** Once a day, at or after a local clock time. */
+  private dueAt(job: string, at: string, now: number): boolean {
+    const [h, m] = at.split(":").map(Number)
+    const parts = new Intl.DateTimeFormat("en-US", { timeZone: this.config.company.timezone, hour: "numeric", minute: "numeric", hour12: false }).formatToParts(new Date(now))
+    const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0)
+    const minutes = (get("hour") % 24) * 60 + get("minute")
+    if (minutes < (h ?? 0) * 60 + (m ?? 0)) return false
+    const last = this.lastJob.get(job) ?? 0
+    if (now - last < DAY - 3_600_000) return false
+    this.lastJob.set(job, now)
+    this.store.setMeta(`job:${job}`, String(now))
+    return true
+  }
+
   private async jobs(now: number, active: ReadonlyArray<Interrupt>) {
     const frozen = active.some((i) => i.level === "L3")
     if (this.config.modules.executive !== "none" && this.due("ceo", durationMs(this.config.policy.executive.ceo_cycle), now)) this.ceoCycle(now)
@@ -404,7 +674,8 @@ export class Supervisor {
     if (this.due("graduation", DAY, now)) this.graduationProposals(now, frozen)
     if (this.config.modules.improvement.enabled && !frozen && this.due("improvement", WEEK, now)) this.improvementCycle(now)
     if (this.due("digest", WEEK, now)) this.digest(now)
-    if (!frozen && this.store.getMeta("release_pending") === "1" && this.due("release", DAY, now)) this.release("weekly release", now)
+    if (this.dueAt("inbox-batch", this.config.policy.inbox.batch_at, now)) this.inboxBatch(now)
+    if (!frozen && this.candidate === undefined && this.store.getMeta("release_pending") === "1" && this.due("release", DAY, now)) this.createCandidate("pending organization changes", now)
   }
 
   /** The CEO session: triage, proposals, blocked tickets, allocation. */
@@ -552,8 +823,8 @@ export class Supervisor {
 
   /** Tag the current default branch as a release (D23). */
   release(note: string, now: number): string | undefined {
-    const tags = spawnSync("git", ["tag", "--list", "r*"], { cwd: this.root, encoding: "utf8" }).stdout.split("\n").filter((s) => /^r\d+$/.test(s.trim()))
-    const n = Math.max(0, ...tags.map((t) => Number(t.trim().slice(1)))) + 1
+    const rc = this.store.candidate()
+    const n = rc ? Number(/^rc-(\d+)$/.exec(rc.tag)?.[1] ?? this.nextReleaseNumber()) : this.nextReleaseNumber()
     const tag = `r${n}`
     const r = spawnSync("git", ["tag", "-a", tag, "-m", note], { cwd: this.root, encoding: "utf8" })
     if (r.status !== 0) {
@@ -562,6 +833,10 @@ export class Supervisor {
     }
     this.store.addRelease(tag, now, now + durationMs(this.config.policy.release.watch), note)
     this.store.setMeta("release_pending", "0")
+    if (rc) {
+      this.store.setReleaseStatus(rc.tag, "promoted", tag)
+      this.candidate = undefined
+    }
     this.org = Org.load(this.root)
     void this.notifier.send("info", `release ${tag}: ${note}`)
     return tag
@@ -621,7 +896,8 @@ export class Supervisor {
 
   private startWork(t: Ticket, kind: "senior" | "improvement", sessionId: string, cap: number, now: number) {
     const project = this.config.projects.find((p) => p.id === t.project)
-    const role = kind === "improvement" ? this.org.role("improvement") : this.org.role("senior", t.department)
+    const org = this.releaseFor(kind === "improvement" ? "improvement" : "senior")
+    const role = kind === "improvement" ? org.role("improvement") : org.role("senior", t.department)
     let cwd: string
     let projectRoot: string | undefined
     let branch: string
@@ -652,7 +928,7 @@ export class Supervisor {
       const pi = projectInstructions(projectRoot)
       if (pi) extra.push([`project instructions (${project?.id})`, pi])
     }
-    void this.startSession({ ticketId: t.id, role, cwd, prompt, outputSchema: jsonSchema(SessionReport), cap, extra, ...(projectRoot ? { projectRoot, locked: project?.locked ?? [] } : {}), onOutcome: (o) => this.afterWork(t.id, sessionId, o, now) })
+    void this.startSession({ ticketId: t.id, role, cwd, prompt, outputSchema: jsonSchema(SessionReport), cap, extra, org, ...(projectRoot ? { projectRoot, locked: project?.locked ?? [] } : {}), onOutcome: (o) => this.afterWork(t.id, sessionId, o, now) })
   }
 
   private afterWork(ticketId: string, sessionId: string, o: Outcome, _startedAt: number) {
@@ -751,7 +1027,7 @@ export class Supervisor {
     return out
   }
 
-  private buildSpec(p: { sessionId: string; ticketId: string; role: RoleDefinition; cwd: string; prompt: string; outputSchema?: Record<string, unknown>; cap: number; projectRoot?: string; locked?: ReadonlyArray<string>; extra?: ReadonlyArray<[string, string]>; parent?: string; maxTurns?: number }): { spec: SessionSpec; binding: SessionBinding } {
+  private buildSpec(p: { sessionId: string; ticketId: string; role: RoleDefinition; cwd: string; prompt: string; outputSchema?: Record<string, unknown>; cap: number; projectRoot?: string; locked?: ReadonlyArray<string>; extra?: ReadonlyArray<[string, string]>; parent?: string; maxTurns?: number; org: Org }): { spec: SessionSpec; binding: SessionBinding } {
     const kind = p.role.kind
     const assignment = assignmentFor(this.config, kind, kind === "senior" ? p.role.department : undefined)
     const binding = this.tools.bind({ sessionId: p.sessionId, ticketId: p.ticketId, kind, department: p.role.department, role: p.role.role })
@@ -772,7 +1048,7 @@ export class Supervisor {
       cwd: p.cwd,
       companyRoot: this.root,
       ...(p.projectRoot ? { projectRoot: p.projectRoot, projectLocked: p.locked ?? [] } : { configRoot: this.root }),
-      instructions: this.org.instructions(p.role, p.extra ?? []),
+      instructions: p.org.instructions(p.role, p.extra ?? []),
       prompt: p.prompt,
       ...(p.outputSchema ? { outputSchema: p.outputSchema } : {}),
       limits: { maxTurns: p.maxTurns ?? 60, maxBudgetUsd: p.cap, timeoutMs: durationMs(this.config.runtime.session_timeout) },
@@ -796,16 +1072,17 @@ export class Supervisor {
     return { spec, binding }
   }
 
-  async startSession(p: { ticketId: string; role: RoleDefinition; cwd: string; prompt: string; outputSchema?: Record<string, unknown>; cap?: number; projectRoot?: string; locked?: ReadonlyArray<string>; extra?: ReadonlyArray<[string, string]>; parent?: string; maxTurns?: number; onOutcome?: (o: Outcome) => void }): Promise<Outcome> {
-    const sessionId = p.parent ? `${p.parent}-j${this.store.delegationsForSession(p.parent)}` : `s-${p.ticketId}-${randomUUID().slice(0, 8)}`
+  async startSession(p: { ticketId: string; role: RoleDefinition; cwd: string; prompt: string; outputSchema?: Record<string, unknown>; cap?: number; projectRoot?: string; locked?: ReadonlyArray<string>; extra?: ReadonlyArray<[string, string]>; parent?: string; maxTurns?: number; org?: Org; spender?: string; replay?: boolean; onOutcome?: (o: Outcome) => void }): Promise<Outcome> {
+    const sessionId = p.replay ? `rp-${p.ticketId}-${randomUUID().slice(0, 8)}` : p.parent ? `${p.parent}-j${this.store.delegationsForSession(p.parent)}` : `s-${p.ticketId}-${randomUUID().slice(0, 8)}`
     const cap = p.cap ?? this.config.budget.session_max_usd
-    const { spec, binding } = this.buildSpec({ ...p, sessionId, cap })
+    const org = p.org ?? (p.parent ? this.running.get(p.parent)?.org ?? this.org : this.org)
+    const { spec, binding } = this.buildSpec({ ...p, sessionId, cap, org })
     const engine = this.engines.get(spec.assignment.engine)
     if (engine === undefined) throw new Error(`engine '${spec.assignment.engine}' is not installed`)
     const now = this.now()
     const abort = new AbortController()
-    this.store.startSession({ id: sessionId, ticket_id: p.ticketId, parent_session: p.parent ?? null, role: p.role.role, kind: p.role.kind, department: p.role.department, engine: spec.assignment.engine, model: spec.assignment.model, worktree: p.cwd, started_at: now, boot_id: this.bootId })
-    const running: Running = { sessionId, ticketId: p.ticketId, role: p.role.role, department: p.role.department, kind: p.role.kind, abort, cap, startedAt: now, toolErrors: new Map(), promise: Promise.resolve() }
+    this.store.startSession({ id: sessionId, ticket_id: p.ticketId, parent_session: p.parent ?? null, role: p.role.role, kind: p.role.kind, department: p.spender ?? p.role.department, engine: spec.assignment.engine, model: spec.assignment.model, worktree: p.cwd, started_at: now, boot_id: this.bootId, release: org.tag })
+    const running: Running = { sessionId, ticketId: p.ticketId, role: p.role.role, department: p.role.department, kind: p.role.kind, abort, cap, startedAt: now, release: org.tag, org, toolErrors: new Map(), promise: Promise.resolve() }
     const timeout = setTimeout(() => abort.abort(), spec.limits.timeoutMs)
     const run = async (): Promise<Outcome> => {
       let outcome: Outcome
@@ -878,7 +1155,7 @@ export class Supervisor {
     const parentRow = this.store.session(binding.sessionId)
     const ticket = this.store.ticket(binding.ticketId)
     const reader = brief.worktree === undefined && brief.output.location.startsWith("return")
-    const role = this.org.role(reader ? "junior_reader" : "junior_worker")
+    const role = parent.org.role(reader ? "junior_reader" : "junior_worker")
     const juniorRole: RoleDefinition = { ...role, department: binding.department }
     const now = this.now()
     this.store.addDelegation({ brief_id: brief.brief_id, ticket_id: binding.ticketId, parent_session: binding.sessionId, brief, at: now })

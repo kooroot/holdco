@@ -204,6 +204,24 @@ const doctor = async (dir: string): Promise<Array<Check>> => {
       add(`project '${p.id}' is a git repository (${p.path})`, existsSync(NodePath.join(abs, ".git")), "holdco project add <path>, or fix projects[].path")
     }
     if (config.projects.length === 0) add("a project is registered", false, "holdco project add ../your-repo; departments cannot work without one", true)
+    if (config.projects.some((p) => p.merge === "github")) {
+      const gh = spawnSync("gh", ["auth", "status"], { encoding: "utf8", env: process.env })
+      add("gh is installed and logged in (projects with merge: github)", gh.status === 0, (gh.stderr || gh.stdout || "install the GitHub CLI and run gh auth login, or set GH_TOKEN in the env file").split("\n").find((l) => l.trim()) ?? undefined)
+      for (const p of config.projects.filter((p) => p.merge === "github")) {
+        const remote = spawnSync("git", ["remote", "get-url", "origin"], { cwd: NodePath.resolve(dir, p.path), encoding: "utf8" })
+        add(`project '${p.id}' has an origin remote (merge: github)`, remote.status === 0, "git remote add origin <url>")
+      }
+    }
+    {
+      const { executorCommandExists } = await import("./supervisor/executors.ts")
+      for (const [id, ex] of Object.entries(config.executors ?? {})) {
+        const cwd = ex.cwd === "company" ? dir : NodePath.resolve(dir, config.projects[0]?.path ?? ".")
+        add(`executor '${id}' command is runnable (${ex.command[0]})`, executorCommandExists(ex.command, cwd, process.env), "the first argv element must be an executable path or on PATH")
+        for (const name of ex.env ?? []) add(`executor '${id}' env ${name} is set`, (process.env[name] ?? "") !== "", "set it in the env file the service loads", true)
+        const action = config.actions.find((a) => a.id === id)
+        if (action?.gates.includes("rollback-tested")) add(`executor '${id}' has an undo (gate rollback-tested)`, ex.undo !== undefined, "add executors.<id>.undo or drop the gate")
+      }
+    }
     const strategy = NodePath.join(dir, "governance", "strategy.md")
     const strategyText = existsSync(strategy) ? readFileSync(strategy, "utf8") : ""
     add("governance/strategy.md names a real objective", strategyText.length > 0 && !/\| 1 \| \(example\)/.test(strategyText), "replace the example objective; the CEO allocates against this file", true)

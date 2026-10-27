@@ -188,7 +188,24 @@ const Project = Schema.Struct({
   /** Operator-only paths inside the project, as globs relative to `path`. */
   locked: Schema.Array(Text),
   kill_criteria: Schema.optionalKey(Text),
+  /** How verified branches land (D51): `local` merges and pushes main; `github` opens and merges a PR with `gh`. */
+  merge: Schema.optionalKey(Schema.Literals(["local", "github"])),
+  /** With `merge: github`, how long to wait for checks before rejecting (default 20m). */
+  merge_wait: Schema.optionalKey(Duration),
 })
+
+/**
+ * An external executor (D50): how the kernel performs an action that is not a merge. argv arrays,
+ * no shell; placeholders {branch} {ticket} {deliverable} {previous}; only the listed env names pass.
+ */
+export const Executor = Schema.Struct({
+  command: Schema.Array(Text).check(Schema.isMinLength(1)),
+  cwd: Schema.optionalKey(Schema.Literals(["project", "company"])),
+  env: Schema.optionalKey(Schema.Array(EnvName)),
+  undo: Schema.optionalKey(Schema.Array(Text).check(Schema.isMinLength(1))),
+  timeout: Schema.optionalKey(Duration),
+})
+export type Executor = typeof Executor.Type
 
 const Policy = Schema.Struct({
   windows: Schema.Struct({ t2_internal: Duration, t2_external: Duration }),
@@ -263,6 +280,7 @@ type Draft = {
   readonly policy: typeof Policy.Type
   readonly envelopes: ReadonlyArray<typeof Envelope.Type>
   readonly actions: ReadonlyArray<typeof Action.Type>
+  readonly executors?: Readonly<Record<string, typeof Executor.Type>> | undefined
 }
 
 const duplicates = (xs: ReadonlyArray<string>): Array<string> =>
@@ -306,6 +324,13 @@ export const compositionErrors = (c: Draft): Array<string> => {
   for (const id of ENGINE_IDS) {
     const e = c.engines[id]
     if (e !== undefined && authMode(e) === "api_key" && e.auth_env === undefined) errors.push(`engines.${id}: auth_env is required when auth is api_key`)
+  }
+
+  // Executors name registered actions and never the merge family, which the kernel executes itself
+  for (const [id, ex] of Object.entries(c.executors ?? {})) {
+    if (!c.actions.some((a) => a.id === id)) errors.push(`executors.${id}: not a registered action`)
+    if (/\.merge(\.|$)/.test(id) || id === "code.branch") errors.push(`executors.${id}: merges and branches are executed by the kernel; no executor allowed`)
+    if (ex.command.some((s) => /[;&|<>`$]/.test(s) && !/\{[a-z]+\}/.test(s))) errors.push(`executors.${id}: argv entries run without a shell; drop shell syntax`)
   }
 
   // Every assignment runs on a configured engine; Codex models need a price to be metered
@@ -401,6 +426,8 @@ const presetFields = {
   budget: Budget,
   projects: Schema.Array(Project).check(Schema.isMinLength(1)),
   policy: Policy,
+  /** External executors by action id (D50). Optional; actions without one reach the Operator as manual items. */
+  executors: Schema.optionalKey(Schema.Record(ActionId, Executor)),
 }
 
 /** A preset is a company.yaml without `actions` and `envelopes`: those come from the enabled modules. */

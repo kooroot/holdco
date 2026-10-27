@@ -48,24 +48,36 @@ Or write objectives into `governance/strategy.md` and let the CEO open tickets. 
 | Command | What it is |
 |---|---|
 | `holdco status` | running sessions, open tickets, spend, interrupts, inbox |
-| `holdco inbox` · `inbox approve <id>` · `inbox reject <id>` | T3 decisions, CEO–COO disagreements, blocked tickets, actions with no executor (deploy/publish: you run them), graduation proposals. Unanswered items reject themselves after `policy.inbox.timeout` |
+| `holdco inbox` · `inbox approve <id>` · `inbox reject <id>` | T3 decisions, CEO–COO disagreements, blocked tickets, actions with no declared executor (you run them), graduation proposals, withdrawn candidates. Urgent items alert you at once; routine ones are summarized daily at `policy.inbox.batch_at`. Unanswered items reject themselves after `policy.inbox.timeout` |
 | `holdco audit` · `audit grade <ticket> approve\|reject` · `audit done` | blind-grade the weekly sample; your grades are the ground truth the judge is calibrated against. Skipping `freeze_after_missed` weeks freezes graduation and Improvement (L3) |
 | `reports/digests/<date>.md` | the kernel's weekly digest (goals, spend, verdicts, agreement, executive health, pending items, assumptions) plus the CEO's narrative |
 | `holdco interrupt L1\|L2\|L3\|L4\|L5 <target> --reason …` · `holdco resume …` | stop an agent, a department, Improvement, roll the organization back one release, or halt everything |
-| `holdco rollback <action-log-id>` | revert a merge within or after its challenge window; the action type is demoted and a follow-up ticket opens |
+| `holdco rollback <action-log-id>` | revert a merge, or run a declared executor's `undo`, within or after its challenge window; the action type is demoted and a follow-up ticket opens |
 | `holdco promote <action>` | apply an approved graduation (one tier down) to `company.yaml` |
-| `holdco release` | tag the organization as a new release (sessions always run from the latest tag) |
+| `holdco release` · `release withdraw` | promote the current candidate (or tag a release by hand); withdraw a candidate and revert `main` to the release |
 | `holdco models` (alias `roles`) · `models set <role> <engine:model[:effort]>` · `models preset claude\|codex\|dual` | see and change which engine and model plays each role; validated (the judge never shares a producer's model). The defaults table is in `docs/design/02-config.md` |
 
 Commands that loosen anything (`inbox approve`, `resume`, `promote`, `rollback`, `ticket unblock`) refuse to run without an interactive terminal; agents have none.
 
 ### 5. How it improves itself
 
-Verification scores every ticket; you grade a blind sample weekly; agreement between the two is tracked per action type. When an action meets the graduation rule (enough samples, high agreement, a clean recent streak, no rollbacks or missed canaries) a proposal lands in your inbox; approving it moves the action one tier toward autonomy. Low agreement demotes it automatically. Once `modules.improvement.replay_min_tickets` labeled tickets exist, the weekly Improvement cycle diagnoses recurring failures and opens tickets for itself; its changes to `org/`, `protocols/` and `improvement/` are merged like any other work (verified, approved) and shipped as a release tag. A release followed by a demotion within `policy.release.watch` raises L4, which restores the previous release.
+Verification scores every ticket; you grade a blind sample weekly; agreement between the two is tracked per action type. When an action meets the graduation rule (enough samples, high agreement, a clean recent streak, no rollbacks or missed canaries) a proposal lands in your inbox; approving it moves the action one tier toward autonomy. Low agreement demotes it automatically. Once `modules.improvement.replay_min_tickets` labeled tickets exist, the weekly Improvement cycle diagnoses recurring failures and opens tickets for itself; its changes to `org/`, `protocols/` and `improvement/` are merged like any other work (verified, approved) and become a **candidate** release `rc-<n>`. If the candidate changes the judge (rubrics, the Verification charter or role), a replay gate first re-judges your labeled tickets with it and withdraws it unless agreement with your grades improves. Then `policy.release.canary_traffic` of production sessions run on the candidate for `policy.release.watch`; if their rejection rate stays within `max_regression` of the rest and nothing is demoted, it is promoted to `r<n>`, otherwise it is withdrawn, `main` is reverted and you are told. A demotion during the window still raises L4.
 
 ### 6. What is not automated in this version
 
-Deploys, publishes, outreach and credential actions have no executor: they reach your inbox as "manual action" items with the branch and the request; you perform them and approve the item. Codex hooks are verified for the sandbox but not for live blocking until a model session has been run (R8a). Replay suites and canary deployments of organization changes (release-process §3) are not implemented; releases are gated by Verification and approval only.
+Deploys, publishes, outreach and credential actions run only if you declare how in `company.yaml`:
+
+```yaml
+executors:
+  deploy.staging:
+    command: ["./scripts/deploy.sh", "staging", "{branch}"]   # argv, no shell; {branch} {ticket} {deliverable} {previous}
+    cwd: project
+    env: [DEPLOY_TOKEN]                                        # only these names reach the process
+    undo: ["./scripts/deploy.sh", "staging", "{previous}"]      # {previous} comes from a {"previous": …} line the command prints
+    timeout: 15m
+```
+
+An action with no entry reaches your inbox as a "manual action" item with the branch and the request; you perform it and approve the item. Projects whose merges must go through GitHub (branch protection, CODEOWNERS, CI) set `merge: github`; the kernel opens the pull request, waits for checks and merges with your `gh` login. Codex hooks are verified for the sandbox but not for live blocking until a model session has been run (R8a).
 
 ---
 
@@ -87,12 +99,12 @@ Deploys, publishes, outreach and credential actions have no executor: they reach
 
 ### 4. 매주 10분
 
-위 표와 같습니다. `status`, `inbox`(T3 결정, CEO·COO 불일치, 막힌 티켓, 실행기 없는 행동, 승격 제안. 무응답은 시한 후 자동 거절), `audit`(블라인드 채점. 이 채점이 심판을 보정하는 정답이며, 건너뛰면 승격과 개선이 동결), 다이제스트 읽기, `interrupt`/`resume`, `rollback`, `promote`, `release`. 느슨하게 하는 명령은 대화형 터미널 없이는 실행되지 않습니다.
+위 표와 같습니다. `status`, `inbox`(T3 결정, CEO·COO 불일치, 막힌 티켓, 실행기 없는 행동, 승격 제안, 철회된 후보. 긴급 항목은 즉시 알림, 나머지는 `inbox.batch_at`에 하루 한 번 요약. 무응답은 시한 후 자동 거절), `audit`(블라인드 채점. 이 채점이 심판을 보정하는 정답이며, 건너뛰면 승격과 개선이 동결), 다이제스트 읽기, `interrupt`/`resume`, `rollback`, `promote`, `release`. 느슨하게 하는 명령은 대화형 터미널 없이는 실행되지 않습니다.
 
 ### 5. 자기개선이 일어나는 방식
 
-검증이 모든 티켓을 채점하고, 운영자가 매주 블라인드 샘플을 채점하고, 둘의 일치율을 행동 유형별로 추적합니다. 승격 규칙을 충족하면 인박스에 제안이 오고, 승인하면 한 단계 자율 쪽으로 이동합니다. 일치율이 낮으면 자동 강등됩니다. 라벨 붙은 티켓이 `replay_min_tickets`개 쌓이면 주간 개선 주기가 반복되는 실패를 진단해 스스로 티켓을 열고, 그 변경(`org/`, `protocols/`, `improvement/`)은 다른 작업과 똑같이 검증·승인을 거쳐 릴리스 태그로 배포됩니다. 릴리스 후 감시 기간 안에 강등이 생기면 L4가 걸려 직전 릴리스로 되돌립니다.
+검증이 모든 티켓을 채점하고, 운영자가 매주 블라인드 샘플을 채점하고, 둘의 일치율을 행동 유형별로 추적합니다. 승격 규칙을 충족하면 인박스에 제안이 오고, 승인하면 한 단계 자율 쪽으로 이동합니다. 일치율이 낮으면 자동 강등됩니다. 라벨 붙은 티켓이 `replay_min_tickets`개 쌓이면 주간 개선 주기가 반복되는 실패를 진단해 스스로 티켓을 열고, 그 변경(`org/`, `protocols/`, `improvement/`)은 다른 작업과 똑같이 검증·승인을 거쳐 **후보** 릴리스 `rc-<n>`이 됩니다. 후보가 심판(루브릭, 검증 헌장·역할)을 바꾸면 먼저 리플레이 게이트가 운영자가 채점한 티켓을 후보로 다시 판정해 일치율이 오르지 않으면 철회합니다. 그 뒤 생산 세션의 `policy.release.canary_traffic`만 `policy.release.watch` 동안 후보 조직으로 돌고, 반려율이 나머지보다 `max_regression` 이상 나쁘지 않고 강등이 없으면 `r<n>`으로 승격, 아니면 철회하고 `main`을 되돌린 뒤 알립니다. 감시 기간 안의 강등은 여전히 L4를 겁니다.
 
 ### 6. 이 버전에서 자동화되지 않은 것
 
-배포·게시·외부 연락·자격 증명 행동은 실행기가 없어 "manual action" 인박스 항목으로 옵니다. 운영자가 직접 수행하고 승인합니다. Codex 훅은 샌드박스까지 확인했고 실제 차단은 모델 세션을 돌려봐야 합니다(R8a). 리플레이 스위트와 조직 변경의 카나리 배포는 구현되지 않았고, 릴리스는 검증과 승인으로만 게이트됩니다.
+배포·게시·외부 연락·자격 증명 행동은 `company.yaml:executors`에 운영자가 실행 방법(셸 없는 argv, 플레이스홀더 `{branch} {ticket} {deliverable} {previous}`, 환경변수 허용 목록, 선택적 `undo`)을 선언했을 때만 커널이 실행합니다. 선언이 없는 행동은 "manual action" 인박스 항목으로 와서 운영자가 직접 수행하고 승인합니다. 머지를 GitHub(브랜치 보호, CODEOWNERS, CI)로 거쳐야 하는 프로젝트는 `merge: github`로 두면 커널이 PR을 열고 체크를 기다려 운영자의 `gh` 로그인으로 머지합니다. Codex 훅은 샌드박스까지 확인했고 실제 차단은 모델 세션을 돌려봐야 합니다(R8a).

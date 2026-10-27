@@ -106,9 +106,26 @@ describe("operator commands", () => {
     expect(holdco("models").stdout).toEqual(holdco("roles").stdout)
     expect(holdco("config", "check", "company.yaml").status).toBe(0)
   })
-  test("release tags r1", () => {
+  test("release tags r1; withdraw needs a candidate", () => {
     expect(holdco("release", "--note", "test").status).toBe(0)
     expect(sh("git", ["tag"]).stdout).toContain("r1")
     expect(existsSync(NodePath.join(co, ".holdco", "state.db"))).toBe(true)
+    const w = holdco("release", "withdraw")
+    expect(w.status).toBe(1)
+    expect(w.stderr).toContain("no candidate")
+  })
+  test("doctor checks declared executors and github merges", () => {
+    const path = NodePath.join(co, "company.yaml")
+    const raw = Bun.YAML.parse(readFileSync(path, "utf8")) as Record<string, unknown>
+    ;(raw["actions"] as Array<Record<string, unknown>>).push({ id: "deploy.staging", department: "engineering", tier: "T1", evaluator: "engineering.md#app", gates: ["verification-approved", "rollback-tested"], graduation: "auto" })
+    raw["executors"] = { "deploy.staging": { command: ["./scripts/deploy.sh", "{branch}"], cwd: "project", env: ["DEPLOY_TOKEN"] } }
+    ;(raw["projects"] as Array<Record<string, unknown>>)[0]!["merge"] = "github"
+    writeFileSync(path, Bun.YAML.stringify(raw))
+    const r = holdco("doctor")
+    expect(r.stdout).toContain("FAIL  executor 'deploy.staging' command is runnable (./scripts/deploy.sh)")
+    expect(r.stdout).toContain("WARN  executor 'deploy.staging' env DEPLOY_TOKEN is set")
+    expect(r.stdout).toContain("FAIL  executor 'deploy.staging' has an undo (gate rollback-tested)")
+    expect(r.stdout).toContain("project 'app' has an origin remote (merge: github)")
+    expect(r.status).toBe(1)
   })
 })

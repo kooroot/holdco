@@ -31,10 +31,11 @@ Secrets never appear. Fields that need one (`bot_token_env`, `webhook_env`, `hea
 | `engines` | which engines this company may use (`claude`, `codex`), the env var holding each key, and a price table for engines that report tokens but not cost | Claude-only assumptions |
 | `roles` | engine, model and effort per role kind, with per-department overrides for seniors | model lines in agent files |
 | `budget` | monthly cap, session cap, shares, provider-cap attestation | `${MONTHLY_*_BUDGET_USD}`, `per_department_share` |
-| `projects` | id, repo path, class, share, locked globs, kill criteria | portfolio table in `strategy.md` |
+| `projects` | id, repo path, class, share, locked globs, kill criteria, `merge: local \| github` and `merge_wait` (D51) | portfolio table in `strategy.md` |
 | `policy` | windows, inbox, digest, release, audit, graduation, tripwires, delegation, executive | the remaining `${…}` placeholders |
 | `envelopes` | pre-approved boundaries for T1 | envelope YAML in `policy.md` |
 | `actions` | the action registry | registry YAML in `policy.md` |
+| `executors` | per action, how the kernel performs it: argv with placeholders, env allowlist, undo, timeout (D50). Optional; actions without one are manual inbox items | "the Operator deploys by hand" |
 
 `governance/strategy.md` keeps what only a human or the CEO reads: mission narrative, objectives, non-goals. Everything a machine acts on moves here.
 
@@ -59,6 +60,7 @@ Secrets never appear. Fields that need one (`bot_token_env`, `webhook_env`, `hea
 | T1 ⇒ envelope or gate | `T1 needs an envelope or at least one gate` |
 | Envelope references exist | `unknown envelope` |
 | Reserved namespaces (`legal.`, `credentials.`, `governance.`, `operator.`, `prod.irreversible.`) ⇒ T3 + never | `reserved namespace` |
+| Executors name registered actions, never merges or branches, and carry no shell syntax | `not a registered action`, `no executor allowed`, `drop shell syntax` |
 
 All violations are reported at once, not just the first.
 

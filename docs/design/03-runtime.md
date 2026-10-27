@@ -247,11 +247,12 @@ The binary hook used by unsupervised sessions blocks and logs, but cannot raise 
 | tripwires | every tick | §10 |
 | challenge-window | every tick | finalize T2 actions past `windows.t2_internal` / `t2_external` |
 | ceo-cycle | every `executive.ceo_cycle` | one CEO session: triage `new`, write proposals for `needs_proposal`, handle `blocked`, allocate. Skipped without a CEO |
-| inbox-batch | daily at `inbox.batch_at` (company time zone, `Schedule.cron`) | send the batch; reject items past `timeout` |
+| inbox-batch | daily at `inbox.batch_at` (company time zone) | summarize open routine items; urgent items alerted at once when filed (D52); items past `timeout` reject every tick |
 | digest | weekly at `policy.digest` | the kernel renders every deterministic section from the database (goals data, anomalies, sample list, org changes, executive health, pending T3, unresolved assumptions); the CEO adds narrative if present. A failed CEO session never skips the digest (Constitution 6.3) |
 | improvement-cycle | weekly, Monday | Improvement session to diagnose and open tickets; dormant until enough labeled replay tickets (D20) |
-| release | weekly at `policy.release` | build `release/next`, replay, canaries, tag `r<date>`, notify |
-| release-watch | every tick for `release.watch` after a release | attributable demotion or tripwire → L4 |
+| candidate | on an Improvement merge (or daily when one is pending) | tag `rc-<n>`; replay gate when judge-side files changed (D54); then `canary_traffic` of production sessions run on it (D53) |
+| candidate-watch | every tick while a candidate exists | demotion → withdraw; after `release.watch`, promote to `r<n>` or withdraw on regression |
+| release-watch | every tick for `release.watch` after a release | attributable demotion or tripwire → L4 (which also withdraws any candidate) |
 | audit-watch | weekly | missed audits → L3 + alert |
 | config-watch | on file change | validate, then swap (02) |
 
@@ -275,12 +276,13 @@ The supervisor pings `heartbeat_url_env` every tick; an external cron-monitoring
 |---|---|
 | `tickets` | id, project, department, action_type, state, approval_stage, interrupt_flag, priority, goal, why, done_criteria, opened_by, attempts, lease_holder, lease_expires, window_closes_at |
 | `ticket_events` | ticket_id, at, actor, from_state, to_state, note (append-only) |
-| `sessions` | id, ticket_id, parent_session (juniors), role, engine, model, effort, engine_session_id, worktree, started_at, ended_at, status, turns, cost_usd, cost_source, transcript_path |
+| `sessions` | id, ticket_id, parent_session (juniors), role, engine, model, effort, engine_session_id, worktree, release (the org tag it ran on), started_at, ended_at, status, turns, cost_usd, cost_source, transcript_path |
 | `ledger` | at, role, project, session_id, usd, source (`engine` / `price_table` / `reconciliation`) (append-only) |
 | `action_log` | at, actor, ticket_id, action_type, effective_tier, forced_by, inputs, outputs, score, approvals, undo |
-| `inbox` | id, kind (`t3` / `t2_objection` / `coo_timeout` / `triage` / `blocked` / `graduation` / `issue`), payload, status, decided_at, decision, note |
+| `inbox` | id, kind (`t3` / `t2_objection` / `coo_timeout` / `triage` / `blocked` / `graduation` / `issue` / `manual_action` / `candidate_withdrawn`), urgency, payload, status, decided_at, decision, note, batched_at |
 | `verdicts`, `labels`, `demotions`, `canaries`, `audits` | as in evals/README.md and approvals.md |
-| `releases` | tag, at, watch_until, changes |
+| `releases` | tag, at, watch_until, changes, status (`released` / `candidate` / `promoted` / `withdrawn`), promoted_to |
+| `replays` | candidate, ticket_id, operator_verdict, recorded_verdict, candidate_verdict, cost_usd (D54) |
 
 ### 15. Failure modes
 

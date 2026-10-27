@@ -233,7 +233,7 @@ describe("failure paths", () => {
     const store = new Store(":memory:")
     const id = store.createTicket({ department: "engineering", title: "x", goal: "y", why: "z", done_criteria: ["a"], opened_by: "operator", project: "app", state: "triaged", action: "code.merge.app", now: clock.now }).id
     expect(store.acquireLease(id, "triaged", "dead-session", 60_000, clock.now)).toBe(true)
-    store.startSession({ id: "dead-session", ticket_id: id, parent_session: null, role: "engineering-senior", kind: "senior", department: "engineering", engine: "claude", model: "opus", worktree: null, started_at: clock.now, boot_id: "old-boot" })
+    store.startSession({ id: "dead-session", ticket_id: id, parent_session: null, role: "engineering-senior", kind: "senior", department: "engineering", engine: "claude", model: "opus", worktree: null, started_at: clock.now, boot_id: "old-boot", release: "r0" })
     const sup = new Supervisor({ companyRoot: c.dir, config: c.config, engines: new Map([["claude", new FakeEngine()]]), store, now: () => clock.now, notifier: { send: async () => {}, heartbeat: async () => {} }, log: () => {} })
     await sup.boot()
     expect(store.session("dead-session")?.status).toBe("crashed")

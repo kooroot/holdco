@@ -123,7 +123,7 @@ Notation-only (fine): `ticket-lifecycle.md:40,42`, `replay/README.md:11`, `impro
 
 ## 7. Constitution/governance vs kernel mechanisms
 
-Documented but not implemented by the kernel:
+Documented but not implemented by the kernel at the time of the audit (all four resolved on 2026-10-27 by `docs/design/08-execution-and-release.md`, D50–D54: candidate releases with canary traffic, the replay gate, the urgent inbox path; the Fri/Sat two-step is replaced by candidate → watch → promote):
 - `release-process.md` §3 "canary deployment: new definition handles 20% of tickets" (`policy.release.canary_traffic` exists in config, but 03 §11 has no such job or per-ticket definition selection).
 - `release-process.md` §1 Fri/Sat two-step and `release/next` branch: 03 §11 has one `release` job at `policy.release`. Say which.
 - Replay runner (`improvement.md:19`, `release-process.md:15`, `improvement-senior.md:18`): no tool/command.

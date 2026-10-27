@@ -14,7 +14,7 @@ import { renderCompanyYaml } from "../scaffold/scaffold.ts"
 import { Store, type Ticket } from "../store/store.ts"
 import { clear, raise, readControl } from "../supervisor/control.ts"
 import { renderDigest } from "../supervisor/digest.ts"
-import { revertMerge } from "../supervisor/executors.ts"
+import { undoAction } from "../supervisor/executors.ts"
 import { liveNotifier } from "../supervisor/notify.ts"
 import { latestReleaseTag } from "../supervisor/org.ts"
 import { Supervisor } from "../supervisor/supervisor.ts"
@@ -110,7 +110,7 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
       for (const t of tickets) console.log(`  ${fmtTicket(t)}`)
       const inbox = store.inboxOpen()
       console.log(`\ninbox (${inbox.length}):`)
-      for (const i of inbox) console.log(`  #${i.id} [${i.kind}] ${String(i.payload["title"] ?? "")} (${ago(now - i.created_at)} ago)`)
+      for (const i of inbox) console.log(`  #${i.id} [${i.kind}]${i.urgency === "urgent" ? " URGENT" : ""} ${String(i.payload["title"] ?? "")} (${ago(now - i.created_at)} ago)`)
       store.close()
       return true
     }
@@ -159,7 +159,7 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
           const items = store.inboxOpen()
           if (items.length === 0) console.log("inbox is empty")
           for (const i of items) {
-            console.log(`#${i.id} [${i.kind}] ${String(i.payload["title"] ?? "")}  (${ago(now - i.created_at)} ago${i.ticket_id ? `, ticket ${i.ticket_id}` : ""})`)
+            console.log(`#${i.id} [${i.kind}]${i.urgency === "urgent" ? " URGENT" : ""} ${String(i.payload["title"] ?? "")}  (${ago(now - i.created_at)} ago${i.ticket_id ? `, ticket ${i.ticket_id}` : ""})`)
             for (const [k, v] of Object.entries(i.payload)) if (k !== "title") console.log(`    ${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`)
           }
         } else if (sub === "approve" || sub === "reject") {
@@ -239,7 +239,18 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
       const config = loadConfig(dir)
       const store = Store.open(dir)
       const sup = new Supervisor({ companyRoot: dir, config, engines: new Map(), store, notifier: { send: async (_s, t) => console.log(t), heartbeat: async () => {} }, log: () => {} })
-      const tag = sup.release(args.flag("note") ?? "manual release by the Operator", now)
+      const rc = store.candidate()
+      if (sub === "withdraw") {
+        if (!rc) {
+          await sup.stop()
+          throw new OperatorError("no candidate release to withdraw")
+        }
+        sup.withdraw(args.flag("note") ?? "withdrawn by the Operator", now)
+        await sup.stop()
+        console.log(`${rc.tag} withdrawn; main reverted to the current release`)
+        return true
+      }
+      const tag = sup.release(args.flag("note") ?? (rc ? `promoted ${rc.tag} by the Operator` : "manual release by the Operator"), now)
       await sup.stop()
       if (!tag) throw new OperatorError("release failed")
       return true
@@ -270,8 +281,7 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
         if (!log) throw new OperatorError(`action-log ${id} not found`)
         if (log.rolled_back) throw new OperatorError("already rolled back")
         const undo = JSON.parse(log.undo) as Record<string, unknown>
-        if (undo["kind"] !== "revert-merge") throw new OperatorError("this action has no recorded undo; open a ticket instead")
-        const r = revertMerge(undo)
+        const r = undoAction(undo, process.env)
         if (!r.ok) throw new OperatorError(`rollback failed: ${r.error}`)
         store.markRolledBack(id)
         if (log.ticket_id) {

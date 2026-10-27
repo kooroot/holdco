@@ -660,6 +660,17 @@
           "kill_criteria": {
             "type": "string",
             "minLength": 1
+          },
+          "merge": {
+            "type": "string",
+            "enum": [
+              "local",
+              "github"
+            ]
+          },
+          "merge_wait": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]*(s|m|h|d)$"
           }
         },
         "required": [
@@ -955,6 +966,55 @@
         "delegation",
         "executive"
       ],
+      "additionalProperties": false
+    },
+    "executors": {
+      "type": "object",
+      "patternProperties": {
+        "^[a-z][a-z0-9-]*(\\.[a-z0-9-]+)+$": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1
+            },
+            "cwd": {
+              "type": "string",
+              "enum": [
+                "project",
+                "company"
+              ]
+            },
+            "env": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Z][A-Z0-9_]*$"
+              }
+            },
+            "undo": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1
+            },
+            "timeout": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]*(s|m|h|d)$"
+            }
+          },
+          "required": [
+            "command"
+          ],
+          "additionalProperties": false
+        }
+      },
       "additionalProperties": false
     },
     "envelopes": {

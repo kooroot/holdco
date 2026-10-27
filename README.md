@@ -108,7 +108,7 @@ A company created by `init` holds the constitution, governance, evals and `compa
 
 ### Status
 
-Built and tested without a model: the kernel's enforcement and policy layers, configuration, templates and one-shot scaffolding, both engine adapters (typechecked against the real SDKs; Codex sandbox verified against the real CLI), the state store and ticket state machine, the company tool server (real MCP), the supervisor loop (dispatch, leases, interrupts, tripwires, approvals, executors, digest, releases), and the Operator CLI. Not yet done: a live session on a real API key (M3's smoke test), the interactive wizard and service files (M4), npm publishing, replay suites. See `docs/operator-guide.md` to run it and `docs/design/06-roadmap.md` for what is left.
+Built and tested without a model: the kernel's enforcement and policy layers, configuration, templates and one-shot scaffolding, both engine adapters (typechecked against the real SDKs; Codex sandbox verified against the real CLI), the state store and ticket state machine, the company tool server (real MCP), the supervisor loop (dispatch, leases, interrupts, tripwires, approvals, declared executors and GitHub merges, urgent inbox, candidate releases with canary traffic and the replay gate, digest), and the Operator CLI. Not yet done: a live session on a real API key (M3's smoke test), the interactive wizard and service files (M4), npm publishing. See `docs/operator-guide.md` to run it and `docs/design/06-roadmap.md` for what is left.
 
 ---
 

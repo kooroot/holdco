@@ -11,10 +11,10 @@ Agents improve continuously, but the organization changes only as a **tagged rel
 
 ### 1. Releases
 
-- `holdco init` tags `r0`. Every later release is `r<n>` (`r1`, `r2`, ...), tagged by the kernel's release job at `company.yaml:policy.release` (`day`, `at`) or on demand with `holdco release`.
-- An `improvement.merge` that passes the gate is merged by the merge executor into the default branch and marks the company `release_pending`; the release job tags within a day. Several merges in one day ship as one release.
+- `holdco init` tags `r0`. Every later release is `r<n>` (`r1`, `r2`, ...). Releases are two-step: an `improvement.merge` that passes the gate is merged by the merge executor into the default branch and tagged at once as a **candidate** `rc-<n>`; after the watch period (§3) the kernel promotes it to `r<n>` or withdraws it. `holdco release` promotes the candidate immediately; `holdco release withdraw` withdraws it.
+- One candidate at a time. A merge that lands while a candidate is under watch becomes the next candidate once this one is promoted.
 - Improvement works on `imp/<id>` branches in worktrees cut from the latest tag; the ticket is one hypothesis.
-- There is no `release/next` branch and no fixed weekday rhythm beyond `policy.release`.
+- There is no `release/next` branch and no weekday rhythm; `policy.release.day`/`at` are kept for the digest's release notes.
 
 ### 2. Merge gate (per `improvement.merge`)
 
@@ -23,9 +23,8 @@ The kernel checks these when the ticket reaches `verified`; a gate that is not e
 | Condition | Default | Checked by |
 |---|---|---|
 | `verification-approved` | Verdict `approve` on the branch head | Verification |
-| `replay-gain`: overall replay score improves | ≥ `company.yaml:policy.release.min_gain` (+2%) on the target department | release job; **skipped and noted while `evals/replay` is empty** |
-| No dimension regresses | no dimension drops more than `company.yaml:policy.release.max_regression` (−1%) | release job, part of `replay-gain` |
-| `canary-clean` | no canary approved and no tripwire attributable to the change | release job; skipped and noted without canary history |
+| `replay-gain`: agreement with the Operator's labels improves | ≥ `company.yaml:policy.release.min_gain` (+2%) over the recorded verdicts, no action type regressing by more than `max_regression` | kernel replay gate, run on the candidate **when it changes the judge** (`evals/rubrics/`, the Verification charter or role file); **skipped and noted while no labeled ticket has a live branch** |
+| `canary-clean` | candidate sessions' rejection rate ≤ baseline + `max_regression`, and no demotion during the watch | kernel candidate-watch (§3) |
 | Touches only editable paths | no change under locked paths | kernel (`tierForChange`): a locked path makes the merge T3 |
 | One hypothesis per ticket | a single diagnosed failure pattern | Verification (rubric) |
 
@@ -33,7 +32,7 @@ A merge touching `org/ceo.md`, `org/coo.md`, `org/departments/verification.md` o
 
 ### 3. Watch period
 
-For `company.yaml:policy.release.watch` (default 3 days) after a release, any demotion or tripwire the kernel can attribute to the release raises **L4** automatically (`governance/interrupts.md` §3). `policy.release.canary_traffic` is reserved for a future per-definition canary; v1 ships every release to all traffic.
+While a candidate `rc-<n>` exists, `company.yaml:policy.release.canary_traffic` (default 20%) of newly dispatched production sessions (department seniors and their juniors; never Verification, never the executives) run on the candidate organization; the rest keep the current release. Sessions are not told which one they run. After `policy.release.watch` (default 3 days) the candidate is promoted if its sessions' rejection rate is within `max_regression` of the rest and nothing was demoted; otherwise it is withdrawn: `org/`, `protocols/`, `improvement/`, `evals/` on the default branch revert to the release, and the Operator gets an urgent inbox item. A demotion during the watch also raises **L4** (`governance/interrupts.md` §3), which withdraws the candidate.
 
 ### 4. Rollback
 
@@ -56,20 +55,20 @@ Every release writes the "Org changes" section of the weekly digest, rendered by
 
 ### 1. 릴리스
 
-- `holdco init`이 `r0`를 태그합니다. 이후 릴리스는 `r<n>`(`r1`, `r2`, ...)이며 커널의 릴리스 잡이 `company.yaml:policy.release`(`day`, `at`)에, 또는 `holdco release`로 즉시 태그합니다.
-- 게이트를 통과한 `improvement.merge`는 머지 실행기가 기본 브랜치로 머지하고 회사를 `release_pending`으로 표시하며, 릴리스 잡이 하루 안에 태그합니다. 하루에 여러 머지는 하나의 릴리스로 나갑니다.
+- `holdco init`이 `r0`를 태그합니다. 이후 릴리스는 `r<n>`(`r1`, `r2`, ...)이며 두 단계입니다. 게이트를 통과한 `improvement.merge`는 머지 실행기가 기본 브랜치로 머지하고 즉시 **후보** `rc-<n>`으로 태그되며, 감시 기간(§3) 뒤 커널이 `r<n>`으로 승격하거나 철회합니다. `holdco release`는 후보를 즉시 승격, `holdco release withdraw`는 철회합니다.
+- 후보는 한 번에 하나. 감시 중에 들어온 머지는 이 후보가 승격된 뒤 다음 후보가 됩니다.
 - 개선팀은 최신 태그에서 딴 워크트리의 `imp/<id>` 브랜치에서 작업하며 티켓 하나가 가설 하나입니다.
-- `release/next` 브랜치도, `policy.release` 외의 고정 요일 리듬도 없습니다.
+- `release/next` 브랜치도 요일 리듬도 없습니다. `policy.release.day`/`at`은 다이제스트의 릴리스 노트용입니다.
 
 ### 2. 머지 게이트 (`improvement.merge` 단위)
 
-티켓이 `verified`가 될 때 커널이 확인하며, 증거 없는 게이트는 시니어에게 반려됩니다. `verification-approved`(검증 판정), `replay-gain`(대상 부서 +`min_gain` 이상, 어떤 항목도 `max_regression` 넘게 퇴보 없음. 릴리스 잡이 계산하며 **`evals/replay`가 비어 있으면 건너뛰고 기록**), `canary-clean`(변경에 기인한 카나리 승인·트립와이어 없음. 카나리 이력이 없으면 건너뛰고 기록), 잠긴 경로 무변경(커널 `tierForChange`, 잠긴 경로를 건드리면 T3), 티켓당 가설 하나(검증 루브릭).
+티켓이 `verified`가 될 때 커널이 확인하며, 증거 없는 게이트는 시니어에게 반려됩니다. `verification-approved`(검증 판정), `replay-gain`(운영자 라벨과의 일치율이 기록된 판정보다 `min_gain` 이상 상승, 행동 유형별 하락 `max_regression` 이하. 후보가 심판—`evals/rubrics/`, 검증 헌장·역할 파일—을 바꿀 때 커널의 리플레이 게이트가 계산하며, **살아 있는 브랜치를 가진 라벨 티켓이 없으면 건너뛰고 기록**), `canary-clean`(후보 세션의 반려율 ≤ 기준선 + `max_regression`, 감시 중 강등 없음. 커널의 후보 감시가 확인), 잠긴 경로 무변경(커널 `tierForChange`, 잠긴 경로를 건드리면 T3), 티켓당 가설 하나(검증 루브릭).
 
 `org/ceo.md`, `org/coo.md`, `org/departments/verification.md`와 그 역할 파일(`org/roles/ceo.md`, `coo.md`, `verification-senior.md`)을 건드리는 머지는 행동 ID와 무관하게 T3이며 인박스에서 운영자를 기다립니다(`governance.exec-definition-change`).
 
 ### 3. 감시 기간
 
-릴리스 후 `company.yaml:policy.release.watch`(기본 3일) 동안 그 릴리스에 기인한다고 커널이 판단한 강등이나 트립와이어가 생기면 자동으로 **L4**(`governance/interrupts.md` §3). `policy.release.canary_traffic`은 향후 정의별 카나리용으로 예약되어 있고 v1은 모든 릴리스를 전체 트래픽에 내보냅니다.
+후보 `rc-<n>`이 있는 동안 새로 배분되는 생산 세션(부서 시니어와 그 주니어. 검증과 경영진은 제외)의 `company.yaml:policy.release.canary_traffic`(기본 20%)이 후보 조직으로 돌고 나머지는 현재 릴리스를 유지합니다. 세션은 자기가 어느 쪽인지 모릅니다. `policy.release.watch`(기본 3일) 뒤 후보 세션의 반려율이 나머지보다 `max_regression` 이상 나쁘지 않고 강등이 없으면 승격, 아니면 철회: 기본 브랜치의 `org/`, `protocols/`, `improvement/`, `evals/`를 릴리스로 되돌리고 운영자에게 긴급 인박스 항목이 갑니다. 감시 중 강등은 **L4**(`governance/interrupts.md` §3)도 걸며, L4는 후보를 철회합니다.
 
 ### 4. 롤백
 
