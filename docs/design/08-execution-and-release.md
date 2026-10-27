@@ -33,6 +33,14 @@ executors:
 - An action with no executor entry still becomes a `manual_action` inbox item (D46).
 - Gate `rollback-tested` means: the executor has an `undo`. Doctor fails an executor whose command's first element is not executable.
 - The executor is itself an action at its registry tier: T0/T1 run after Verification; T2/T3 after approval, like merges.
+- Executors run off the supervisor's tick (a child process with a kill-on-timeout); the ticket stays `verified`/`awaiting_approval` until the process ends. GitHub check-waiting is likewise one poll per tick until `merge_wait` passes, never a blocking sleep.
+- `{deliverable}` is the path a senior writes in the `ticket_update` note as `deliverable: <path>` (`protocols/ticket-lifecycle.md`).
+
+### Known approximations
+
+- Canary attribution is by time: any demotion while a candidate is under watch withdraws it, whether or not a candidate session caused it. Safe side; may withdraw a good candidate.
+- The canary comparison is a raw rejection-rate difference over the watch window; with few sessions it is noisy. `watch` and `canary_traffic` are the Operator's knobs.
+- Replay sessions bypass the budget gate (they are few and capped per session); their cost is charged to Improvement's share after the fact.
 
 ### 2. GitHub-based merges (D51)
 

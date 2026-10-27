@@ -6,7 +6,7 @@
  *   custom  an Operator-declared argv (`company.yaml:executors`) run with an env allowlist
  * Anything else ends in the Operator's inbox as `manual_action`.
  */
-import { spawnSync } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
 import { existsSync } from "node:fs"
 import * as NodePath from "node:path"
 import type { Executor } from "../config/company.ts"
@@ -19,6 +19,8 @@ export interface ExecResult {
   /** How to undo it (`holdco rollback <action-log-id>`). `{}` when the action cannot be undone. */
   readonly undo: Record<string, unknown>
   readonly error?: string
+  /** Not finished yet (checks still running); the kernel retries on a later tick. */
+  readonly pending?: boolean
 }
 
 const git = (cwd: string, args: ReadonlyArray<string>) => spawnSync("git", [...args], { cwd, encoding: "utf8" })
@@ -83,6 +85,8 @@ export interface GithubMergeOptions {
   readonly body: string
   /** How long to wait for checks (ms); the default is 20 minutes. */
   readonly waitMs?: number
+  /** Poll once and return `pending` instead of sleeping: the supervisor calls again next tick. */
+  readonly poll?: boolean
   readonly env: Record<string, string>
   readonly gh?: GhRunner
   readonly sleep?: (ms: number) => void
@@ -120,6 +124,7 @@ export const mergeViaGithub = (o: GithubMergeOptions): ExecResult => {
     if (states === "" || states === "SUCCESS" || states === "SKIPPED" || states === "NEUTRAL" || /^(SUCCESS|SKIPPED|NEUTRAL)(,(SUCCESS|SKIPPED|NEUTRAL))*$/.test(states)) break
     if (/FAILURE|ERROR|CANCELLED|TIMED_OUT|ACTION_REQUIRED/.test(states)) return fail(`checks not green on #${number}: ${states}`)
     if (now() >= deadline) return fail(`checks on #${number} still ${states} after the merge wait`)
+    if (o.poll) return { ok: false, pending: true, outputs: { pr: number, states }, undo: {} }
     sleep(30_000)
   }
   const m = gh(o.repo, ["pr", "merge", String(number), "--merge", "--delete-branch=false"], o.env)
@@ -169,21 +174,40 @@ export interface RunExecutorOptions {
   readonly cwd: string
   readonly placeholders: Placeholders
   readonly env: Record<string, string | undefined>
-  readonly spawn?: typeof spawnSync
 }
+
+interface Ran { readonly status: number | null; readonly stdout: string; readonly stderr: string; readonly error?: string }
+
+/** Run argv without blocking the supervisor's event loop; a timeout kills the process. */
+const runAsync = (argv: ReadonlyArray<string>, cwd: string, env: Record<string, string>, timeoutMs: number): Promise<Ran> =>
+  new Promise((resolve) => {
+    const [cmd, ...args] = argv as [string, ...Array<string>]
+    let stdout = ""
+    let stderr = ""
+    let child: ReturnType<typeof spawn>
+    try {
+      child = spawn(cmd, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] })
+    } catch (e) {
+      resolve({ status: null, stdout, stderr, error: String(e) })
+      return
+    }
+    const timer = setTimeout(() => { stderr += `\nkilled after ${timeoutMs} ms`; child.kill("SIGKILL") }, timeoutMs)
+    child.stdout?.on("data", (d: Buffer) => { stdout += d.toString() })
+    child.stderr?.on("data", (d: Buffer) => { stderr += d.toString() })
+    child.on("error", (e) => { clearTimeout(timer); resolve({ status: null, stdout, stderr, error: String(e) }) })
+    child.on("close", (code) => { clearTimeout(timer); resolve({ status: code, stdout, stderr }) })
+  })
 
 /**
  * Run the declared command. The last line of stdout that parses as a JSON object is recorded as
  * the executor's output (`{"previous": …}` feeds the undo's `{previous}`).
  */
-export const runExecutor = (o: RunExecutorOptions): ExecResult => {
+export const runExecutor = async (o: RunExecutorOptions): Promise<ExecResult> => {
   const argv = renderArgv(o.executor.command, o.placeholders)
   if (typeof argv === "string") return fail(argv)
-  const [cmd, ...args] = argv as [string, ...Array<string>]
-  const spawn = o.spawn ?? spawnSync
-  const r = spawn(cmd, args, { cwd: o.cwd, encoding: "utf8", env: executorEnv(o.executor.env ?? [], o.env), timeout: durationMs(o.executor.timeout ?? "15m") })
-  const stdout = String(r.stdout ?? "")
-  const stderr = String(r.stderr ?? (r.error ? String(r.error) : ""))
+  const r = await runAsync(argv, o.cwd, executorEnv(o.executor.env ?? [], o.env), durationMs(o.executor.timeout ?? "15m"))
+  const stdout = r.stdout
+  const stderr = r.stderr + (r.error ? `\n${r.error}` : "")
   const json = stdout.split("\n").map((l) => l.trim()).filter((l) => l.startsWith("{")).map((l) => { try { return JSON.parse(l) as Record<string, unknown> } catch { return undefined } }).filter((x) => x !== undefined).at(-1)
   const outputs: Record<string, unknown> = { command: argv, exit: r.status, stdout: stdout.slice(-4000), stderr: stderr.slice(-4000), ...(json ? { result: json } : {}) }
   if (r.status !== 0) return { ok: false, outputs, undo: {}, error: `${o.action} exited ${r.status ?? "by signal"}: ${stderr.trim().split("\n").at(-1) ?? ""}`.trim() }

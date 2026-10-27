@@ -28,7 +28,7 @@ import { CeoCycleReport, Proposal } from "../protocol/approval.ts"
 import { Verdict } from "../protocol/verdict.ts"
 import { END_STATES, Store, type Ticket } from "../store/store.ts"
 import { clear as clearInterrupt, raise as raiseInterrupt, readControl } from "./control.ts"
-import { executorKind, mergeBranch, mergeViaGithub, runExecutor } from "./executors.ts"
+import { type ExecResult, executorKind, mergeBranch, mergeViaGithub, runExecutor } from "./executors.ts"
 import { consoleNotifier, type Notifier } from "./notify.ts"
 import { Org, projectInstructions } from "./org.ts"
 import { renderDigest } from "./digest.ts"
@@ -96,6 +96,9 @@ export class Supervisor {
   private org: Org
   /** The candidate organization (`rc-<n>`) while one is under canary (D53). */
   private candidate: Org | undefined
+  /** Tickets whose declared executor is running right now (execute() is re-entered every tick). */
+  private readonly executing = new Set<string>()
+  private readonly pending = new Set<Promise<void>>()
   private halted = false
   private readonly delegations = new Map<string, Promise<{ brief_id: string; status: string; result: unknown }>>()
   private lastJob = new Map<string, number>()
@@ -157,7 +160,7 @@ export class Supervisor {
 
   /** Wait for every running session (tests). */
   async drain() {
-    while (this.running.size > 0) await Promise.allSettled([...this.running.values()].map((r) => r.promise))
+    while (this.running.size > 0 || this.pending.size > 0) await Promise.allSettled([...[...this.running.values()].map((r) => r.promise), ...this.pending])
   }
 
   // ── one tick ─────────────────────────────────────────────────────────────
@@ -339,9 +342,16 @@ export class Supervisor {
         return
       }
       const message = `${t.id}: ${t.title} (${t.action}, ${tier})`
-      const r = project?.merge === "github"
-        ? mergeViaGithub({ repo, branch: t.branch, title: message, body: `${t.goal}\n\nVerdict: ${this.store.verdictFor(t.id)?.verdict ?? "none"}\n\nOpened by Holdco for ticket ${t.id}.`, waitMs: durationMs(project.merge_wait ?? "20m"), env: this.executorEnvFor(["GH_TOKEN", "GITHUB_TOKEN"]), now: this.now })
-        : mergeBranch(repo, t.branch, message)
+      let r: ExecResult
+      if (project?.merge === "github") {
+        // non-blocking: poll the checks once per tick until merge_wait has passed
+        const startedKey = `ghwait:${t.id}`
+        const started = Number(this.store.getMeta(startedKey) ?? now)
+        if (this.store.getMeta(startedKey) === undefined) this.store.setMeta(startedKey, String(now))
+        r = mergeViaGithub({ repo, branch: t.branch, title: message, body: `${t.goal}\n\nVerdict: ${this.store.verdictFor(t.id)?.verdict ?? "none"}\n\nOpened by Holdco for ticket ${t.id}.`, waitMs: durationMs(project.merge_wait ?? "20m"), poll: true, env: this.executorEnvFor(["GH_TOKEN", "GITHUB_TOKEN"]), now: () => this.now() - (now - started) })
+        if (r.pending) return
+        this.store.setMeta(startedKey, "")
+      } else r = mergeBranch(repo, t.branch, message)
       if (!r.ok) {
         this.store.transition(t.id, "rejected", "kernel", `merge failed: ${r.error}`, now)
         this.store.bumpAttempts(t.id, this.config.runtime.max_attempts, "kernel", "merge failed", now)
@@ -354,20 +364,32 @@ export class Supervisor {
       if (project) removeWorktree(repo, `t-${t.id}`)
       void this.notifier.send("info", `${t.id} done: ${t.title} (${t.action}, ${tier})`)
     } else if (declared !== undefined) {
-      // Operator-declared executor (D50): the kernel runs it with the declared env names only
+      // Operator-declared executor (D50): the kernel runs it with the declared env names only, off the tick
+      if (this.executing.has(t.id)) return
+      this.executing.add(t.id)
       const cwd = declared.cwd === "company" ? this.root : repo
-      const r = runExecutor({ executor: declared, action: t.action as string, cwd, placeholders: { branch: t.branch, ticket: t.id, deliverable: this.deliverableOf(t) }, env: this.env })
-      if (!r.ok) {
-        this.store.logAction({ at: now, actor: "kernel", ticket_id: t.id, action: t.action as string, effective_tier: tier, forced_by: forcedBy, inputs: { branch: t.branch }, outputs: r.outputs, undo: {} })
-        this.store.transition(t.id, "rejected", "kernel", `executor failed: ${r.error}`, now)
-        this.store.bumpAttempts(t.id, this.config.runtime.max_attempts, "kernel", "executor failed", now)
-        return
-      }
-      const id = this.store.logAction({ at: now, actor: "kernel", ticket_id: t.id, action: t.action as string, effective_tier: tier, forced_by: forcedBy, inputs: { branch: t.branch, deliverable: this.deliverableOf(t) }, outputs: r.outputs, undo: r.undo })
-      const window = tier === "T2" ? now + durationMs(this.config.policy.windows.t2_internal) : null
-      this.store.transition(t.id, "done", "kernel", `executed ${t.action} (${tier}); action-log ${id}`, now, { window_closes_at: window })
-      if (project) removeWorktree(repo, `t-${t.id}`)
-      void this.notifier.send("info", `${t.id} done: ${t.title} (${t.action}, ${tier})`)
+      const deliverable = this.deliverableOf(t)
+      const action = t.action as string
+      const run = runExecutor({ executor: declared, action, cwd, placeholders: { branch: t.branch, ticket: t.id, deliverable }, env: this.env }).then((r) => {
+        const end = this.now()
+        const cur = this.store.ticket(t.id)
+        if (cur === undefined || END_STATES.has(cur.state)) return
+        if (!r.ok) {
+          this.store.logAction({ at: end, actor: "kernel", ticket_id: t.id, action, effective_tier: tier, forced_by: forcedBy, inputs: { branch: t.branch }, outputs: r.outputs, undo: {} })
+          this.store.transition(t.id, "rejected", "kernel", `executor failed: ${r.error}`, end)
+          this.store.bumpAttempts(t.id, this.config.runtime.max_attempts, "kernel", "executor failed", end)
+          return
+        }
+        const id = this.store.logAction({ at: end, actor: "kernel", ticket_id: t.id, action, effective_tier: tier, forced_by: forcedBy, inputs: { branch: t.branch, deliverable }, outputs: r.outputs, undo: r.undo })
+        const window = tier === "T2" ? end + durationMs(this.config.policy.windows.t2_internal) : null
+        this.store.transition(t.id, "done", "kernel", `executed ${action} (${tier}); action-log ${id}`, end, { window_closes_at: window })
+        if (project) removeWorktree(repo, `t-${t.id}`)
+        void this.notifier.send("info", `${t.id} done: ${t.title} (${action}, ${tier})`)
+      }).catch((e) => {
+        void this.notifier.send("warning", `${t.id}: executor crashed: ${String(e)}`)
+      }).finally(() => this.executing.delete(t.id))
+      this.pending.add(run)
+      void run.finally(() => this.pending.delete(run))
     } else if (kind === "branch") {
       this.store.logAction({ at: now, actor: "kernel", ticket_id: t.id, action: t.action as string, effective_tier: tier, forced_by: forcedBy, inputs: {}, outputs: { branch: t.branch }, undo: {} })
       this.store.transition(t.id, "done", "kernel", "branch delivered", now)
@@ -541,7 +563,7 @@ export class Supervisor {
         `# Replay verification of ticket ${t.id}: ${t.title}`,
         `Department: ${t.department}. Action: ${t.action ?? "unknown"}. Rubric: ${rubricRef}. Mechanical gates required: ${(action?.gates ?? []).join(", ") || "none"}.`,
         `Goal: ${t.goal}`, `Done criteria:`, ...t.done_criteria.map((c) => `- ${c}`),
-        `The branch ${t.branch} is checked out read-only at ${cwd}. Judge it as if it were new; submit with verdict_submit naming ticket ${t.id}.`,
+        `The branch ${t.branch} is checked out read-only at ${cwd}. Judge it as if it were new. This is a replay of a closed ticket: do NOT call verdict_submit (it is refused); return the Verdict naming ticket ${t.id} as your structured output only.`,
         "", "## Rubric", candidate.rubric(rubricRef) || "(rubric file missing: return cannot-score)",
       ].join("\n")
       const role = candidate.role("verification")

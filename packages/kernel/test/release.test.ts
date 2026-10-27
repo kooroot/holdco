@@ -87,13 +87,13 @@ describe("executors (D50)", () => {
     expect(Object.keys(env).sort()).toEqual(["DEPLOY_TOKEN", "HOME", "PATH"])
   })
 
-  test("runExecutor records the JSON result, builds the undo from {previous}, and undoAction runs it", () => {
+  test("runExecutor records the JSON result, builds the undo from {previous}, and undoAction runs it", async () => {
     const dir = NodePath.join(base, "exec")
     mkdirSync(dir)
     writeFileSync(NodePath.join(dir, "deploy.sh"), '#!/bin/sh\necho "deployed $1 for $2 with ${DEPLOY_TOKEN:-none}" > state.txt\necho \'{"previous": "v0"}\'\n', { mode: 0o755 })
     writeFileSync(NodePath.join(dir, "undo.sh"), '#!/bin/sh\necho "rolled back to $1" > state.txt\n', { mode: 0o755 })
     const executor = { command: ["./deploy.sh", "{branch}", "{ticket}"], cwd: "project" as const, env: ["DEPLOY_TOKEN"], undo: ["./undo.sh", "{previous}"], timeout: "1m" }
-    const r = runExecutor({ executor, action: "deploy.staging", cwd: dir, placeholders: { branch: "t/ENG-1", ticket: "ENG-1" }, env: { PATH: process.env["PATH"], DEPLOY_TOKEN: "tok", ANTHROPIC_API_KEY: "leak" } })
+    const r = await runExecutor({ executor, action: "deploy.staging", cwd: dir, placeholders: { branch: "t/ENG-1", ticket: "ENG-1" }, env: { PATH: process.env["PATH"], DEPLOY_TOKEN: "tok", ANTHROPIC_API_KEY: "leak" } })
     expect(r.ok).toBe(true)
     expect(readFileSync(NodePath.join(dir, "state.txt"), "utf8")).toBe("deployed t/ENG-1 for ENG-1 with tok\n")
     expect((r.outputs["result"] as Record<string, unknown>)["previous"]).toBe("v0")
@@ -101,7 +101,7 @@ describe("executors (D50)", () => {
     const u = undoAction(r.undo, { PATH: process.env["PATH"] })
     expect(u.ok).toBe(true)
     expect(readFileSync(NodePath.join(dir, "state.txt"), "utf8")).toBe("rolled back to v0\n")
-    const bad = runExecutor({ executor: { command: ["./missing.sh"] }, action: "x", cwd: dir, placeholders: { ticket: "T" }, env: { PATH: process.env["PATH"] } })
+    const bad = await runExecutor({ executor: { command: ["./missing.sh"] }, action: "x", cwd: dir, placeholders: { ticket: "T" }, env: { PATH: process.env["PATH"] } })
     expect(bad.ok).toBe(false)
     expect(undoAction({}, {}).ok).toBe(false)
   })
@@ -196,6 +196,9 @@ describe("GitHub merges (D51)", () => {
     expect(r.ok).toBe(true)
     expect(r.outputs["pr"]).toBe(7)
     expect(calls).toEqual(["pr view", "pr create", "pr view", "pr checks", "pr checks", "pr merge", "pr view"])
+    // poll mode returns pending instead of sleeping (the supervisor retries next tick)
+    const pend = mergeViaGithub({ repo, branch: "t/ENG-9", title: "x", body: "", env: {}, poll: true, gh: (_c, args) => (args[1] === "view" ? { status: 0, stdout: "7\n", stderr: "" } : args[1] === "checks" ? { status: 0, stdout: "PENDING\n", stderr: "" } : { status: 1, stdout: "", stderr: "" }), now: () => 0 })
+    expect(pend.pending).toBe(true)
     expect(r.undo).toMatchObject({ kind: "revert-merge", repo, base: "main" })
     expect(existsSync(NodePath.join(repo, "f.md"))).toBe(true)
 

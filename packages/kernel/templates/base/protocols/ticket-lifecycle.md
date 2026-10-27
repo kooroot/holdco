@@ -73,7 +73,7 @@ The kernel starts sessions in this order: Verification tickets (`ready_for_verif
 ### Deliverable convention
 
 - The deliverable of every ticket is the branch `t/<id>` in the project (`imp/<id>` in the company repository for Improvement). The senior's session works in the worktree `<project>/.claude/worktrees/t-<id>`.
-- Non-code deliverables (research reports, GTM drafts, operations runbooks) are files under `docs/holdco/<department>/<ticket>.md` on that branch; the path goes in the `ticket_update` note.
+- Non-code deliverables (research reports, GTM drafts, operations runbooks, build artifacts) are files under `docs/holdco/<department>/<ticket>.md` on that branch; the path goes in the `ticket_update` note as `deliverable: <path>` — the kernel passes it to the action's executor as `{deliverable}` (`company.yaml:executors`).
 - Merge actions (`code.merge.*`, `improvement.merge`) are executed by the kernel's merge executor into the default branch with a recorded undo. `code.branch` leaves the branch. Deploy, publish, contact and outreach actions have no executor in v1: they become a `manual_action` inbox item the Operator performs by hand and approves.
 
 ### Transitions and who calls them
@@ -129,7 +129,7 @@ The kernel starts sessions in this order: Verification tickets (`ready_for_verif
 ### 산출물 규약
 
 - 모든 티켓의 산출물은 프로젝트의 브랜치 `t/<id>`(개선팀은 회사 레포의 `imp/<id>`)입니다. 시니어는 워크트리 `<project>/.claude/worktrees/t-<id>`에서 작업합니다.
-- 코드가 아닌 산출물(리서치 보고서, GTM 초안, 운영 런북)은 그 브랜치의 `docs/holdco/<부서>/<티켓>.md`에 두고, 경로를 `ticket_update` 노트에 적습니다.
+- 코드가 아닌 산출물(리서치 보고서, GTM 초안, 운영 런북, 빌드 결과물)은 그 브랜치의 `docs/holdco/<부서>/<티켓>.md`에 두고, 경로를 `ticket_update` 노트에 `deliverable: <경로>`로 적습니다. 커널이 이 값을 행동의 실행기에 `{deliverable}`로 넘깁니다(`company.yaml:executors`).
 - 머지 행동은 커널의 머지 실행기가 기본 브랜치로 머지하고 되돌리기를 기록합니다. 배포·게시·연락·아웃리치 행동은 v1에 실행기가 없어 운영자가 직접 수행하고 승인하는 `manual_action` 인박스 항목이 됩니다.
 
 ### 전이와 호출자
