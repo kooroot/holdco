@@ -115,7 +115,7 @@ Sessions are engine-neutral (D35). The kernel builds one `SessionSpec` and hands
 | `tools` | the company MCP endpoint for this session, with a session-bound token (D36, §9) |
 | `limits` | `maxTurns`, `maxBudgetUsd` (= `cap`), `timeoutMs` (= `session_timeout`) |
 | `outputSchema` | `SessionReport` (seniors), `Verdict` (Verification), `Proposal` / `Review` (CEO / COO), generated from Effect Schema (D19) |
-| `env` | the engine's API key; minimal `PATH`/`HOME`; a repo-scoped token (push, open PR; no merge, no admin). Never production secrets (D14) |
+| `env` | the Operator's environment with every credential-shaped name removed (`*_KEY`, `*_TOKEN`, `AWS_*`, `GH_*`, …) plus the engine's own credential — a desktop login (keychain, locale) keeps working headless; a repo-scoped token (push, open PR; no merge, no admin). Never production secrets (D14) |
 | `price` | the price table entry, for engines that report tokens but not cost |
 
 **What each adapter does with it:**

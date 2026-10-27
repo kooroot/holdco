@@ -81,21 +81,27 @@ const decode = <S extends Schema.Codec<any, any, never, never>>(s: S, v: unknown
   return Exit.isSuccess(exit) ? (exit.value as S["Type"]) : undefined
 }
 
+/** Names that look like credentials never reach a session (D14), whatever the shell holds. */
+const SECRET_NAME = /(_KEY|_TOKEN|_SECRET|_PASSWORD|_PASS|_CREDENTIALS?|_AUTH|_COOKIE|_SESSION)$|^(AWS_|GH_|GITHUB_|NPM_|OPENAI_|ANTHROPIC_|TELEGRAM_|SLACK_|CLAUDE_CODE_OAUTH|CODEX_)/i
+
 /**
- * The environment a session's engine process gets (D14): PATH, HOME, the engine's own credential
- * (API key, or the OAuth token for a Claude subscription), proxy settings — nothing else. Doctor
- * checks logins with exactly this, so a login that only works in the Operator's shell shows up there.
+ * The environment a session's engine process gets (D14): the Operator's environment with every
+ * credential-shaped name removed, plus the one credential the engine itself needs (its API key, or
+ * the OAuth token for a Claude subscription). Keeping the rest of the environment is what lets a
+ * desktop login (macOS keychain, locale, temp dirs) work in a headless session. Doctor checks logins
+ * with exactly this environment.
  */
 export const sessionEnv = (config: CompanyConfig, engine: EngineId, env: Record<string, string | undefined>): Record<string, string> => {
   const e = config.engines[engine]
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(env)) if (v !== undefined && !SECRET_NAME.test(k)) out[k] = v
+  out["PATH"] = env["PATH"] ?? "/usr/local/bin:/usr/bin:/bin"
+  out["HOME"] = env["HOME"] ?? "/tmp"
   const authEnv = authMode(e) === "api_key" ? e?.auth_env : undefined
-  const out: Record<string, string> = { PATH: env["PATH"] ?? "/usr/local/bin:/usr/bin:/bin", HOME: env["HOME"] ?? "/tmp" }
-  for (const k of ["USER", "LOGNAME", "TMPDIR", "LANG", "TERM"]) if (env[k]) out[k] = env[k] as string
   if (authEnv && env[authEnv]) out[authEnv] = env[authEnv] as string
   // Claude subscription logins may live in an OAuth token env var (`claude setup-token`) instead of the keychain
   if (engine === "claude" && authMode(e) === "subscription" && env["CLAUDE_CODE_OAUTH_TOKEN"]) out["CLAUDE_CODE_OAUTH_TOKEN"] = env["CLAUDE_CODE_OAUTH_TOKEN"] as string
   if (engine === "codex" && env["CODEX_HOME"]) out["CODEX_HOME"] = env["CODEX_HOME"] as string
-  for (const k of ["NO_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "SSL_CERT_FILE"]) if (env[k]) out[k] = env[k] as string
   return out
 }
 
