@@ -357,6 +357,9 @@ export class Store {
   markCrashed(bootId: string, now: number): number {
     return this.db.run("UPDATE sessions SET ended_at = ?, status = 'crashed' WHERE ended_at IS NULL AND boot_id <> ?", [now, bootId]).changes
   }
+  allSessionsSince(since: number): Array<SessionRow> {
+    return this.db.query<SessionRow, [number]>("SELECT * FROM sessions WHERE started_at >= ? ORDER BY started_at").all(since)
+  }
   sessionsForTicket(id: string): Array<SessionRow> {
     return this.db.query<SessionRow, [string]>("SELECT * FROM sessions WHERE ticket_id = ? ORDER BY started_at").all(id)
   }

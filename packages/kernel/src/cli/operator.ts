@@ -92,6 +92,62 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
       await new Promise(() => {})
       return true
     }
+    case "smoke": {
+      // One real ticket, end to end, with a hard per-session cap: the first thing to run on a machine with a model.
+      const config = loadConfig(dir)
+      const cap = Math.min(config.budget.session_max_usd, Number(args.flag("cap") ?? 1))
+      const minutes = Number(args.flag("minutes") ?? 20)
+      const lock = NodePath.join(dir, ".holdco", "supervisor.pid")
+      if (existsSync(lock) && spawnSync("kill", ["-0", readFileSync(lock, "utf8").trim()]).status === 0) throw new OperatorError("stop the running supervisor first (holdco smoke runs its own)")
+      const doctor = spawnSync(process.execPath, [NodePath.join(import.meta.dir, "..", "cli.ts"), "doctor", "--dir", dir], { stdio: "inherit" })
+      if (doctor.status !== 0) throw new OperatorError("doctor failed; fix it before the smoke test")
+      const project = config.projects[0]
+      if (!project) throw new OperatorError("register a project first: holdco project add <path>")
+      const smokeConfig: CompanyConfig = { ...config, budget: { ...config.budget, session_max_usd: cap }, runtime: { ...config.runtime, tick: "10s" } }
+      const engines = await loadEngines(smokeConfig, dir)
+      const store = Store.open(dir)
+      const sent: Array<string> = []
+      const sup = new Supervisor({ companyRoot: dir, config: smokeConfig, engines, store, notifier: { send: async (sev, text) => { sent.push(`${sev}: ${text}`); console.log(`  [${sev}] ${text}`) }, heartbeat: async () => {} } })
+      const t = store.createTicket({
+        department: "engineering", project: project.id, state: "triaged", action: "code.branch", priority: 1, opened_by: "operator", now,
+        title: "Smoke test: one file on a branch",
+        goal: `Create docs/holdco/engineering/smoke.md containing exactly the line "holdco smoke ok" and commit it on the ticket branch. Nothing else.`,
+        why: "The Operator is checking that sessions, tools, Verification and the kernel work together on this machine.",
+        done_criteria: ["docs/holdco/engineering/smoke.md exists on the branch", "its content is the single line: holdco smoke ok", "no other file changed"],
+      })
+      const sessionsExpected = 2 + (config.modules.executive !== "none" ? 1 : 0)
+      console.log(`\nsmoke: ticket ${t.id} on project '${project.id}' (code.branch, T0 → done without a merge)`)
+      console.log(`       cap $${cap.toFixed(2)} per session, about ${sessionsExpected} sessions (senior, Verification${config.modules.executive !== "none" ? ", the CEO cycle" : ""}) → at most $${(cap * (sessionsExpected + 2)).toFixed(2)}; giving up after ${minutes} min\n`)
+      writeFileSync(lock, String(process.pid), { mode: 0o600 })
+      await sup.boot()
+      const deadline = Date.now() + minutes * 60_000
+      let final: Ticket | undefined
+      try {
+        while (Date.now() < deadline) {
+          await sup.tick()
+          final = store.ticket(t.id)
+          if (final && ["done", "declined", "rolled_back", "blocked"].includes(final.state)) break
+          await Bun.sleep(10_000)
+        }
+        await sup.drain()
+      } finally {
+        await sup.stop()
+        try { unlinkSync(lock) } catch {}
+      }
+      final = store.ticket(t.id)
+      console.log(`\n── ${t.id}: ${final?.state ?? "?"} ──`)
+      for (const e of store.events(t.id)) console.log(`  ${new Date(e.at).toISOString().slice(11, 19)}  ${e.from_state ?? "·"} → ${e.to_state}  (${e.actor}) ${e.note ?? ""}`)
+      console.log("\nsessions:")
+      for (const s of store.allSessionsSince(now)) console.log(`  ${s.role.padEnd(22)} ${s.engine}:${s.model.padEnd(14)} ${String(s.status ?? "running").padEnd(9)} turns ${String(s.turns).padStart(3)}  $${s.cost_usd.toFixed(3)} (${s.cost_source ?? "?"})${s.report ? "" : "  no structured report"}`)
+      console.log(`\nspend: $${store.spentAll(now).toFixed(3)}`)
+      const inbox = store.inboxOpen()
+      if (inbox.length) console.log(`inbox: ${inbox.map((i) => `#${i.id} ${i.kind}`).join(", ")}`)
+      const ok = final?.state === "done"
+      console.log(ok ? "\nsmoke: ok — the company works on this machine. Next: holdco service install, then open real tickets." : "\nsmoke: not done — read the events above; session reports are in .holdco/sessions/<id>/")
+      store.close()
+      if (!ok) throw new OperatorError("smoke test did not reach done")
+      return true
+    }
     case "status": {
       const config = loadConfig(dir)
       const store = Store.open(dir)

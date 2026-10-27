@@ -114,6 +114,12 @@ describe("operator commands", () => {
     expect(w.status).toBe(1)
     expect(w.stderr).toContain("no candidate")
   })
+  test("smoke refuses to spend when doctor fails", () => {
+    const r = holdco("smoke", "--cap", "0.5")
+    expect(r.status).toBe(1)
+    expect(r.stderr).toMatch(/doctor failed|smoke test/)
+    expect(holdco("ticket", "list").stdout).not.toContain("Smoke test")
+  })
   test("doctor checks declared executors and github merges", () => {
     const path = NodePath.join(co, "company.yaml")
     const raw = Bun.YAML.parse(readFileSync(path, "utf8")) as Record<string, unknown>
