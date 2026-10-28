@@ -578,16 +578,20 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
         if (action === "install" || action === "start" || action === "restart") {
           mkdirSync(NodePath.dirname(out), { recursive: true })
           writeFileSync(out, plist)
-          run("launchctl", ["bootout", `${domain}/${label}`]) // a previous copy, if any
-          const r = run("launchctl", ["bootstrap", domain, out])
-          if (r.status !== 0) throw new OperatorError(`launchctl bootstrap failed: ${(r.stderr || r.stdout).trim()}`)
+          // bootout is asynchronous: wait until the old copy is gone, or bootstrap answers "Input/output error".
+          run("launchctl", ["bootout", `${domain}/${label}`])
+          for (let i = 0; i < 20 && run("launchctl", ["print", `${domain}/${label}`]).status === 0; i++) await Bun.sleep(250)
+          run("launchctl", ["enable", `${domain}/${label}`]) // a disabled label (after an earlier bootout -w) refuses to load
+          let r = run("launchctl", ["bootstrap", domain, out])
+          for (let i = 0; r.status !== 0 && i < 3; i++) { await Bun.sleep(1000); r = run("launchctl", ["bootstrap", domain, out]) }
+          if (r.status !== 0) throw new OperatorError(`launchctl bootstrap failed: ${(r.stderr || r.stdout).trim()}\nIf it keeps failing: launchctl bootout ${domain}/${label}; then run this again.`)
           console.log(`${action === "restart" ? "restarted" : "installed and started"} ${label} (${out}); it starts again at login and after crashes`)
           if (!(await waitUp())) console.log("the supervisor has not written its pid yet; check holdco service logs")
           status()
           console.log("note: a closed laptop sleeps; caffeinate keeps it awake only while open and on power")
           return true
         }
-        if (action === "stop") { run("launchctl", ["bootout", `${domain}/${label}`]); console.log(`stopped ${label}`); return true }
+        if (action === "stop") { run("launchctl", ["bootout", `${domain}/${label}`]); for (let i = 0; i < 20 && run("launchctl", ["print", `${domain}/${label}`]).status === 0; i++) await Bun.sleep(250); console.log(`stopped ${label}`); return true }
         if (action === "uninstall") { run("launchctl", ["bootout", `${domain}/${label}`]); rmSync(out, { force: true }); console.log(`removed ${out}`); return true }
       } else throw new OperatorError("runtime.host is manual: run `holdco supervise` yourself (doctor warns that this is not 24/7)")
       throw new OperatorError("usage: holdco service install|start|stop|restart|status|logs|uninstall|show")
