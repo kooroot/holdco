@@ -71,10 +71,15 @@ export const RESERVED_T3_NAMESPACES = [
 
 // ── sections ───────────────────────────────────────────────────────────────
 
+export const Language = Schema.Literals(["en", "ko"])
+export type Language = typeof Language.Type
+
 const Company = Schema.Struct({
   name: Slug,
   mission: Text,
   timezone: TimeZone,
+  /** The Operator's language for Telegram messages and other text the kernel writes to the Operator (not the agents' prompts). */
+  language: Schema.optionalKey(Language),
 })
 
 const Operator = Schema.Struct({

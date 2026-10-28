@@ -213,7 +213,7 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
           : [{ type: "telegram" as const, bot_token_env: tokenEnv, chat_id: found.chatId }, ...config.alerts.channels]
         saveConfig(dir, { ...config, alerts: { ...config.alerts, channels } }, `telegram: paired with chat ${found.chatId}`)
         const bridge = new TelegramBridge({ ctx: { root: dir, config: () => loadConfig(dir), store: Store.open(dir), now: () => Date.now(), saveConfig: (c, m) => saveConfig(dir, c, m) }, token, chatId: found.chatId })
-        await bridge.send(`Paired with ${config.company.name}. Send /help for commands; decisions arrive here with buttons.`)
+        await bridge.send(config.company.language === "ko" ? `${config.company.name}와 짝을 맺었습니다. 명령은 /help; 결정은 버튼과 함께 여기로 옵니다.` : `Paired with ${config.company.name}. Send /help for commands; decisions arrive here with buttons.`)
         console.log(`paired with ${found.name} (chat ${found.chatId}); company.yaml committed. The supervisor serves Telegram from now on.`)
         return true
       }

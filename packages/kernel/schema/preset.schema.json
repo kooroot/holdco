@@ -23,6 +23,13 @@
         },
         "timezone": {
           "type": "string"
+        },
+        "language": {
+          "type": "string",
+          "enum": [
+            "en",
+            "ko"
+          ]
         }
       },
       "required": [

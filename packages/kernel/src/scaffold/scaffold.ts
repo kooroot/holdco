@@ -18,6 +18,7 @@ export interface ScaffoldOptions {
   readonly companyName?: string
   readonly mission?: string
   readonly timezone?: string
+  readonly language?: "en" | "ko"
   /** First project: path to its git repository (absolute or relative to `dir`). */
   readonly projectPath?: string
   readonly projectId?: string
@@ -127,7 +128,7 @@ export const scaffold = (opts: ScaffoldOptions): ScaffoldResult => {
   const projectId = opts.projectId ?? (opts.projectPath === undefined ? undefined : NodePath.basename(NodePath.resolve(opts.projectPath)).toLowerCase().replace(/[^a-z0-9-]/g, "-"))
   const named = {
     ...preset,
-    company: { ...preset.company, name: opts.companyName ?? preset.company.name, mission: opts.mission ?? preset.company.mission, timezone: opts.timezone ?? preset.company.timezone },
+    company: { ...preset.company, name: opts.companyName ?? preset.company.name, mission: opts.mission ?? preset.company.mission, timezone: opts.timezone ?? preset.company.timezone, ...(opts.language ? { language: opts.language } : {}) },
     operator: { ...preset.operator, github: opts.github ?? preset.operator.github },
     ...(opts.host ? { runtime: { ...preset.runtime, host: opts.host } } : {}),
     ...(projectRel !== undefined && projectId !== undefined

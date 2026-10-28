@@ -49,7 +49,7 @@ beforeAll(() => {
 })
 afterAll(() => store.close())
 
-const bridge = () => new TelegramBridge({ ctx: { root: dir, config: () => config, store, now: () => now, saveConfig: () => {} }, token: "T", chatId: "4242", fetch: fakeFetch, pollSeconds: 0 })
+const bridge = () => new TelegramBridge({ ctx: { root: dir, config: () => config, store, now: () => now, saveConfig: (c) => { config = c } }, token: "T", chatId: "4242", fetch: fakeFetch, pollSeconds: 0 })
 
 describe("telegram bridge", () => {
   test("config picks the channel only when its token is present", () => {
@@ -107,6 +107,12 @@ describe("telegram bridge", () => {
     expect(readControl(dir)).toEqual([])
     expect(await b.command("/approve x")).toContain("Usage")
     expect(await b.command("hello")).toContain("/help")
+    // language: /lang ko saves company.language and every later reply is Korean
+    expect(await b.command("/lang ko")).toContain("한국어")
+    expect(config.company.language).toBe("ko")
+    expect(await b.command("/status")).toContain("인박스")
+    expect(await b.command("/help")).toContain("주머니")
+    expect(await b.command("/lang en")).toContain("English")
   })
   test("halt asks for confirmation; the confirm button raises L5", async () => {
     const b = bridge()
