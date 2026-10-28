@@ -20,7 +20,7 @@
  * The hook (hook.ts) is compiled separately and never loads this file.
  */
 import { spawnSync } from "node:child_process"
-import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as NodePath from "node:path"
 import { Cause, Effect, Exit, Schema } from "effect"
@@ -131,8 +131,35 @@ const loadEngine = async (id: EngineId, dir: string): Promise<Pick<Engine, "capa
 
 type Check = { readonly name: string; readonly ok: boolean; readonly warn?: boolean; readonly note?: string }
 
+/** Newest mtime under a file or directory. */
+const newestMtime = (p: string): number => {
+  try {
+    const st = statSync(p)
+    if (!st.isDirectory()) return st.mtimeMs
+    return Math.max(st.mtimeMs, ...readdirSync(p).map((e) => newestMtime(NodePath.join(p, e))))
+  } catch { return 0 }
+}
+
+/** The compiled guard is rebuilt when the kernel's hook sources are newer than it, so `git pull` is enough. */
+const buildHook = (dir: string): { ok: boolean; out: string; error?: string } => {
+  const out = NodePath.join(dir, ".claude", "hooks", "pre-tool-use")
+  mkdirSync(NodePath.dirname(out), { recursive: true })
+  const r = spawnSync("bun", ["build", NodePath.join(KERNEL_ROOT, "src", "hook.ts"), "--compile", "--minify", "--bytecode", "--outfile", out], { encoding: "utf8" })
+  return r.status === 0 ? { ok: true, out } : { ok: false, out, error: r.stderr }
+}
+const ensureHookFresh = (dir: string): string | undefined => {
+  const bin = NodePath.join(dir, ".claude", "hooks", "pre-tool-use")
+  if (!existsSync(bin)) return undefined
+  const src = Math.max(...["hook.ts", "hooks", "policy", "config", "schema"].map((d) => newestMtime(NodePath.join(KERNEL_ROOT, "src", d))))
+  if (src <= statSync(bin).mtimeMs) return undefined
+  const r = buildHook(dir)
+  return r.ok ? "guard rebuilt: the kernel's hook sources were newer than the binary" : `guard rebuild failed: ${r.error}`
+}
+
 const doctor = async (dir: string): Promise<Array<Check>> => {
   const checks: Array<Check> = []
+  const rebuilt = ensureHookFresh(dir)
+  if (rebuilt) console.log(rebuilt)
   const add = (name: string, ok: boolean, note?: string, warn = false) =>
     checks.push({ name, ok, ...(warn ? { warn } : {}), ...(note === undefined ? {} : { note }) })
 
@@ -331,11 +358,9 @@ switch (cmd) {
     break
   }
   case "build-hook": {
-    const out = NodePath.join(instanceDir(), ".claude", "hooks", "pre-tool-use")
-    mkdirSync(NodePath.dirname(out), { recursive: true })
-    const r = spawnSync("bun", ["build", NodePath.join(KERNEL_ROOT, "src", "hook.ts"), "--compile", "--minify", "--bytecode", "--outfile", out], { encoding: "utf8" })
-    if (r.status !== 0) fail(r.stderr)
-    console.log(`built ${out}`)
+    const r = buildHook(instanceDir())
+    if (!r.ok) fail(r.error ?? "build failed")
+    console.log(`built ${r.out}`)
     break
   }
   case "config": {

@@ -129,9 +129,16 @@ export const evaluateGuard = (id: Identity, event: HookEvent, ctx: GuardContext)
       return locked(`commands may not touch ${UNREADABLE.join(", ")} or open databases directly.`)
     }
     if (looksLikeWrite(cmd)) {
-      if (mentions(cmd, LOCKED)) return locked("shell command looks like a write to an Operator-only path.")
+      // The company's locked names (package.json, CLAUDE.md, node_modules/…) are about the company repository.
+      // In a project session the same names are ordinary project files, so they count only when the command
+      // reaches into the company checkout by path; the project's own locked globs apply instead.
+      const companyLocked = ctx.project ? cmd.includes(ctx.companyRoot) && mentions(cmd, LOCKED) : mentions(cmd, LOCKED)
+      if (companyLocked) return locked("shell command looks like a write to an Operator-only path.")
       if (ctx.project && mentions(cmd, PROJECT_FIXED_LOCKED)) {
         return locked("shell command looks like a write to project settings, hooks or MCP config.")
+      }
+      if (ctx.project && ctx.project.locked.some((g) => { const lit = g.split(/[*?]/)[0] ?? ""; return lit.length > 0 && cmd.includes(lit) })) {
+        return locked("shell command looks like a write to a path the Operator locked for this project.")
       }
       if (id.dept !== "improvement" && mentions(cmd, ORG_DEF)) {
         return locked("shell command looks like a write to the company definition.")

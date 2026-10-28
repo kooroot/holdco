@@ -61,6 +61,15 @@ describe("project session, two repositories", () => {
     expect(blocked(write("contracts/Vault.sol", { cwd: NodePath.join(project, ".claude", "worktrees", "t-7") }))).toBe(true))
   test("bash write to project settings is blocked", () =>
     expect(blocked(bash("echo '{}' > .claude/settings.json"))).toBe(true))
+  test("bash writes to the project's own package.json, CLAUDE-free docs and node_modules are fine; the company's are not", () => {
+    expect(blocked(bash("cat > package.json <<'EOF'\n{}\nEOF"))).toBe(false)
+    expect(blocked(bash("bun add zod && git add package.json bun.lock"))).toBe(false)
+    expect(blocked(bash("rm -rf node_modules && bun install"))).toBe(false)
+    expect(blocked(bash(`cp x.json ${NodePath.join(company, "company.yaml")}`))).toBe(true)
+    expect(blocked(bash(`echo hi > ${NodePath.join(company, "governance", "strategy.md")}`))).toBe(true)
+  })
+  test("bash write to a project-locked glob is blocked", () =>
+    expect(blocked(bash("sed -i 's/a/b/' contracts/Vault.sol"))).toBe(true))
 })
 
 describe("juniors in a project", () => {

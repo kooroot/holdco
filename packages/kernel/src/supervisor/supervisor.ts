@@ -1219,9 +1219,15 @@ export class Supervisor {
       }
     }
     if (e.kind === "blocked") {
-      raiseInterrupt(this.root, "L1", r.role, `write attempt to a locked path: ${e.reason}`, this.now())
-      void this.notifier.send("warning", `tripwire: ${r.role} tried a blocked action (${e.reason}); L1 raised`)
-      r.abort.abort()
+      // The guard already refused and told the agent to carry on. One refusal is noise (a heuristic, or an
+      // honest reach for a locked file); a session that keeps pushing on locked paths is the tripwire.
+      const n = (r.toolErrors.get("blocked") ?? 0) + 1
+      r.toolErrors.set("blocked", n)
+      if (n > this.config.policy.tripwires.loop_threshold) {
+        raiseInterrupt(this.root, "L1", r.role, `repeated write attempts to locked paths (${n}×): ${e.reason}`, this.now())
+        void this.notifier.send("warning", `tripwire: ${r.role} kept trying blocked actions (${n}×: ${e.reason}); L1 raised`)
+        r.abort.abort()
+      }
     }
     if ((e.kind === "command" && SECRET.test(e.command)) || (e.kind === "file_change" && e.paths.some((p) => /\.(env|pem|key)$/.test(p)))) {
       raiseInterrupt(this.root, "L5", "*", `secret pattern in session ${r.sessionId}`, this.now())
