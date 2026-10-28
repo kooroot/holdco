@@ -5,7 +5,7 @@
  */
 import * as p from "@clack/prompts"
 import { spawnSync } from "node:child_process"
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { basename, dirname, join, relative, resolve } from "node:path"
 import { loadPreset } from "../scaffold/templates.ts"
@@ -16,7 +16,9 @@ import { writeOperatorEnv } from "./env.ts"
 export interface WizardAnswers {
   readonly dir: string
   readonly github: string
-  readonly project: string | undefined
+  readonly project: string
+  /** Set when the wizard is to `git init` the project itself. */
+  readonly newRepo: string | undefined
   readonly preset: string
   readonly models: "claude" | "codex" | "dual"
   readonly mission: string
@@ -26,6 +28,9 @@ export interface WizardAnswers {
   readonly voice: { tone: string; languages: string } | undefined
   readonly telegramToken: string | undefined
 }
+
+/** `~/x` → `$HOME/x`; everything else resolved against the current directory. */
+export const expandPath = (v: string): string => resolve(v === "~" ? homedir() : v.startsWith("~/") ? join(homedir(), v.slice(2)) : v)
 
 const sh = (cmd: string, args: Array<string>, cwd = process.cwd()) => {
   const r = spawnSync(cmd, args, { cwd, stdio: "pipe", encoding: "utf8" })
@@ -63,18 +68,25 @@ export const runWizard = async (checkoutPackages: string | undefined): Promise<W
   p.intro("Holdco — a new company")
   const repos = nearbyRepos(checkoutPackages ? dirname(checkoutPackages) : "")
   const claude = claudeInstalled(), codex = codexLoggedIn()
+  let newRepo: string | undefined
 
-  const dir = await ask(p.text({ message: "Company directory", placeholder: "my-co", defaultValue: "my-co", validate: (v) => (existsSync(resolve(v || "my-co")) && readdirSync(resolve(v || "my-co")).length ? `${resolve(v || "my-co")} is not empty` : undefined) }))
+  const dirInput = await ask(p.text({ message: "Company directory", placeholder: "my-co", defaultValue: "my-co", validate: (v) => (existsSync(expandPath(v || "my-co")) && readdirSync(expandPath(v || "my-co")).length ? `${expandPath(v || "my-co")} is not empty` : undefined) }))
+  const dir = expandPath(dirInput || "my-co")
   const githubGuess = guessGithub()
   const github = await ask(p.text({ message: "Your GitHub handle (CODEOWNERS and the approval path are built on it)", ...(githubGuess ? { defaultValue: githubGuess, placeholder: githubGuess } : { placeholder: "octocat" }), validate: (v) => (!(v || githubGuess) ? "needed" : undefined) }))
 
+  // A company needs at least one project (company.yaml:projects is non-empty); a new repository is made on the spot.
   const projectChoice = await ask(p.select({
     message: "The first project the company works on (a git repository)",
-    options: [...repos.slice(0, 8).map((r) => ({ value: r, label: basename(r), hint: relative(process.cwd(), r) || "." })), { value: "__path", label: "Another path…" }, { value: "__none", label: "None yet", hint: "holdco project add <path> later" }],
+    options: [...repos.slice(0, 8).map((r) => ({ value: r, label: basename(r), hint: relative(process.cwd(), r) || "." })), { value: "__path", label: "Another path…" }, { value: "__new", label: "A new, empty repository", hint: "git init next to the company" }],
   }))
-  const project = projectChoice === "__none" ? undefined : projectChoice === "__path"
-    ? await ask(p.text({ message: "Path to the repository", validate: (v) => (!v || !existsSync(resolve(v, ".git")) ? "not a git repository" : undefined) }))
-    : projectChoice
+  let project: string
+  if (projectChoice === "__path") project = expandPath(await ask(p.text({ message: "Path to the repository", validate: (v) => (!v || !existsSync(join(expandPath(v), ".git")) ? "not a git repository" : undefined) })))
+  else if (projectChoice === "__new") {
+    const name = await ask(p.text({ message: "Repository name", placeholder: "my-product", validate: (v) => (!/^[a-z0-9][a-z0-9._-]*$/i.test(v ?? "") ? "letters, digits, . _ -" : existsSync(join(dirname(dir), v)) ? "already exists" : undefined) }))
+    project = join(dirname(dir), name)
+    newRepo = project
+  } else project = projectChoice
 
   const preset = await ask(p.select({
     message: "Organization",
@@ -110,7 +122,7 @@ export const runWizard = async (checkoutPackages: string | undefined): Promise<W
     ? await ask(p.password({ message: "Bot token from @BotFather (kept in ~/.config/holdco/, never in the repo)", validate: (v) => (!/^\d+:[\w-]{30,}$/.test(v ?? "") ? "does not look like a bot token (123456:ABC…)" : undefined) }))
     : undefined
 
-  return { dir: dir || "my-co", github: github || (githubGuess as string), project, preset, models, mission: mission || loadPreset(preset).company.mission, timezone, objective: objective || undefined, voice, telegramToken }
+  return { dir, github: github || (githubGuess as string), project, newRepo, preset, models, mission: mission || loadPreset(preset).company.mission, timezone, objective: objective || undefined, voice, telegramToken }
 }
 
 /** Replace the example objective row in governance/strategy.md. */
@@ -136,13 +148,21 @@ export const setVoice = (dir: string, voice: { tone: string; languages: string }
 export const createFromAnswers = async (a: WizardAnswers, checkoutPackages: string | undefined) => {
   const target = resolve(a.dir)
   const s = p.spinner()
+  if (a.newRepo) {
+    mkdirSync(a.newRepo, { recursive: true })
+    writeFileSync(join(a.newRepo, "README.md"), `# ${basename(a.newRepo)}\n\nStarted by Holdco; the company's first project.\n`)
+    spawnSync("git", ["init", "-q"], { cwd: a.newRepo })
+    spawnSync("git", ["add", "-A"], { cwd: a.newRepo })
+    spawnSync("git", ["-c", "user.name=holdco", "-c", "user.email=holdco@localhost", "commit", "-qm", "initial"], { cwd: a.newRepo })
+    p.log.success(`Repository created: ${a.newRepo}`)
+  }
   s.start("Scaffolding the company")
   const r = scaffold({
     dir: target, preset: a.preset, kernelVersion: KERNEL_VERSION, git: true, github: a.github, mission: a.mission, timezone: a.timezone,
     companyName: basename(target).toLowerCase().replace(/[^a-z0-9-]/g, "-"),
     host: process.platform === "darwin" ? "macos-launchd" : "linux-systemd",
     ...(checkoutPackages ? { packagesDir: checkoutPackages } : {}),
-    ...(a.project ? { projectPath: resolve(a.project) } : {}),
+    projectPath: resolve(a.project),
   })
   s.stop(`Company ${r.config.company.name} in ${target} (${r.modules.length} modules)`)
 
@@ -173,14 +193,15 @@ export const createFromAnswers = async (a: WizardAnswers, checkoutPackages: stri
     s.start("Waiting for your message")
     const res = spawnSync("bunx", ["holdco", "telegram", "setup"], { cwd: target, stdio: "pipe", encoding: "utf8", env: { ...process.env, TELEGRAM_BOT_TOKEN: a.telegramToken } })
     if (res.status === 0) s.stop(res.stdout.trim().split("\n").at(-1) ?? "Paired")
-    else { s.stop("Not paired"); p.log.warn(`${(res.stderr || res.stdout).trim()}\nLater: cd ${a.dir} && bunx holdco telegram setup`) }
+    else { s.stop("Not paired"); p.log.warn(`${(res.stderr || res.stdout).trim()}\nLater: cd ${target} && bunx holdco telegram setup`) }
   }
   s.start("Doctor")
   const doc = spawnSync("bunx", ["holdco", "doctor"], { cwd: target, stdio: "pipe", encoding: "utf8" })
   s.stop(doc.status === 0 ? "Doctor: all checks pass" : "Doctor: something is left")
   if (doc.status !== 0) p.log.warn((doc.stdout + doc.stderr).split("\n").filter((l) => l.startsWith("FAIL")).join("\n"))
 
-  p.note([`cd ${a.dir}`, "bunx holdco smoke --cap 1     # one real ticket, ≤ $1 per session", "bunx holdco supervise         # 24/7; prints the dashboard link"].join("\n"), "Next")
+  const where = relative(process.cwd(), target).startsWith("..") ? target : relative(process.cwd(), target)
+  p.note([`cd ${where}`, "bunx holdco smoke --cap 1     # one real ticket, ≤ $1 per session", "bunx holdco supervise         # 24/7; prints the dashboard link"].join("\n"), "Next")
   p.outro(doc.status === 0 ? "Ready." : "Fix what doctor lists, then run the commands above.")
   return r
 }

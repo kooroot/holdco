@@ -28,3 +28,11 @@ describe("wizard edits", () => {
     expect(text).not.toMatch(/<[a-z -]+>/)
   })
 })
+
+import { expandPath } from "../src/cli/wizard.ts"
+import { homedir } from "node:os"
+test("expandPath: ~ is the home directory, the rest is resolved", () => {
+  expect(expandPath("~/x")).toBe(NodePath.join(homedir(), "x"))
+  expect(expandPath("~")).toBe(homedir())
+  expect(expandPath("rel")).toBe(NodePath.resolve("rel"))
+})

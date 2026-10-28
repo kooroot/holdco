@@ -489,12 +489,15 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
         const needsCodex = mode !== "claude"
         const codexHome = process.env["CODEX_HOME"] ?? NodePath.join(process.env["HOME"] ?? "", ".codex")
         const codexLoggedIn = existsSync(NodePath.join(codexHome, "auth.json"))
+        // An existing codex entry on api_key with no key in the environment but a ChatGPT login present
+        // switches to the login: the preset's default was written before anyone knew which exists.
         const codex = config.engines.codex
-          ? { ...config.engines.codex, prices: { ...config.engines.codex.prices } }
+          ? { ...config.engines.codex, prices: { ...config.engines.codex.prices }, ...(config.engines.codex.auth !== "subscription" && codexLoggedIn && !process.env["OPENAI_API_KEY"] ? { auth: "subscription" as const } : {}) }
           : needsCodex
             ? { auth: (codexLoggedIn || !process.env["OPENAI_API_KEY"] ? "subscription" : "api_key") as "subscription" | "api_key", auth_env: "OPENAI_API_KEY", prices: {} as Record<string, { input_per_mtok: number; cached_input_per_mtok: number; output_per_mtok: number }> }
             : undefined
         if (codex && !config.engines.codex) console.log(`engines.codex added: ${codex.auth === "subscription" ? "ChatGPT login (codex login; auth.json is copied into each session)" : "API key from OPENAI_API_KEY"}`)
+        else if (codex && config.engines.codex && codex.auth !== config.engines.codex.auth) console.log("engines.codex: auth → subscription (ChatGPT login found, no OPENAI_API_KEY)")
         if (codex) {
           const used = Object.entries(roles).filter(([k]) => k !== "by_department").map(([, a]) => a as { engine: string; model: string })
           for (const a of used) {
