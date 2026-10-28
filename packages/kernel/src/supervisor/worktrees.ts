@@ -1,6 +1,6 @@
 /** Per-session git worktrees (D22). No two sessions ever share a checkout. */
 import { spawnSync } from "node:child_process"
-import { existsSync, rmSync, symlinkSync } from "node:fs"
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync } from "node:fs"
 import * as NodePath from "node:path"
 
 export class WorktreeError extends Error {}
@@ -61,6 +61,7 @@ export const provisionDependencies = (worktree: string, repo: string, log: (line
   if (existsSync(shared)) {
     try {
       symlinkSync(shared, NodePath.join(worktree, "node_modules"), "dir")
+      excludeFromGit(repo, "node_modules")
       return `node_modules is shared from ${repo} (symlink); do not run the package installer here`
     } catch (e) {
       log(`could not link node_modules into ${worktree}: ${String(e)}`)
@@ -73,6 +74,20 @@ export const provisionDependencies = (worktree: string, repo: string, log: (line
     return `dependency install (${cmd} ${args.join(" ")}) failed before the session; checks that need node_modules cannot run`
   }
   return `dependencies installed with ${cmd} ${args.join(" ")}`
+}
+
+/** Keep the provisioned link out of `git status` in every worktree (info/exclude is shared by all of them). */
+const excludeFromGit = (repo: string, entry: string) => {
+  const gitDir = spawnSync("git", ["rev-parse", "--git-common-dir"], { cwd: repo, encoding: "utf8" }).stdout.trim()
+  if (!gitDir) return
+  const file = NodePath.join(NodePath.isAbsolute(gitDir) ? gitDir : NodePath.join(repo, gitDir), "info", "exclude")
+  try {
+    const cur = existsSync(file) ? readFileSync(file, "utf8") : ""
+    if (!cur.split("\n").some((l) => l.trim() === entry || l.trim() === `/${entry}`)) {
+      mkdirSync(NodePath.dirname(file), { recursive: true })
+      appendFileSync(file, `${cur.endsWith("\n") || cur === "" ? "" : "\n"}${entry}\n`)
+    }
+  } catch {}
 }
 
 export const removeWorktree = (repo: string, name: string) => {
