@@ -6,7 +6,7 @@
 import { randomBytes } from "node:crypto"
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import * as NodePath from "node:path"
-import { act, ActionError, auditSample, type DashboardContext, snapshot, ticketDetail } from "./api.ts"
+import { act, ActionError, auditSample, type DashboardContext, snapshot, ticketDetail, ticketFile, ticketFiles } from "./api.ts"
 
 export const dashboardToken = (root: string): string => {
   const file = NodePath.join(root, ".holdco", "dashboard.token")
@@ -46,7 +46,10 @@ export const startDashboard = (ctx: DashboardContext, port = 0): DashboardServer
       try {
         if (req.method === "GET" && url.pathname === "/api/state") return json(snapshot(ctx))
         if (req.method === "GET" && url.pathname.startsWith("/api/ticket/")) {
-          const id = decodeURIComponent(url.pathname.slice("/api/ticket/".length))
+          const rest = url.pathname.slice("/api/ticket/".length).split("/")
+          const id = decodeURIComponent(rest[0] ?? "")
+          if (rest[1] === "files") return json(ticketFiles(ctx, id))
+          if (rest[1] === "file") return json(ticketFile(ctx, id, url.searchParams.get("path") ?? ""))
           return json(ticketDetail(ctx, id, { blind: url.searchParams.get("blind") === "1" }))
         }
         if (req.method === "GET" && url.pathname === "/api/audit") return json({ sample: auditSample(ctx).map((t) => t.id) })

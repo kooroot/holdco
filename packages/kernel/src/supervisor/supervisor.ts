@@ -949,6 +949,13 @@ export class Supervisor {
     }
   }
 
+  /** The Operator's comments on a ticket, newest last, as a prompt section (D55); the Operator outranks every charter. */
+  private operatorNotes(ticketId: string): string {
+    const notes = this.store.comments(ticketId).slice(-8)
+    if (notes.length === 0) return ""
+    return ["## Notes from the Operator (binding; later notes override earlier ones)", ...notes.map((n) => `- ${new Date(n.at).toISOString().slice(0, 16).replace("T", " ")}: ${n.body}`)].join("\n")
+  }
+
   private resolveProject(path: string): string {
     return NodePath.isAbsolute(path) ? path : NodePath.resolve(this.root, path)
   }
@@ -979,6 +986,7 @@ export class Supervisor {
       t.action ? `Registry action the result needs: ${t.action}` : "Registry action: choose the right one from governance/policy.md and pass it to ticket_update.",
       `Attempt ${t.attempts + 1} of ${this.config.runtime.max_attempts}. Your worktree is ${cwd} on branch ${branch}; commit there. Inspect the branch first: earlier attempts may have left work.${deps ? ` ${deps}.` : ""}`,
       t.state === "in_progress" && t.note ? `Last note on this ticket: ${t.note}` : "",
+      this.operatorNotes(t.id),
       prior.length ? `Earlier session reports:\n${prior.map((s) => s.report).join("\n")}` : "",
       "",
       "Finish by calling ticket_update (ready_for_verification with branch and action, or blocked with the decision needed), then return the structured session report.",
@@ -1030,6 +1038,7 @@ export class Supervisor {
       `Department: ${t.department}. Action: ${t.action ?? "unknown"}. Rubric: ${rubricRef}. Mechanical gates required by this action: ${gates.join(", ") || "none"}.`,
       `Goal: ${t.goal}`, `Done criteria:`, ...t.done_criteria.map((c) => `- ${c}`),
       `The branch ${t.branch ?? "(none)"} is checked out read-only at ${cwd}. Files changed versus ${base}: ${paths.length ? paths.join(", ") : "(none)"}.${deps ? ` ${deps}.` : ""}`,
+      this.operatorNotes(t.id),
       ...VERIFICATION_RULES(gates, t.id),
       "",
       "## Rubric", this.org.rubric(rubricRef) || "(rubric file missing: return cannot-score)",

@@ -31,6 +31,7 @@
   color-scheme: dark; }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { height: 100%; }
 body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--ui); font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
 a { color: inherit; }
@@ -194,6 +195,62 @@ details > summary::before { content: "▸ "; } details[open] > summary::before {
 .level { display: grid; grid-template-columns: 44px 1fr; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; }
 .level b { font-family: var(--mono); }
 
+/* home */
+.tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+@media (min-width: 1100px) { .tiles { grid-template-columns: repeat(6, 1fr); } }
+.tile { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; display: grid; gap: 2px; cursor: pointer; text-decoration: none; color: inherit; }
+.tile:hover { border-color: var(--line-strong); }
+.tile .v { font-size: 24px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.tile .l { color: var(--muted); font-size: 12.5px; }
+.tile.hot { border-color: var(--signal); } .tile.hot .v { color: var(--signal); }
+.feed { display: grid; }
+.feed > div { display: grid; grid-template-columns: 58px 1fr; gap: 12px; padding: 9px 14px; border-bottom: 1px solid var(--line); font-size: 13px; }
+.feed > div:last-child { border-bottom: 0; }
+.feed .when { color: var(--muted); font-family: var(--mono); font-size: 11.5px; padding-top: 2px; }
+.feed .what a { text-decoration: none; }
+.feed .what .nt { color: var(--muted); display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 70ch; }
+
+/* org */
+.orgchart { display: grid; gap: 14px; }
+.orgrow { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+.orgrow.depts { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
+.seat .acts { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.seat .acts span { font-family: var(--mono); font-size: 11px; padding: 0 6px; border-radius: 4px; background: var(--surface-2); color: var(--muted); }
+.seat { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; min-width: 200px; display: grid; gap: 4px; position: relative; }
+.seat.exec { border-color: var(--kernel); }
+.seat.judge { border-color: var(--ok); }
+.seat.human { border-color: var(--signal); background: var(--signal-soft); }
+.seat .who { font-weight: 600; }
+.seat .what { color: var(--muted); font-size: 12.5px; }
+.seat .model { font-family: var(--mono); font-size: 12px; display: flex; gap: 6px; align-items: center; }
+.seat .model select { font-family: var(--mono); font-size: 12px; padding: 2px 6px; }
+.seat .live { position: absolute; top: 10px; right: 10px; }
+.connector { width: 2px; height: 16px; background: var(--line-strong); margin: 0 auto; }
+
+/* modal */
+.modal { position: fixed; inset: 0; display: none; place-items: center; z-index: 45; background: rgba(0,0,0,.3); }
+.modal .grid2 { grid-template-columns: 1fr 1fr; }
+.modal.open { display: grid; }
+.modal .box { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; width: min(640px, 94vw); max-height: 90vh; overflow: auto; padding: 20px 22px; display: grid; gap: 12px; box-shadow: 0 20px 60px rgba(0,0,0,.2); }
+.field { display: grid; gap: 4px; } .field label { font-size: 12.5px; color: var(--muted); }
+.tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin-bottom: 12px; }
+.tabs button { background: none; border: 0; padding: 8px 12px; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.tabs button.active { color: var(--ink); border-bottom-color: var(--kernel); font-weight: 500; }
+.md { line-height: 1.6; max-width: 80ch; }
+.md h1, .md h2, .md h3 { margin: 18px 0 8px; } .md h1 { font-size: 20px; } .md h2 { font-size: 16px; } .md h3 { font-size: 14px; }
+.md p { margin: 0 0 10px; } .md ul, .md ol { margin: 0 0 10px; padding-left: 22px; }
+.md pre { background: var(--surface-2); padding: 10px 12px; border-radius: 6px; overflow-x: auto; font-size: 12.5px; }
+.md code { background: var(--surface-2); padding: 1px 4px; border-radius: 3px; }
+.md table { margin: 0 0 10px; } .md blockquote { margin: 0 0 10px; padding-left: 12px; border-left: 3px solid var(--line-strong); color: var(--muted); }
+.files { display: grid; grid-template-columns: 220px 1fr; gap: 12px; min-height: 200px; }
+.files .list a { display: block; padding: 6px 8px; border-radius: 4px; font-family: var(--mono); font-size: 12px; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.files .list a.active { background: var(--kernel-soft); color: var(--kernel); }
+.files .list .st { color: var(--muted); margin-right: 6px; }
+.comment { padding: 10px 12px; background: var(--surface-2); border-radius: 6px; font-size: 13px; }
+.comment .by { color: var(--muted); font-size: 12px; margin-bottom: 2px; }
+.drawer .files { grid-template-columns: 1fr; } .drawer .files .list { display: flex; flex-wrap: wrap; gap: 4px; } .drawer .files .list a { max-width: 100%; }
+@media (max-width: 900px) { .files { grid-template-columns: 1fr; } .modal .grid2 { grid-template-columns: 1fr; } }
+
 /* help */
 .help { position: fixed; bottom: 12px; right: 16px; font-size: 12px; color: var(--muted); display: flex; gap: 10px; pointer-events: none; background: var(--bg); padding: 4px 8px; border-radius: 6px; opacity: .9; }
 .help kbd { font-family: var(--mono); padding: 0 5px; border: 1px solid var(--line-strong); border-radius: 4px; }
@@ -214,14 +271,18 @@ details > summary::before { content: "▸ "; } details[open] > summary::before {
   <aside class="rail">
     <div class="brand"><h1 id="co">Holdco</h1><span class="rel mono" id="rel">r0</span></div>
     <nav class="nav" id="nav">
+      <a href="#home" data-view="home">Home</a>
       <a href="#inbox" data-view="inbox">Inbox <span class="count" id="n-inbox">0</span></a>
       <a href="#board" data-view="board">Tickets <span class="count" id="n-board">0</span></a>
       <a href="#audit" data-view="audit">Audit <span class="count" id="n-audit">0</span></a>
       <a href="#quality" data-view="quality">Quality</a>
       <a href="#releases" data-view="releases">Releases <span class="count" id="n-rel">0</span></a>
       <a href="#spend" data-view="spend">Sessions &amp; spend</a>
+      <a href="#org" data-view="org">Organization <span class="count" id="n-org">0</span></a>
       <a href="#controls" data-view="controls">Controls <span class="count" id="n-int">0</span></a>
+      <a href="#settings" data-view="settings">Settings</a>
     </nav>
+    <button class="btn primary" id="new-ticket" style="margin:8px 10px 0">New ticket <kbd>n</kbd></button>
     <div class="foot">
       <div class="status"><i class="dot" id="sup-dot"></i><span id="sup-text">connecting…</span></div>
       <div class="status"><span id="spend-line" class="num">—</span></div>
@@ -230,6 +291,52 @@ details > summary::before { content: "▸ "; } details[open] > summary::before {
   </aside>
 
   <main>
+    <!-- Home -->
+    <section class="view" id="view-home">
+      <div class="head"><div><h2 id="home-title">Today</h2><p class="muted" id="home-sub"></p></div><div class="toolbar"><button class="btn" id="home-new">New ticket</button></div></div>
+      <div class="stack">
+        <div class="tiles" id="tiles"></div>
+        <div class="grid2">
+          <div class="card"><div style="padding:12px 14px 0" class="row"><h3>Activity</h3><span class="small muted">what the company did, newest first</span></div><div class="feed" id="feed"></div></div>
+          <div class="stack">
+            <div class="card"><div style="padding:12px 14px 6px"><h3>Running now</h3></div><div id="home-running"></div></div>
+            <div class="card"><div style="padding:12px 14px 6px"><h3>Finished in the last 24h</h3></div><div id="home-done"></div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Organization -->
+    <section class="view" id="view-org">
+      <div class="head"><div><h2>Organization</h2><p class="muted">Who works here, on which model, with what share of the budget. Change a model here; it applies to sessions started from the next tick.</p></div></div>
+      <div class="orgchart" id="orgchart"></div>
+    </section>
+
+    <!-- Settings -->
+    <section class="view" id="view-settings">
+      <div class="head"><div><h2>Settings</h2><p class="muted">What the CEO works toward and the limits the kernel enforces. Saved to the company repository as a commit.</p></div></div>
+      <div class="grid2">
+        <div class="card pad stack" style="grid-column: 1 / -1">
+          <div class="row"><h3>Strategy</h3><span class="small muted">governance/strategy.md — the CEO opens tickets only for objectives listed here</span><button class="btn primary sm" id="save-strategy" style="margin-left:auto">Save strategy</button></div>
+          <textarea class="input mono" id="strategy" style="min-height:320px;font-size:12.5px"></textarea>
+        </div>
+        <div class="card pad stack">
+          <h3>Budget</h3>
+          <div class="field"><label>Monthly cap (USD)</label><input class="input" id="set-monthly" type="number" min="1" step="1"></div>
+          <div class="field"><label>Per-session cap (USD)</label><input class="input" id="set-session" type="number" min="0.1" step="0.5"></div>
+          <div class="field"><label>Concurrent sessions</label><input class="input" id="set-concurrent" type="number" min="1" step="1"></div>
+          <div class="field"><label>Attempts before a ticket blocks</label><input class="input" id="set-attempts" type="number" min="1" step="1"></div>
+        </div>
+        <div class="card pad stack">
+          <h3>Your rhythm</h3>
+          <div class="field"><label>Inbox deadline (unanswered items reject themselves)</label><input class="input" id="set-timeout" placeholder="48h"></div>
+          <div class="field"><label>Daily inbox summary at</label><input class="input" id="set-batch" placeholder="09:00"></div>
+          <div class="field"><label>Audit sample per week</label><input class="input" id="set-sample" type="number" min="1" step="1"></div>
+          <div class="row"><button class="btn primary" id="save-settings">Save limits</button></div>
+        </div>
+      </div>
+    </section>
+
     <!-- Inbox -->
     <section class="view" id="view-inbox">
       <div class="head">
@@ -319,10 +426,25 @@ details > summary::before { content: "▸ "; } details[open] > summary::before {
   </main>
 </div>
 
+<div class="modal" id="modal"><div class="box">
+  <div class="row"><h3 id="modal-title">New ticket</h3><span class="small muted">Opened by you; starts triaged, skipping the CEO.</span></div>
+  <div class="row" id="templates"></div>
+  <div class="field"><label>Title</label><input class="input" id="t-title" placeholder="What should be true when this is done, in one line"></div>
+  <div class="grid2">
+    <div class="field"><label>Department</label><select class="input" id="t-dept" style="width:100%"></select></div>
+    <div class="field"><label>Project</label><select class="input" id="t-project" style="width:100%"></select></div>
+    <div class="field"><label>Action (what the result is)</label><select class="input" id="t-action" style="width:100%"></select></div>
+    <div class="field"><label>Priority</label><select class="input" id="t-priority" style="width:100%"><option value="1">1 — first</option><option value="2">2</option><option value="3" selected>3 — normal</option><option value="4">4</option><option value="5">5 — whenever</option></select></div>
+  </div>
+  <div class="field"><label>Goal</label><textarea class="input" id="t-goal" placeholder="The outcome, not the steps. The senior plans the steps."></textarea></div>
+  <div class="field"><label>Why</label><input class="input" id="t-why" placeholder="Which objective this serves (the CEO and the judge read it)"></div>
+  <div class="field"><label>Done criteria, one per line</label><textarea class="input" id="t-criteria" placeholder="feature.md exists on the branch&#10;tests pass&#10;README mentions it"></textarea></div>
+  <div class="row" style="justify-content:flex-end"><button class="btn" id="modal-cancel">Cancel</button><button class="btn primary" id="modal-save">Open ticket</button></div>
+</div></div>
 <div class="scrim" id="scrim"></div>
 <aside class="drawer" id="drawer"><div class="dh"><div id="d-head"></div><button class="btn sm" id="d-close">Close <kbd>esc</kbd></button></div><div class="dc" id="d-body"></div></aside>
 <div class="toast" id="toast"></div>
-<div class="help"><span><kbd>j</kbd><kbd>k</kbd> move</span><span><kbd>a</kbd> approve</span><span><kbd>r</kbd> reject</span><span><kbd>1</kbd>–<kbd>7</kbd> views</span></div>
+<div class="help"><span><kbd>n</kbd> new ticket</span><span><kbd>j</kbd><kbd>k</kbd> move</span><span><kbd>a</kbd> approve</span><span><kbd>r</kbd> reject</span><span><kbd>1</kbd>–<kbd>9</kbd> views</span></div>
 
 <script>
 (() => {
@@ -355,10 +477,10 @@ details > summary::before { content: "▸ "; } details[open] > summary::before {
 
   // ── state ────────────────────────────────────────────────────────────────
   let S = null;
-  let view = (location.hash || "#inbox").slice(1);
+  let view = (location.hash || "#home").slice(1);
   let sel = { inbox: 0, audit: null, auditGraded: {} };
-  const views = ["inbox", "board", "audit", "quality", "releases", "spend", "controls"];
-  const show = (v) => { if (!views.includes(v)) v = "inbox"; view = v; document.querySelectorAll(".view").forEach((el) => el.classList.toggle("active", el.id === "view-" + v)); document.querySelectorAll("#nav a").forEach((a) => a.classList.toggle("active", a.dataset.view === v)); if (v === "audit" && S) renderAudit(); };
+  const views = ["home", "inbox", "board", "audit", "quality", "releases", "spend", "org", "controls", "settings"];
+  const show = (v) => { if (!views.includes(v)) v = "home"; view = v; document.querySelectorAll(".view").forEach((el) => el.classList.toggle("active", el.id === "view-" + v)); document.querySelectorAll("#nav a").forEach((a) => a.classList.toggle("active", a.dataset.view === v)); if (v === "audit" && S) renderAudit(); };
   window.addEventListener("hashchange", () => show(location.hash.slice(1)));
 
   async function refresh() {
@@ -382,10 +504,111 @@ details > summary::before { content: "▸ "; } details[open] > summary::before {
     count("#n-audit", toGrade, S.audit.due && toGrade > 0);
     count("#n-rel", S.candidate ? 1 : 0, false);
     count("#n-int", S.interrupts.length, S.interrupts.length > 0);
-    renderInbox(); renderBoard(); renderQuality(); renderReleases(); renderSpend(); renderControls();
+    count("#n-org", S.running.length, false);
+    renderHome(); renderInbox(); renderBoard(); renderQuality(); renderReleases(); renderSpend(); renderControls(); renderOrg(); renderSettings();
     if (view === "audit") renderAudit();
     show(view);
   }
+
+  // ── home ─────────────────────────────────────────────────────────────────
+  function renderHome() {
+    const d = new Date(S.now);
+    $("#home-title").textContent = d.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" });
+    const urgent = S.inbox.filter((i) => i.urgency === "urgent").length;
+    const toGrade = S.audit.sample.filter((t) => !sel.auditGraded[t.id]).length;
+    $("#home-sub").textContent = S.company.mission;
+    const tiles = [
+      ["#inbox", S.inbox.length, S.inbox.length === 1 ? "decision waiting" : "decisions waiting", urgent > 0],
+      ["#board", S.tickets.filter((t) => t.state === "blocked").length, "blocked tickets", S.tickets.some((t) => t.state === "blocked")],
+      ["#spend", S.running.length, "sessions running", false],
+      ["#spend", usd(S.budget.spent_today), "spent in 24h", false],
+      ["#audit", toGrade, S.audit.due ? "to grade · audit due" : "to grade", S.audit.due && toGrade > 0],
+      ["#releases", S.candidate ? S.candidate.tag : S.supervisor.release, S.candidate ? "candidate under watch" : "current release", false],
+    ];
+    $("#tiles").innerHTML = tiles.map(([h, v, l, hot]) => `<a class="tile ${hot ? "hot" : ""}" href="${h}"><span class="v">${esc(v)}</span><span class="l">${esc(l)}</span></a>`).join("");
+    $("#feed").innerHTML = S.activity.length ? S.activity.map((e) => `<div><span class="when">${ago(S.now - e.at)} ago</span><span class="what"><a href="#" data-open="${esc(e.ticket_id)}"><code>${esc(e.ticket_id)}</code></a> ${esc(e.title)} <span class="pill">${esc(STATE_LABEL[e.to_state] || e.to_state)}</span> <span class="muted small">${esc(e.actor)}</span>${e.note ? `<span class="nt small" title="${esc(e.note)}">${esc(e.note)}</span>` : ""}</span></div>`).join("") : `<div class="empty"><strong>No activity yet</strong>Open a ticket and start the supervisor.</div>`;
+    $("#home-running").innerHTML = S.running.length ? `<table>${S.running.map((r) => `<tr><td><code>${esc(r.role)}</code><div class="small muted">${esc(r.engine)}:${esc(r.model)}</div></td><td><a href="#" data-open="${esc(r.ticket_id)}"><code>${esc(r.ticket_id)}</code></a></td><td class="small muted num">${ago(S.now - r.started_at)}</td></tr>`).join("")}</table>` : `<div class="empty small">${S.supervisor.alive ? "Idle. Sessions start as tickets become ready." : "Supervisor not running — start it with holdco supervise."}</div>`;
+    $("#home-done").innerHTML = S.done_24h.length ? `<table>${S.done_24h.map((t) => `<tr><td><a href="#" data-open="${esc(t.id)}"><code>${esc(t.id)}</code></a></td><td>${esc(t.title)}</td><td class="small muted">${esc(t.department)}</td><td class="num small">${usd(t.cost)}</td></tr>`).join("")}</table>` : `<div class="empty small">Nothing finished in the last day.</div>`;
+    $("#view-home").querySelectorAll("[data-open]").forEach((a) => a.addEventListener("click", (e) => { e.preventDefault(); if (!/^(CEO|COO|IMPROVEMENT)-/.test(a.dataset.open)) openTicket(a.dataset.open); }));
+  }
+  $("#home-new").addEventListener("click", () => openModal());
+
+  // ── organization ─────────────────────────────────────────────────────────
+  function renderOrg() {
+    const o = S.org;
+    const modelSelect = (role, current) => {
+      const [eng] = current.split(":");
+      const opts = o.engines.flatMap((e) => (o.models[e] || []).map((m) => `${e}:${m}`));
+      if (!opts.includes(current.split(":").slice(0, 2).join(":"))) opts.unshift(current.split(":").slice(0, 2).join(":"));
+      return `<select data-role="${esc(role)}" data-current="${esc(current)}">${opts.map((v) => `<option value="${esc(v)}" ${current.startsWith(v) ? "selected" : ""}>${esc(v)}</option>`).join("")}</select>${current.split(":")[2] ? `<span class="muted">${esc(current.split(":")[2])}</span>` : ""}`;
+    };
+    const live = (kind) => { const n = S.running.filter((r) => r.kind === kind).length; return n ? `<span class="pill kernel live">${n} live</span>` : ""; };
+    const seat = (cls, who, what, role, current, extra = "") => `<div class="seat ${cls}"><div class="who">${esc(who)}</div><div class="what">${esc(what)}</div>${current ? `<div class="model">${modelSelect(role, current)}</div>` : ""}${extra}</div>`;
+    const rows = [];
+    rows.push(`<div class="orgrow">${seat("human", "You · Operator", "company.yaml, approvals, weekly grading, interrupts", null, null)}</div><div class="connector"></div>`);
+    const exec = [];
+    if (o.executive !== "none") exec.push(seat("exec", "CEO", "triage, proposals, allocation", "ceo", o.roles.ceo, live("ceo")));
+    if (o.executive === "ceo+coo") exec.push(seat("exec", "COO", "second key: reviews every T2/T3 proposal", "coo", o.roles.coo, live("coo")));
+    exec.push(seat("judge", "Verification", `judges every ticket · ${((S.budget.shares.find((s) => s.department === "verification") || {}).ratio * 100 || 0).toFixed(0)}% of share used`, "verification", o.roles.verification, live("verification")));
+    if (o.improvement) exec.push(seat("exec", "Improvement", "changes the organization through candidate releases", "improvement", o.roles.improvement, live("improvement")));
+    rows.push(`<div class="orgrow">${exec.join("")}</div><div class="connector"></div>`);
+    rows.push(`<div class="orgrow depts">${o.departments.map((d) => seat("", d.id, `${d.open} open ticket${d.open === 1 ? "" : "s"} · ${(d.share * 100).toFixed(0)}% of budget`, `senior@${d.id}`, o.by_department[d.id] || d.senior, `${d.running ? `<span class="pill kernel live">${d.running} live</span>` : ""}<div class="acts">${d.actions.map((a) => `<span>${esc(a)}</span>`).join("")}</div>`)).join("")}</div>`);
+    if (o.juniors) rows.push(`<div class="connector"></div><div class="orgrow">${seat("", "Junior workers", "one brief each, no company tools", "junior_worker", o.roles.junior_worker, live("junior_worker"))}${seat("", "Junior readers", "read-only, cheapest model", "junior_reader", o.roles.junior_reader, live("junior_reader"))}</div>`);
+    $("#orgchart").innerHTML = rows.join("");
+    $("#orgchart").querySelectorAll("select[data-role]").forEach((sl) => sl.addEventListener("change", () => {
+      const effort = sl.dataset.current.split(":")[2];
+      const next = sl.value + (effort && sl.value.startsWith("codex:") ? `:${effort}` : "");
+      run(() => act({ kind: "role_set", role: sl.dataset.role, assignment: next }), `${sl.dataset.role} → ${next}`).then((r) => { if (!r) sl.value = sl.dataset.current.split(":").slice(0, 2).join(":"); });
+    }));
+  }
+
+  // ── settings ─────────────────────────────────────────────────────────────
+  let settingsLoaded = false;
+  function renderSettings() {
+    if (settingsLoaded) return; settingsLoaded = true;
+    const st = S.settings;
+    $("#strategy").value = st.strategy;
+    $("#set-monthly").value = st.budget.monthly_usd; $("#set-session").value = st.budget.session_max_usd;
+    $("#set-concurrent").value = st.runtime.max_concurrent_sessions; $("#set-attempts").value = st.runtime.max_attempts;
+    $("#set-timeout").value = st.inbox.timeout; $("#set-batch").value = st.inbox.batch_at; $("#set-sample").value = st.audit_weekly_sample;
+  }
+  $("#save-strategy").addEventListener("click", () => run(() => act({ kind: "settings", strategy: $("#strategy").value }), "Strategy saved and committed"));
+  $("#save-settings").addEventListener("click", () => run(() => act({ kind: "settings", budget: { monthly_usd: Number($("#set-monthly").value), session_max_usd: Number($("#set-session").value) }, runtime: { max_concurrent_sessions: Number($("#set-concurrent").value), max_attempts: Number($("#set-attempts").value) }, inbox: { timeout: $("#set-timeout").value.trim(), batch_at: $("#set-batch").value.trim() }, audit_weekly_sample: Number($("#set-sample").value) }), "Limits saved and committed"));
+
+  // ── new / edit ticket ────────────────────────────────────────────────────
+  const modal = $("#modal");
+  const TEMPLATES = [
+    ["Feature", { department: "engineering", action: "code.merge.app", why: "product objective", criteria: "the feature works end to end\ntests cover it\ndocs mention it" }],
+    ["Bug fix", { department: "engineering", action: "code.merge.app", why: "a user-facing defect", criteria: "a failing test reproduces it, then passes\nno other behaviour changes" }],
+    ["Research", { department: "research", action: "research.report", why: "a decision needs evidence", criteria: "a report under docs/holdco/research/ with a decision table\nevery claim cites a source" }],
+    ["Content", { department: "gtm", action: "content.draft", why: "launch communication", criteria: "a draft under docs/holdco/gtm/ in the voice guide\none clear call to action" }],
+    ["Branch only", { department: "engineering", action: "code.branch", why: "exploration", criteria: "the branch exists with the change\nnothing merged" }],
+  ];
+  let editing = null;
+  function openModal(t) {
+    editing = t || null;
+    $("#modal-title").textContent = t ? `Edit ${t.id}` : "New ticket";
+    $("#modal-save").textContent = t ? "Save changes" : "Open ticket";
+    const depts = [...S.departments]; if (S.org.improvement) depts.push("improvement");
+    $("#t-dept").innerHTML = depts.map((d) => `<option ${t && t.department === d ? "selected" : ""}>${esc(d)}</option>`).join("");
+    $("#t-project").innerHTML = `<option value="">(none)</option>` + S.projects.map((p) => `<option value="${esc(p.id)}" ${(t ? t.project === p.id : S.projects[0] === p) ? "selected" : ""}>${esc(p.id)} · ${esc(p.class)}</option>`).join("");
+    const actionOptions = () => { const d = $("#t-dept").value; $("#t-action").innerHTML = `<option value="">let the senior choose</option>` + S.settings.actions.filter((a) => a.department === d).map((a) => `<option value="${esc(a.id)}" ${t && t.action === a.id ? "selected" : ""}>${esc(a.id)} · ${esc(a.tier)}</option>`).join(""); };
+    $("#t-dept").onchange = actionOptions; actionOptions();
+    $("#templates").innerHTML = t ? "" : TEMPLATES.filter(([, v]) => depts.includes(v.department)).map(([n], i) => `<button class="btn sm" data-tpl="${i}">${esc(n)}</button>`).join("");
+    $("#templates").querySelectorAll("[data-tpl]").forEach((b) => b.addEventListener("click", () => { const v = TEMPLATES[Number(b.dataset.tpl)][1]; $("#t-dept").value = v.department; actionOptions(); $("#t-action").value = S.settings.actions.some((a) => a.id === v.action) ? v.action : ""; $("#t-why").value = v.why; $("#t-criteria").value = v.criteria; $("#t-title").focus(); }));
+    $("#t-title").value = t ? t.title : ""; $("#t-goal").value = t ? t.goal : ""; $("#t-why").value = t ? t.why : ""; $("#t-criteria").value = t ? t.done_criteria.join("\n") : ""; $("#t-priority").value = t ? String(t.priority) : "3";
+    modal.classList.add("open"); setTimeout(() => $("#t-title").focus(), 50);
+  }
+  const closeModal = () => modal.classList.remove("open");
+  $("#modal-cancel").addEventListener("click", closeModal);
+  modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(); });
+  $("#new-ticket").addEventListener("click", () => openModal());
+  $("#modal-save").addEventListener("click", async () => {
+    const body = { department: $("#t-dept").value, title: $("#t-title").value, goal: $("#t-goal").value, why: $("#t-why").value, criteria: $("#t-criteria").value.split("\n"), project: $("#t-project").value || null, action: $("#t-action").value || null, priority: Number($("#t-priority").value) };
+    if (!body.title.trim()) return toast("A title is needed", true);
+    const r = await run(() => act(editing ? { kind: "ticket_edit", id: editing.id, ...body } : { kind: "ticket_create", ...body }), (r) => editing ? "Saved" : `${r.id} opened — the senior picks it up on the next tick`);
+    if (r) { closeModal(); if (!editing) { location.hash = "#board"; } else openTicket(editing.id); }
+  });
 
   // ── inbox ────────────────────────────────────────────────────────────────
   function renderInbox() {
@@ -449,16 +672,69 @@ details > summary::before { content: "▸ "; } details[open] > summary::before {
     const t = d.ticket;
     $("#d-head").innerHTML = `<div><div class="row" style="gap:8px"><code>${esc(t.id)}</code><span class="pill ${t.state === "blocked" ? "signal" : t.state === "done" ? "ok" : ""}">${esc(STATE_LABEL[t.state] || t.state)}</span><span class="pill">${esc(t.department)}</span>${t.action ? `<span class="pill mono">${esc(t.action)}</span>` : ""}</div><h3 style="margin-top:6px">${esc(t.title)}</h3></div>`;
     const v = d.verdict;
+    const canEdit = !["done", "declined", "rolled_back"].includes(t.state);
     $("#d-body").innerHTML = [
+      `<div class="tabs"><button class="active" data-tab="overview">Overview</button><button data-tab="files">Files</button><button data-tab="diff">Diff</button>${canEdit ? `<button class="btn sm" style="margin-left:auto;border:1px solid var(--line-strong);border-radius:6px" id="edit-btn">Edit</button>` : ""}</div>`,
+      `<div data-pane="overview" class="stack">`,
       `<dl class="kv"><dt>Goal</dt><dd>${esc(t.goal)}</dd><dt>Why</dt><dd>${esc(t.why)}</dd><dt>Done when</dt><dd><ul class="criteria">${t.done_criteria.map((c) => `<li>${esc(c)}</li>`).join("")}</ul></dd>${t.branch ? `<dt>Branch</dt><dd><code>${esc(t.branch)}</code></dd>` : ""}<dt>Cost</dt><dd>${usd(d.cost)} across ${d.sessions.length} session${d.sessions.length === 1 ? "" : "s"}</dd><dt>Attempts</dt><dd>${t.attempts}</dd></dl>`,
       t.state === "blocked" ? `<div class="card pad stack"><b>Decision needed</b><p class="small" style="white-space:pre-wrap">${esc(t.note)}</p><input class="input" id="unblock-note" placeholder="your decision, in one line (the senior reads it)"><div class="row"><button class="btn primary" id="unblock-btn">Unblock with this decision</button><button class="btn bad" id="decline-btn">Decline the ticket</button></div></div>` : "",
       v ? `<div class="card pad stack"><div class="row"><b>Verdict</b><span class="pill ${v.verdict === "approve" ? "ok" : v.verdict === "reject" ? "bad" : "warn"}">${esc(v.verdict)}</span><span class="muted small">${esc(v.overall)}/4 · ${esc(v.confidence)} confidence</span></div><p class="small">${esc(v.payload.summary)}</p>${v.payload.failures?.length ? `<ul class="criteria small">${v.payload.failures.map((f) => `<li><b>${esc(f.criterion)}</b>: ${esc(f.evidence)}</li>`).join("")}</ul>` : ""}${v.payload.gates?.length ? `<div class="small">${v.payload.gates.map((g) => `<span class="pill ${g.passed ? "ok" : "bad"} mono">${esc(g.gate)}</span>`).join(" ")}</div>` : ""}${d.label ? `<div class="small muted">You graded it <b>${esc(d.label.operator_verdict)}</b> on ${clock(d.label.at)}</div>` : ""}</div>` : "",
       `<div><h3 style="margin-bottom:8px">Timeline</h3><div class="timeline">${d.events.map((e) => `<div class="ev"><span class="at">${clock(e.at)}</span><div><span class="st">${esc(STATE_LABEL[e.to_state] || e.to_state)}</span> <span class="muted small">${esc(e.actor)}</span>${e.note ? `<div class="nt small">${esc(e.note)}</div>` : ""}</div></div>`).join("")}</div></div>`,
       d.sessions.length ? `<div><h3 style="margin-bottom:8px">Sessions</h3><table>${d.sessions.map((s) => `<tr><td><code>${esc(s.role)}</code><div class="small muted">${esc(s.engine)}:${esc(s.model)}</div></td><td><span class="pill ${s.status === "success" ? "ok" : s.status ? "bad" : ""}">${esc(s.status || "running")}</span></td><td class="num small">${s.turns} turns</td><td class="num small">${usd(s.cost_usd)}</td></tr>`).join("")}</table></div>` : "",
-      d.diff ? `<div><h3 style="margin-bottom:8px">Diff vs ${esc(d.diff.base)}</h3>${renderDiff(d.diff)}</div>` : "",
+      `<div><h3 style="margin-bottom:8px">Notes to the next session</h3><div class="stack" id="comments">${d.comments.map((c) => `<div class="comment"><div class="by">${esc(c.author)} · ${clock(c.at)}</div>${esc(c.body)}</div>`).join("")}</div><div class="row" style="margin-top:8px"><input class="input" id="comment-input" placeholder="Tell the senior or the judge something; the next session on this ticket reads it" style="flex:1"><button class="btn primary sm" id="comment-btn">Add note</button></div></div>`,
+      `</div>`,
+      `<div data-pane="files" hidden><div class="files"><div class="list" id="file-list"><div class="muted small">Loading…</div></div><div id="file-view" class="muted small">Pick a file.</div></div></div>`,
+      `<div data-pane="diff" hidden>${d.diff ? `<h3 style="margin-bottom:8px">Diff vs ${esc(d.diff.base)}</h3>${renderDiff(d.diff)}` : `<div class="empty small">No branch yet.</div>`}</div>`,
     ].join("");
+    wireTabs($("#d-body"), () => loadFiles(t.id, $("#file-list"), $("#file-view")));
+    $("#edit-btn")?.addEventListener("click", () => openModal(t));
+    $("#comment-btn")?.addEventListener("click", async () => { const body = $("#comment-input").value.trim(); if (!body) return; const r = await run(() => act({ kind: "comment", id: t.id, body }), (r) => `Note saved; it reaches ${r.reaches}`); if (r) openTicket(t.id); });
+    $("#comment-input")?.addEventListener("keydown", (e) => { if (e.key === "Enter") $("#comment-btn").click(); });
     $("#unblock-btn")?.addEventListener("click", () => { const note = $("#unblock-note").value.trim(); if (!note) return toast("Write the decision first", true); run(() => act({ kind: "unblock", id: t.id, note }), "Unblocked").then(closeDrawer); });
     $("#decline-btn")?.addEventListener("click", () => { if (confirm(`Decline ${t.id}?`)) run(() => act({ kind: "decline", id: t.id }), "Declined").then(closeDrawer); });
+  }
+
+  // ── tabs, files, markdown ────────────────────────────────────────────────
+  function wireTabs(root, onFiles) {
+    root.querySelectorAll(".tabs [data-tab]").forEach((b) => b.addEventListener("click", () => {
+      root.querySelectorAll(".tabs [data-tab]").forEach((x) => x.classList.toggle("active", x === b));
+      root.querySelectorAll("[data-pane]").forEach((p) => { p.hidden = p.dataset.pane !== b.dataset.tab; });
+      if (b.dataset.tab === "files" && onFiles) onFiles();
+    }));
+  }
+  async function loadFiles(id, listEl, viewEl) {
+    if (listEl.dataset.loaded) return; listEl.dataset.loaded = "1";
+    const f = await run(() => api(`/api/ticket/${encodeURIComponent(id)}/files`));
+    if (!f || !f.files.length) { listEl.innerHTML = `<div class="muted small">No files changed${f ? ` vs ${esc(f.base)}` : ""}.</div>`; return; }
+    const docs = f.files.filter((x) => /\.(md|markdown|txt)$/i.test(x.path)); const first = (docs[0] || f.files[0]).path;
+    listEl.innerHTML = f.files.map((x) => `<a href="#" data-path="${esc(x.path)}" class="${x.path === first ? "active" : ""}" title="${esc(x.path)}"><span class="st">${esc(x.status[0])}</span>${esc(x.path)}</a>`).join("");
+    const open = async (path) => {
+      listEl.querySelectorAll("a").forEach((a) => a.classList.toggle("active", a.dataset.path === path));
+      viewEl.innerHTML = `<div class="muted small">Loading…</div>`;
+      const c = await run(() => api(`/api/ticket/${encodeURIComponent(id)}/file?path=${encodeURIComponent(path)}`));
+      if (!c) return;
+      viewEl.innerHTML = c.binary ? `<div class="muted small">Binary file.</div>` : /\.(md|markdown)$/i.test(path) ? `<div class="md">${md(c.content)}</div>` : `<pre class="mono" style="white-space:pre-wrap;overflow-wrap:anywhere;margin:0;font-size:12px;line-height:1.5">${esc(c.content)}</pre>`;
+      if (c.truncated) viewEl.insertAdjacentHTML("beforeend", `<p class="small muted">Truncated at 300 KB.</p>`);
+    };
+    listEl.querySelectorAll("a").forEach((a) => a.addEventListener("click", (e) => { e.preventDefault(); open(a.dataset.path); }));
+    open(first);
+  }
+  // A small Markdown renderer for deliverables: headings, lists, code, tables, emphasis, links.
+  function md(src) {
+    const inline = (t) => esc(t).replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>").replace(/\*([^*]+)\*/g, "<i>$1</i>").replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
+    const out = []; const lines = src.split("\n"); let i = 0;
+    while (i < lines.length) {
+      const l = lines[i];
+      if (l.startsWith("```")) { const buf = []; i++; while (i < lines.length && !lines[i].startsWith("```")) buf.push(lines[i++]); i++; out.push(`<pre>${esc(buf.join("\n"))}</pre>`); continue; }
+      const h = /^(#{1,6})\s+(.*)$/.exec(l); if (h) { out.push(`<h${Math.min(3, h[1].length)}>${inline(h[2])}</h${Math.min(3, h[1].length)}>`); i++; continue; }
+      if (/^\s*[-*]\s+/.test(l)) { const items = []; while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) items.push(`<li>${inline(lines[i++].replace(/^\s*[-*]\s+/, ""))}</li>`); out.push(`<ul>${items.join("")}</ul>`); continue; }
+      if (/^\s*\d+\.\s+/.test(l)) { const items = []; while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) items.push(`<li>${inline(lines[i++].replace(/^\s*\d+\.\s+/, ""))}</li>`); out.push(`<ol>${items.join("")}</ol>`); continue; }
+      if (/^\|/.test(l)) { const rows = []; while (i < lines.length && /^\|/.test(lines[i])) rows.push(lines[i++]); const cells = (r) => r.replace(/^\||\|$/g, "").split("|").map((c) => c.trim()); const body = rows.filter((r) => !/^\|\s*:?-{2,}/.test(r)); out.push(`<table>${body.map((r, k) => `<tr>${cells(r).map((c) => k === 0 ? `<th>${inline(c)}</th>` : `<td>${inline(c)}</td>`).join("")}</tr>`).join("")}</table>`); continue; }
+      if (/^>\s?/.test(l)) { const buf = []; while (i < lines.length && /^>\s?/.test(lines[i])) buf.push(lines[i++].replace(/^>\s?/, "")); out.push(`<blockquote>${inline(buf.join(" "))}</blockquote>`); continue; }
+      if (l.trim() === "") { i++; continue; }
+      const buf = []; while (i < lines.length && lines[i].trim() !== "" && !/^(#{1,6}\s|```|\s*[-*]\s|\s*\d+\.\s|\||>)/.test(lines[i])) buf.push(lines[i++]); out.push(`<p>${inline(buf.join(" "))}</p>`);
+    }
+    return out.join("");
   }
 
   // ── diff ─────────────────────────────────────────────────────────────────
@@ -504,7 +780,9 @@ details > summary::before { content: "▸ "; } details[open] > summary::before {
       <div style="padding:16px 18px" class="stack">
         <div><div class="row" style="gap:8px"><code>${esc(t.id)}</code><span class="pill">${esc(t.department)}</span>${t.action ? `<span class="pill mono">${esc(t.action)}</span>` : ""}<span class="muted small">${d.sessions.length} session${d.sessions.length === 1 ? "" : "s"}, ${usd(d.cost)}</span></div><h3 style="margin-top:6px">${esc(t.title)}</h3></div>
         <dl class="kv"><dt>Goal</dt><dd>${esc(t.goal)}</dd><dt>Done when</dt><dd><ul class="criteria">${t.done_criteria.map((c) => `<li>${esc(c)}</li>`).join("")}</ul></dd><dt>Senior said</dt><dd class="small">${esc(d.events.filter((e) => e.to_state === "ready_for_verification").at(-1)?.note || "—")}</dd></dl>
-        ${d.diff ? renderDiff(d.diff) : `<div class="empty small">No branch to diff.</div>`}
+        <div class="tabs"><button class="active" data-tab="diff">Diff</button><button data-tab="files">Files</button></div>
+        <div data-pane="diff">${d.diff ? renderDiff(d.diff) : `<div class="empty small">No branch to diff.</div>`}</div>
+        <div data-pane="files" hidden><div class="files"><div class="list" id="a-file-list"><div class="muted small">Loading…</div></div><div id="a-file-view" class="muted small"></div></div></div>
       </div>
       <div class="gradebar">
         ${g || d.verdict ? `<div class="verdict-reveal ${(g ? g.agreement : d.label && d.verdict.verdict === d.label.operator_verdict) ? "agree" : "disagree"}"><div class="row"><b>${g ? (g.agreement ? "You and the judge agree" : "You disagree with the judge") : "Already graded"}</b><span class="pill ${(g ? g.judge : d.verdict.verdict) === "approve" ? "ok" : "bad"}">judge: ${esc(g ? g.judge : d.verdict.verdict)}</span>${d.label || g ? `<span class="pill">you: ${esc(g ? g.mine : d.label.operator_verdict)}</span>` : ""}</div><p class="small">${esc(g ? g.summary : d.verdict.payload.summary)}</p></div>`
@@ -513,6 +791,7 @@ details > summary::before { content: "▸ "; } details[open] > summary::before {
              <div class="row"><button class="btn ok" data-grade="approve">Approve <kbd>a</kbd></button><button class="btn bad" data-grade="reject">Reject <kbd>r</kbd></button></div>`}
       </div>`;
     pane.querySelectorAll("[data-grade]").forEach((b) => b.addEventListener("click", () => grade(id, b.dataset.grade)));
+    wireTabs(pane, () => loadFiles(id, $("#a-file-list"), $("#a-file-view")));
   }
   const grade = async (id, verdict) => {
     const note = $("#grade-note")?.value || undefined;
@@ -587,9 +866,10 @@ details > summary::before { content: "▸ "; } details[open] > summary::before {
 
   // ── keyboard ─────────────────────────────────────────────────────────────
   document.addEventListener("keydown", (e) => {
-    if (e.target.matches("input, textarea, select")) { if (e.key === "Escape") e.target.blur(); return; }
-    if (e.key === "Escape") return closeDrawer();
-    if (/^[1-7]$/.test(e.key)) { location.hash = "#" + views[Number(e.key) - 1]; return; }
+    if (e.target.matches("input, textarea, select")) { if (e.key === "Escape") { e.target.blur(); if (modal.classList.contains("open")) closeModal(); } return; }
+    if (e.key === "Escape") { closeModal(); return closeDrawer(); }
+    if (e.key === "n" && !modal.classList.contains("open")) { openModal(); return; }
+    if (/^[1-9]$/.test(e.key) && !modal.classList.contains("open")) { location.hash = "#" + views[Number(e.key) - 1]; return; }
     if (view === "inbox" && S?.inbox.length) {
       const items = document.querySelectorAll("#inbox-list .item");
       if (e.key === "j" || e.key === "k") { sel.inbox = Math.max(0, Math.min(items.length - 1, sel.inbox + (e.key === "j" ? 1 : -1))); items.forEach((x, i) => { x.classList.toggle("sel", i === sel.inbox); x.classList.toggle("open", i === sel.inbox); }); items[sel.inbox]?.scrollIntoView({ block: "nearest" }); }

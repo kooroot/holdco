@@ -4,10 +4,12 @@
  * action here is the same operation the CLI performs; the dashboard is a second front for it.
  */
 import { spawnSync } from "node:child_process"
-import { readFileSync } from "node:fs"
+import { existsSync, readFileSync, writeFileSync } from "node:fs"
 import * as NodePath from "node:path"
-import type { CompanyConfig, Tier } from "../config/company.ts"
+import { Exit, Schema } from "effect"
+import { assignmentFor, CompanyConfig, type RoleKind, ROLE_KINDS, type Tier } from "../config/company.ts"
 import { durationMs } from "../config/company.ts"
+import { formatAssignment, parseAssignment } from "../config/models.ts"
 import { graduationCheck } from "../policy/graduation.ts"
 import type { Level } from "../schema/interrupts.ts"
 import { Store, type Ticket } from "../store/store.ts"
@@ -129,6 +131,29 @@ export const snapshot = (ctx: DashboardContext) => {
       })()
     : null
   const releases = store.db.query<{ tag: string; at: number; watch_until: number; changes: string; status: string; promoted_to: string | null }, []>("SELECT tag, at, watch_until, changes, status, promoted_to FROM releases ORDER BY at DESC LIMIT 20").all()
+  const byId = new Map(tickets.map((t) => [t.id, t]))
+  const activity = store.recentEvents(40).map((e) => ({ ...e, title: byId.get(e.ticket_id)?.title ?? e.ticket_id }))
+  const done24h = tickets.filter((t) => t.state === "done" && t.updated_at >= now - DAY)
+  const ticketsByDept = Object.fromEntries(config.modules.departments.map((d) => [d, tickets.filter((t) => t.department === d && !["done", "declined", "rolled_back"].includes(t.state)).length]))
+  const org = {
+    executive: config.modules.executive,
+    improvement: config.modules.improvement.enabled,
+    juniors: config.modules.juniors.enabled,
+    departments: config.modules.departments.map((d) => ({ id: d, share: config.budget.shares[d] ?? 0, open: ticketsByDept[d] ?? 0, senior: formatAssignment(assignmentFor(config, "senior", d)), running: running.filter((r) => r.kind !== "verification" && r.kind !== "ceo" && r.kind !== "coo" && store.ticket(r.ticket_id)?.department === d).length, actions: config.actions.filter((a) => a.department === d).map((a) => a.id) })),
+    roles: Object.fromEntries(ROLE_KINDS.filter((k) => config.roles[k]).map((k) => [k, formatAssignment(config.roles[k]!)])),
+    by_department: Object.fromEntries(Object.entries(config.roles.by_department ?? {}).map(([d, a]) => [d, formatAssignment(a)])),
+    engines: Object.keys(config.engines),
+    models: Object.fromEntries(Object.entries(config.engines).map(([id, e]) => [id, id === "codex" ? Object.keys((e as { prices?: Record<string, unknown> }).prices ?? {}) : ["opus", "sonnet", "haiku", "fable"]])),
+  }
+  const strategyPath = NodePath.join(ctx.root, "governance", "strategy.md")
+  const settings = {
+    strategy: existsSync(strategyPath) ? readFileSync(strategyPath, "utf8") : "",
+    budget: { monthly_usd: config.budget.monthly_usd, session_max_usd: config.budget.session_max_usd },
+    inbox: config.policy.inbox,
+    audit_weekly_sample: config.policy.audit.weekly_sample,
+    runtime: { tick: config.runtime.tick, max_concurrent_sessions: config.runtime.max_concurrent_sessions, max_attempts: config.runtime.max_attempts },
+    actions: config.actions.map((a) => ({ id: a.id, department: a.department, tier: a.tier })),
+  }
   const actions = store.db.query<{ id: number; at: number; ticket_id: string | null; action: string; effective_tier: string; rolled_back: number; undo: string }, []>("SELECT id, at, ticket_id, action, effective_tier, rolled_back, undo FROM action_log ORDER BY at DESC LIMIT 30").all().map((a) => ({ ...a, undoable: (() => { try { return Object.keys(JSON.parse(a.undo) as object).length > 0 } catch { return false } })() }))
   return {
     now,
@@ -152,7 +177,35 @@ export const snapshot = (ctx: DashboardContext) => {
     candidate: candidateView,
     releases,
     actions,
+    activity,
+    done_24h: done24h.map((t) => ({ id: t.id, title: t.title, department: t.department, cost: t.cost })),
+    org,
+    settings,
   }
+}
+
+/** Files a branch changed versus its base, and one file's content at the branch head (the deliverables viewer). */
+export const ticketFiles = (ctx: DashboardContext, id: string): { base: string; files: Array<{ path: string; status: string }> } => {
+  const t = ctx.store.ticket(id)
+  if (!t?.branch) return { base: "", files: [] }
+  const repo = projectRepo(ctx, t)
+  const base = t.department === "improvement" ? latestReleaseTag(ctx.root) : defaultBranch(repo)
+  const r = spawnSync("git", ["diff", "--name-status", `${base}...${t.branch}`], { cwd: repo, encoding: "utf8" })
+  const files = r.status === 0 ? r.stdout.split("\n").filter(Boolean).map((l) => { const [status, ...rest] = l.split("\t"); return { status: status ?? "M", path: rest.at(-1) ?? "" } }) : []
+  return { base, files }
+}
+export const ticketFile = (ctx: DashboardContext, id: string, path: string): { path: string; content: string; truncated: boolean; binary: boolean } => {
+  const t = ctx.store.ticket(id)
+  if (!t?.branch) throw new ActionError("no branch")
+  if (path.includes("..") || path.startsWith("/")) throw new ActionError("bad path")
+  const repo = projectRepo(ctx, t)
+  const r = spawnSync("git", ["show", `${t.branch}:${path}`], { cwd: repo, maxBuffer: 8 * 1024 * 1024 })
+  if (r.status !== 0) throw new ActionError(`cannot read ${path} at ${t.branch}`)
+  const buf = r.stdout
+  const binary = buf.subarray(0, 8000).includes(0)
+  const text = binary ? "" : buf.toString("utf8")
+  const limit = 300_000
+  return { path, content: text.slice(0, limit), truncated: text.length > limit, binary }
 }
 
 const diffOf = (ctx: DashboardContext, t: Ticket): { base: string; stat: string; patch: string; truncated: boolean } | null => {
@@ -187,6 +240,7 @@ export const ticketDetail = (ctx: DashboardContext, id: string, opts: { blind?: 
     verdict_hidden: Boolean(v) && !reveal,
     proposal: ctx.store.proposal(id) ?? null,
     label: ctx.store.labelRows().find((l) => l.ticket_id === id) ?? null,
+    comments: ctx.store.comments(id),
     diff: diffOf(ctx, t),
     cost: ctx.store.sessionsForTicket(id).reduce((a, s) => a + s.cost_usd, 0),
   }
@@ -209,6 +263,11 @@ export type Action =
   | { kind: "withdraw"; note?: string }
   | { kind: "rollback"; id: number; note?: string }
   | { kind: "promote"; action: string }
+  | { kind: "ticket_create"; department: string; title: string; goal?: string; why?: string; criteria?: ReadonlyArray<string>; project?: string | null; action?: string | null; priority?: number }
+  | { kind: "ticket_edit"; id: string; title?: string; goal?: string; why?: string; criteria?: ReadonlyArray<string>; priority?: number; action?: string | null; project?: string | null; department?: string }
+  | { kind: "comment"; id: string; body: string }
+  | { kind: "role_set"; role: string; assignment: string }
+  | { kind: "settings"; strategy?: string; budget?: { monthly_usd?: number; session_max_usd?: number }; inbox?: { timeout?: string; batch_at?: string }; audit_weekly_sample?: number; runtime?: { max_concurrent_sessions?: number; max_attempts?: number } }
 
 export const act = async (ctx: DashboardContext, a: Action): Promise<Record<string, unknown>> => {
   const now = ctx.now()
@@ -282,6 +341,77 @@ export const act = async (ctx: DashboardContext, a: Action): Promise<Record<stri
         if (t?.state === "done") store.transition(t.id, "rolled_back", "operator", a.note ?? "rolled back from the dashboard", now)
         store.demote(log.action, "Operator rollback", now)
         store.createTicket({ department: t?.department ?? "engineering", title: `Follow up rollback of ${log.ticket_id}`, goal: `Understand why ${log.ticket_id} had to be rolled back and fix it`, why: a.note ?? "Operator rollback", done_criteria: ["root cause written in the ticket", "fix verified"], opened_by: "operator", project: t?.project ?? null, state: "triaged", now })
+      }
+      return { ok: true }
+    }
+    case "ticket_create": {
+      const config = ctx.config()
+      const title = a.title.trim()
+      if (!title) throw new ActionError("a title is required")
+      if (!config.modules.departments.includes(a.department) && a.department !== "improvement") throw new ActionError(`department '${a.department}' is not enabled`)
+      const project = a.project ?? config.projects[0]?.id ?? null
+      if (project !== null && !config.projects.some((p) => p.id === project)) throw new ActionError(`unknown project '${project}'`)
+      const action = a.action || null
+      if (action && !config.actions.some((x) => x.id === action)) throw new ActionError(`unknown action '${action}'`)
+      const goal = (a.goal ?? "").trim() || title
+      const criteria = (a.criteria ?? []).map((c) => c.trim()).filter(Boolean)
+      const t = store.createTicket({ department: a.department, title, goal, why: (a.why ?? "").trim() || "Operator request", done_criteria: criteria.length ? criteria : [goal], opened_by: "operator", project, action, priority: a.priority ?? 3, state: "triaged", now })
+      return { ok: true, id: t.id }
+    }
+    case "ticket_edit": {
+      const t = store.ticket(a.id)
+      if (!t) throw new ActionError(`ticket ${a.id} not found`)
+      if (["done", "declined", "rolled_back"].includes(t.state)) throw new ActionError(`${a.id} is ${t.state}; open a new ticket instead`)
+      const config = ctx.config()
+      if (a.action !== undefined && a.action !== null && !config.actions.some((x) => x.id === a.action)) throw new ActionError(`unknown action '${a.action}'`)
+      if (a.project !== undefined && a.project !== null && !config.projects.some((p) => p.id === a.project)) throw new ActionError(`unknown project '${a.project}'`)
+      if (a.department !== undefined && !config.modules.departments.includes(a.department) && a.department !== "improvement") throw new ActionError(`department '${a.department}' is not enabled`)
+      const criteria = a.criteria?.map((c) => c.trim()).filter(Boolean)
+      store.editTicket(a.id, { ...(a.title !== undefined ? { title: a.title.trim() } : {}), ...(a.goal !== undefined ? { goal: a.goal.trim() } : {}), ...(a.why !== undefined ? { why: a.why.trim() } : {}), ...(criteria && criteria.length ? { done_criteria: criteria } : {}), ...(a.priority !== undefined ? { priority: a.priority } : {}), ...(a.action !== undefined ? { action: a.action } : {}), ...(a.project !== undefined ? { project: a.project } : {}), ...(a.department !== undefined ? { department: a.department } : {}) }, now)
+      if (t.state === "in_progress") store.addComment(a.id, "operator", "The ticket was edited while you were working; re-read goal and done criteria with ticket_get.", now)
+      return { ok: true }
+    }
+    case "comment": {
+      const t = store.ticket(a.id)
+      if (!t) throw new ActionError(`ticket ${a.id} not found`)
+      const body = a.body.trim()
+      if (!body) throw new ActionError("empty note")
+      const id = store.addComment(a.id, "operator", body, now)
+      return { ok: true, id, reaches: t.state === "in_progress" || t.state === "ready_for_verification" ? "the next session on this ticket (the running one does not see it)" : "the next session on this ticket" }
+    }
+    case "role_set": {
+      const config = ctx.config()
+      const asg = parseAssignment(a.assignment)
+      if (!config.engines[asg.engine]) throw new ActionError(`engine '${asg.engine}' is not configured; run holdco models preset dual|codex first`)
+      let roles: CompanyConfig["roles"]
+      if (a.role.startsWith("senior@")) roles = { ...config.roles, by_department: { ...(config.roles.by_department ?? {}), [a.role.slice(7)]: asg } }
+      else {
+        if (!(ROLE_KINDS as ReadonlyArray<string>).includes(a.role)) throw new ActionError(`unknown role '${a.role}'`)
+        roles = { ...config.roles, [a.role as RoleKind]: asg }
+      }
+      const exit = Schema.decodeUnknownExit(CompanyConfig, { errors: "all" })({ ...config, roles })
+      if (Exit.isFailure(exit)) throw new ActionError(`refused: ${String(exit.cause).split("\n").filter((l) => l.includes("may not") || l.includes("must") || l.includes("unknown")).join("; ") || String(exit.cause).slice(0, 300)}`)
+      ctx.saveConfig(exit.value, `roles: ${a.role} → ${a.assignment}`)
+      return { ok: true }
+    }
+    case "settings": {
+      const config = ctx.config()
+      if (a.strategy !== undefined) {
+        const path = NodePath.join(ctx.root, "governance", "strategy.md")
+        writeFileSync(path, a.strategy.endsWith("\n") ? a.strategy : `${a.strategy}\n`)
+        spawnSync("git", ["add", "governance/strategy.md"], { cwd: ctx.root })
+        spawnSync("git", ["commit", "-qm", "strategy: edited from the dashboard"], { cwd: ctx.root })
+      }
+      const next = {
+        ...config,
+        budget: { ...config.budget, ...(a.budget?.monthly_usd !== undefined ? { monthly_usd: a.budget.monthly_usd } : {}), ...(a.budget?.session_max_usd !== undefined ? { session_max_usd: a.budget.session_max_usd } : {}) },
+        policy: { ...config.policy, inbox: { ...config.policy.inbox, ...(a.inbox?.timeout ? { timeout: a.inbox.timeout } : {}), ...(a.inbox?.batch_at ? { batch_at: a.inbox.batch_at } : {}) }, audit: { ...config.policy.audit, ...(a.audit_weekly_sample !== undefined ? { weekly_sample: a.audit_weekly_sample } : {}) } },
+        runtime: { ...config.runtime, ...(a.runtime?.max_concurrent_sessions !== undefined ? { max_concurrent_sessions: a.runtime.max_concurrent_sessions } : {}), ...(a.runtime?.max_attempts !== undefined ? { max_attempts: a.runtime.max_attempts } : {}) },
+      }
+      if (a.budget || a.inbox || a.audit_weekly_sample !== undefined || a.runtime) {
+        const exit = Schema.decodeUnknownExit(CompanyConfig, { errors: "all" })(next)
+        if (Exit.isFailure(exit)) throw new ActionError(`refused: ${String(exit.cause).slice(0, 400)}`)
+        ctx.saveConfig(exit.value, "settings edited from the dashboard")
       }
       return { ok: true }
     }

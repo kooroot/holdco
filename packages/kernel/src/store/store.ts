@@ -128,6 +128,10 @@ CREATE TABLE IF NOT EXISTS labels (
 );
 CREATE TABLE IF NOT EXISTS demotions (action TEXT PRIMARY KEY, since INTEGER NOT NULL, reason TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS releases (tag TEXT PRIMARY KEY, at INTEGER NOT NULL, watch_until INTEGER NOT NULL, changes TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'released', promoted_to TEXT);
+CREATE TABLE IF NOT EXISTS ticket_comments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, ticket_id TEXT NOT NULL, at INTEGER NOT NULL, author TEXT NOT NULL, body TEXT NOT NULL,
+  seen_by_session TEXT
+);
 CREATE TABLE IF NOT EXISTS replays (
   id INTEGER PRIMARY KEY AUTOINCREMENT, candidate TEXT NOT NULL, at INTEGER NOT NULL, ticket_id TEXT NOT NULL,
   operator_verdict TEXT NOT NULL, recorded_verdict TEXT NOT NULL, candidate_verdict TEXT NOT NULL, cost_usd REAL NOT NULL
@@ -296,6 +300,30 @@ export class Store {
       this.transition(id, "blocked", actor, `${note}; attempts ${attempts} > ${maxAttempts}`, now)
     }
     return this.ticket(id) as Ticket
+  }
+  /** The Operator's notes on a ticket (D55): read by every later session on it. */
+  addComment(ticketId: string, author: string, body: string, now: number): number {
+    const r = this.db.run("INSERT INTO ticket_comments(ticket_id, at, author, body) VALUES (?, ?, ?, ?)", [ticketId, now, author, body])
+    return Number(r.lastInsertRowid)
+  }
+  comments(ticketId: string): Array<{ id: number; at: number; author: string; body: string }> {
+    return this.db.query<{ id: number; at: number; author: string; body: string }, [string]>("SELECT id, at, author, body FROM ticket_comments WHERE ticket_id = ? ORDER BY at").all(ticketId)
+  }
+  /** Edit the Operator-owned fields of a ticket that has not reached an end state. */
+  editTicket(id: string, patch: Partial<{ title: string; goal: string; why: string; done_criteria: ReadonlyArray<string>; priority: number; action: string | null; project: string | null; department: string }>, now: number) {
+    const sets: Array<string> = []
+    const vals: Array<string | number | null> = []
+    for (const [k, v] of Object.entries(patch)) {
+      if (v === undefined) continue
+      sets.push(`${k} = ?`)
+      vals.push(k === "done_criteria" ? JSON.stringify(v) : (v as string | number | null))
+    }
+    if (sets.length === 0) return
+    this.db.run(`UPDATE tickets SET ${sets.join(", ")}, updated_at = ? WHERE id = ?`, [...vals, now, id])
+  }
+  /** Recent ticket events across the company, newest first (the dashboard's activity feed). */
+  recentEvents(limit = 40): Array<{ ticket_id: string; at: number; actor: string; from_state: string | null; to_state: string; note: string | null }> {
+    return this.db.query<{ ticket_id: string; at: number; actor: string; from_state: string | null; to_state: string; note: string | null }, [number]>("SELECT ticket_id, at, actor, from_state, to_state, note FROM ticket_events ORDER BY at DESC, id DESC LIMIT ?").all(limit)
   }
   events(id: string): Array<{ at: number; actor: string; from_state: string | null; to_state: string; note: string | null }> {
     return this.db.query<{ at: number; actor: string; from_state: string | null; to_state: string; note: string | null }, [string]>("SELECT at, actor, from_state, to_state, note FROM ticket_events WHERE ticket_id = ? ORDER BY id").all(id)

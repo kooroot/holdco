@@ -277,6 +277,26 @@ describe("dual control (full preset: COO and judge on a second engine)", () => {
   })
 })
 
+describe("Operator notes (D55)", () => {
+  test("a note on a ticket is in the next senior's and judge's prompt, newest last", async () => {
+    const c = company("notes")
+    const clock = { now: Date.UTC(2026, 9, 28, 9) }
+    const engine = new FakeEngine({ ceo: async () => ({}) })
+    const { sup, store } = makeSupervisor(c, engine, clock)
+    await sup.boot()
+    const id = store.createTicket({ department: "engineering", title: "x", goal: "y", why: "z", done_criteria: ["a"], opened_by: "operator", project: "app", state: "triaged", action: "code.merge.app", now: clock.now }).id
+    store.addComment(id, "operator", "Keep it under 50 lines.", clock.now)
+    store.addComment(id, "operator", "Name the file feature.md.", clock.now + 1)
+    await cycle(sup, clock, 4)
+    const senior = engine.runs.find((r) => r.role.kind === "senior")!
+    expect(senior.prompt).toContain("## Notes from the Operator")
+    expect(senior.prompt.indexOf("Keep it under 50 lines.")).toBeLessThan(senior.prompt.indexOf("Name the file feature.md."))
+    const judge = engine.runs.find((r) => r.role.kind === "verification")!
+    expect(judge.prompt).toContain("Name the file feature.md.")
+    await sup.stop()
+  })
+})
+
 describe("worktree dependencies", () => {
   test("a fresh worktree shares the main checkout's node_modules by symlink; nothing happens without a lockfile", async () => {
     const { provisionDependencies, createWorktree } = await import("../src/supervisor/worktrees.ts")
