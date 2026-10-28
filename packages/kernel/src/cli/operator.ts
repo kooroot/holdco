@@ -101,7 +101,7 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
       writeFileSync(lock, String(process.pid), { mode: 0o600 })
       await sup.boot()
       sup.start()
-      const dash = startDashboard({ root: dir, config: () => loadConfig(dir), store: sup.store, now: () => Date.now(), supervisor: sup, saveConfig: (c, m) => saveConfig(dir, c, m) }, Number(process.env["HOLDCO_DASHBOARD_PORT"] ?? args.flag("dashboard-port") ?? 7117), (l) => console.error(l))
+      const dash = startDashboard({ root: dir, config: () => loadConfig(dir), store: sup.store, now: () => Date.now(), supervisor: sup, saveConfig: (c, m) => saveConfig(dir, c, m) }, Number(process.env["HOLDCO_DASHBOARD_PORT"] ?? args.flag("dashboard-port") ?? 7117), (l) => console.log(l))
       const tg = telegramConfig(config, process.env)
       const bridge = tg ? new TelegramBridge({ ctx: { root: dir, config: () => loadConfig(dir), store: sup.store, now: () => Date.now(), supervisor: sup, saveConfig: (c, m) => saveConfig(dir, c, m) }, token: tg.token, chatId: tg.chatId, log: (l) => console.error(l) }) : undefined
       if (bridge) {
@@ -191,7 +191,7 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
     case "dashboard": {
       // Standalone: works while the supervisor runs in another process (shared SQLite) or not at all.
       const store = Store.open(dir)
-      const dash = startDashboard({ root: dir, config: () => loadConfig(dir), store, now: () => Date.now(), saveConfig: (c, m) => saveConfig(dir, c, m) }, Number(args.flag("port") ?? 7118), (l) => console.error(l))
+      const dash = startDashboard({ root: dir, config: () => loadConfig(dir), store, now: () => Date.now(), saveConfig: (c, m) => saveConfig(dir, c, m) }, Number(args.flag("port") ?? 7118), (l) => console.log(l))
       console.log(`dashboard: ${dash.url}\n(the link carries your Operator token; on a server, forward the port over SSH: ssh -L ${dash.port}:127.0.0.1:${dash.port} <host>)`)
       if (args.has("open")) spawnSync(process.platform === "darwin" ? "open" : "xdg-open", [dash.url], { stdio: "ignore" })
       await new Promise(() => {})
