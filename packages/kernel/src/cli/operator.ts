@@ -137,7 +137,11 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
         done_criteria: ["docs/holdco/engineering/smoke.md exists on the branch", "its content is the single line: holdco smoke ok", "no other file changed"],
       })
       const sessionsExpected = 2 + (config.modules.executive !== "none" ? 1 : 0)
-      console.log(`\nsmoke: ticket ${t.id} on project '${project.id}' (code.branch, T0 → done without a merge)`)
+      const kernelDir = NodePath.resolve(import.meta.dir, "..", "..")
+      const commit = spawnSync("git", ["rev-parse", "--short", "HEAD"], { cwd: kernelDir, encoding: "utf8" }).stdout.trim()
+      const kernelVersion = (JSON.parse(readFileSync(NodePath.join(kernelDir, "package.json"), "utf8")) as { version: string }).version
+      console.log(`\nsmoke: kernel ${kernelVersion}${commit ? ` @ ${commit}` : ""} from ${kernelDir}`)
+      console.log(`       ticket ${t.id} on project '${project.id}' (code.branch, T0 → done without a merge)`)
       console.log(`       cap $${cap.toFixed(2)} per session, about ${sessionsExpected} sessions (senior, Verification${config.modules.executive !== "none" ? ", the CEO cycle" : ""}) → at most $${(cap * (sessionsExpected + 2)).toFixed(2)}; giving up after ${minutes} min\n`)
       writeFileSync(lock, String(process.pid), { mode: 0o600 })
       await sup.boot()
