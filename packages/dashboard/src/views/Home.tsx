@@ -15,9 +15,9 @@ const st = {
   v: style({ fontSize: "24px !custom", fontWeight: 600, letterSpacing: "-0.02em !custom", fontVariantNumeric: "tabular-nums" }),
   vHot: style({ color: "signal" }),
   l: style({ color: "muted", fontSize: "sm" }),
-  feedRow: style({ display: "grid", gridTemplateColumns: "58px 1fr", gap: "md", padding: "9px 14px !custom", borderBottom: `1px solid ${vars.color.line} !custom`, fontSize: "13px !custom", ":last-child": { borderBottom: "none !custom" } }),
+  feedRow: style({ display: "grid", gridTemplateColumns: "58px minmax(0, 1fr)", gap: "md", minWidth: "0 !custom", padding: "9px 14px !custom", borderBottom: `1px solid ${vars.color.line} !custom`, fontSize: "13px !custom", ":last-child": { borderBottom: "none !custom" } }),
   when: style({ color: "muted", fontFamily: "mono", fontSize: "11.5px !custom", paddingTop: "2px !custom" }),
-  nt: style({ color: "muted", display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "70ch !custom" }),
+  nt: style({ color: "muted", display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100% !custom" }),
   sect: style({ padding: "12px 14px 6px !custom" }),
 }
 
