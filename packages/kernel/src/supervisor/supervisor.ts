@@ -1218,7 +1218,7 @@ export class Supervisor {
         r.abort.abort()
       }
     }
-    if (e.kind === "blocked") {
+    if (e.kind === "blocked" && !e.reason.startsWith("INTERRUPT:")) {
       // The guard already refused and told the agent to carry on. One refusal is noise (a heuristic, or an
       // honest reach for a locked file); a session that keeps pushing on locked paths is the tripwire.
       const n = (r.toolErrors.get("blocked") ?? 0) + 1

@@ -44,7 +44,10 @@ export const preToolUseHook =
       ...(input.agent_type === undefined ? {} : { agent_type: input.agent_type }),
     })
     if (blocked === undefined) return {}
-    onEvent({ kind: "blocked", reason: blocked.message })
+    // The journal and the tripwires see a locked-path refusal with its short reason. An active interrupt is
+    // the kernel's own doing: the supervisor already knows and aborts the session; reporting it back as a
+    // "blocked" event would raise the interrupt again with its own text nested inside.
+    if (blocked.kind === "locked") onEvent({ kind: "blocked", reason: blocked.detail })
     return {
       hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: blocked.message },
     }
