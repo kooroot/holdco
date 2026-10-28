@@ -12,11 +12,13 @@
     "./protocol": "./src/protocol/index.ts",
     "./schema/*": "./schema/*",
     "./supervisor": "./src/supervisor/index.ts",
-    "./store": "./src/store/store.ts"
+    "./store": "./src/store/store.ts",
+    "./dashboard": "./src/dashboard/contract.ts"
   },
   "files": [
-    "src",
+    "dashboard-dist",
     "schema",
+    "src",
     "templates"
   ],
   "dependencies": {

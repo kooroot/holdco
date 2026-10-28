@@ -70,8 +70,10 @@ afterAll(() => { dash.close(); store.close() })
 describe("dashboard", () => {
   test("serves the page without a token and refuses the API without one", async () => {
     const page = await fetch(`http://127.0.0.1:${dash.port}/`)
-    expect(page.status).toBe(200)
-    expect(await page.text()).toContain("<title>Holdco</title>")
+    expect([200, 503]).toContain(page.status) // 503 until the client is built
+    const openapi = await fetch(`http://127.0.0.1:${dash.port}/api/openapi.json?t=${token}`)
+    expect(openapi.status).toBe(200)
+    expect(((await openapi.json()) as any).paths["/api/act"]).toBeDefined()
     const r = await fetch(`http://127.0.0.1:${dash.port}/api/state`)
     expect(r.status).toBe(401)
     expect(dash.url).toContain(`?t=${token}`)
@@ -165,7 +167,7 @@ describe("dashboard", () => {
     expect(readFileSync(NodePath.join(dir, "company.yaml"), "utf8")).toMatch(/senior:\n\s+engine: claude\n\s+model: sonnet/)
     const refused = await act({ kind: "role_set", role: "verification", assignment: "claude:sonnet" })
     expect(refused.status).toBe(400)
-    expect(refused.body.error).toContain("may not share")
+    expect(refused.body.message).toContain("may not share")
     expect((await act({ kind: "role_set", role: "senior", assignment: "codex:gpt-6.1-sol" })).status).toBe(400) // engine not configured
     expect((await act({ kind: "settings", strategy: "# Strategy\n\n| 1 | Ship payouts |\n", budget: { monthly_usd: 250 }, inbox: { timeout: "24h" } })).body.ok).toBe(true)
     expect(readFileSync(NodePath.join(dir, "governance", "strategy.md"), "utf8")).toContain("Ship payouts")

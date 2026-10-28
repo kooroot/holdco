@@ -5,3 +5,5 @@ packages/kernel/dist/
 .env
 .env.*
 .holdco/
+packages/dashboard/dist/
+packages/kernel/dashboard-dist/

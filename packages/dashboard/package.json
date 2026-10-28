@@ -1,0 +1,28 @@
+{
+  "name": "@holdco/dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Holdco's Operator dashboard: React + TanStack over the kernel's Effect HttpApi, styled with zyzz",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@holdco/kernel": "workspace:*",
+    "@tanstack/react-query": "5.90.2",
+    "@tanstack/react-router": "1.132.0",
+    "effect": "4.0.6",
+    "react": "19.1.1",
+    "react-dom": "19.1.1",
+    "zyzz": "0.0.43"
+  },
+  "devDependencies": {
+    "@types/react": "19.1.12",
+    "@types/react-dom": "19.1.9",
+    "@vitejs/plugin-react": "5.0.4",
+    "typescript": "5.9.3",
+    "vite": "7.1.7"
+  }
+}

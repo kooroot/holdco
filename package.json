@@ -2,13 +2,17 @@
   "name": "holdco-monorepo",
   "private": true,
   "type": "module",
-  "workspaces": ["packages/*"],
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "test": "bun test",
     "typecheck": "tsc --noEmit -p .",
     "schemas": "bun packages/kernel/src/cli.ts schemas emit",
     "examples": "bun packages/kernel/src/cli.ts examples emit",
-    "build:hook": "bun build packages/kernel/src/hook.ts --compile --minify --bytecode --outfile packages/kernel/dist/pre-tool-use"
+    "build:hook": "bun build packages/kernel/src/hook.ts --compile --minify --bytecode --outfile packages/kernel/dist/pre-tool-use",
+    "build:dashboard": "cd packages/dashboard && bunx vite build && rm -rf ../kernel/dashboard-dist && cp -r dist ../kernel/dashboard-dist",
+    "typecheck:dashboard": "cd packages/dashboard && tsc --noEmit -p ."
   },
   "devDependencies": {
     "@types/bun": "1.4.4",
