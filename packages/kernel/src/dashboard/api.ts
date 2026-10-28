@@ -17,7 +17,7 @@ import { Store, type Ticket } from "../store/store.ts"
 import { clear as clearInterrupt, raise as raiseInterrupt, readControl } from "../supervisor/control.ts"
 import { undoAction } from "../supervisor/executors.ts"
 import { latestReleaseTag } from "../supervisor/org.ts"
-import { Supervisor, WORK_WAKE_MS } from "../supervisor/supervisor.ts"
+import { idleWakeMs, Supervisor, WORK_WAKE_MS } from "../supervisor/supervisor.ts"
 import { defaultBranch } from "../supervisor/worktrees.ts"
 
 const DAY = 86_400_000
@@ -208,7 +208,8 @@ export const snapshot = (ctx: DashboardContext) => {
     activity,
     done_24h: done24h.map((t) => ({ id: t.id, title: t.title, department: t.department, cost: t.cost })),
     waiting,
-    next_ceo_at: config.modules.executive === "none" ? null : lastCeo + ceoCycleMs,
+    // When the CEO next runs: its cycle, or — with nothing open — the idle wake (backoff from 5 min), whichever is first.
+    next_ceo_at: config.modules.executive === "none" ? null : waiting.length === 0 && running.length === 0 ? Math.min(lastCeo + ceoCycleMs, lastCeo + idleWakeMs(Number(store.getMeta("ceo_idle_streak") ?? 0))) : lastCeo + ceoCycleMs,
     org,
     settings,
   }

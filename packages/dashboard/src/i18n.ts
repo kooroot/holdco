@@ -109,7 +109,7 @@ const KO: Record<string, string> = {
   // waiting on
   "Waiting on": "대기 중", "nothing runs until one of these moves": "이 중 하나가 움직여야 세션이 돕니다",
   "w.session": "{d} 세션 실행 중", "w.ceo_triage": "CEO 분류", "w.ceo_proposal": "CEO 제안서 (T2/T3 승인 경로)", "w.coo_review": "COO 검토 (다음 틱)", "w.operator": "당신의 결정 (인박스)", "w.senior_slot": "시니어 세션 (다음 틱, 빈 슬롯)", "w.verification_slot": "검증 세션 (다음 틱)", "w.lease": "리스 (만료되면 회수)", "w.kernel": "커널 (다음 틱)",
-  "in {t}": "{t} 후", "now": "지금", "CEO runs in {t}": "CEO {t} 후 실행", "CEO is due now": "CEO 곧 실행",
+  "in {t}": "{t} 후", "now": "지금", "CEO runs in {t}": "CEO {t} 후 실행", "CEO is due now": "CEO 곧 실행", "it opens the next tickets from the strategy": "전략에서 다음 티켓을 엽니다",
   // misc
   "Dashboard unreachable": "대시보드에 연결할 수 없음", "Could not load": "불러올 수 없음", "Loading {id}…": "{id} 불러오는 중…",
 }

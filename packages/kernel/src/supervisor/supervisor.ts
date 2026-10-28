@@ -72,7 +72,10 @@ const MIN_SESSION_USD = 0.05
 export const ceoWorkSince = (store: Store, since: number): boolean =>
   store.ticketsIn(["new"]).some((t) => t.updated_at > since) || store.ticketsIn(["awaiting_approval"]).some((t) => t.approval_stage === "needs_proposal" && t.updated_at > since)
 
+/** Idle wakes back off: 5 min after the backlog first empties, doubling to an hour, so a strategy with nothing left does not pay for a CEO every few minutes. */
+export const IDLE_WAKE_MIN_MS = 300_000
 export const IDLE_WAKE_MS = 3_600_000
+export const idleWakeMs = (streak: number): number => Math.min(IDLE_WAKE_MS, IDLE_WAKE_MIN_MS * 2 ** Math.max(0, streak))
 /** The CEO is woken for new work (tickets to triage, proposals to write) this soon after its last run, so a T2 ticket never waits for the daily cycle. */
 export const WORK_WAKE_MS = 120_000
 /** How a judge handles gates and the sandbox; the first live runs rejected sound work over missing network and dependencies. */
@@ -147,6 +150,8 @@ export class Supervisor {
   private halted = false
   private readonly delegations = new Map<string, Promise<{ brief_id: string; status: string; result: unknown }>>()
   private lastJob = new Map<string, number>()
+  /** True until the first tick after boot: an empty backlog then means "start working now". */
+  private firstTick = true
   private timer: ReturnType<typeof setInterval> | undefined
 
   constructor(opts: SupervisorOptions) {
@@ -739,11 +744,16 @@ export class Supervisor {
     // empty) so one finished ticket never leaves the company idle until the next cycle.
     const backlogEmpty = this.store.ticketsIn(["new", "triaged", "in_progress", "ready_for_verification", "verified", "awaiting_approval", "rejected"]).length === 0 && this.running.size === 0
     const lastCeo = this.lastJob.get("ceo") ?? 0
-    const idleWake = backlogEmpty && now - lastCeo >= IDLE_WAKE_MS
+    // Idle: the CEO runs at once when the company boots with nothing to do (the Operator just started
+    // it), then on a backoff (5 min → 1 h) while the backlog stays empty; the streak resets with any work.
+    const streak = backlogEmpty ? Number(this.store.getMeta("ceo_idle_streak") ?? 0) : 0
+    if (!backlogEmpty && this.store.getMeta("ceo_idle_streak") !== "0") this.store.setMeta("ceo_idle_streak", "0")
+    const idleWake = backlogEmpty && ((this.firstTick && now - lastCeo >= WORK_WAKE_MS) || now - lastCeo >= idleWakeMs(streak))
+    this.firstTick = false
     // Work that only the CEO can move, and that appeared after its last run: wake it (debounced), instead of
     // letting a verified T2 ticket sit until the daily cycle. Work the CEO already saw waits for the cycle.
     const ceoWork = ceoWorkSince(this.store, lastCeo)
-    if (this.config.modules.executive !== "none" && (this.due("ceo", durationMs(this.config.policy.executive.ceo_cycle), now) || (idleWake && this.due("ceo", IDLE_WAKE_MS, now)) || (ceoWork && this.due("ceo", WORK_WAKE_MS, now)))) this.ceoCycle(now)
+    if (this.config.modules.executive !== "none" && (this.due("ceo", durationMs(this.config.policy.executive.ceo_cycle), now) || (idleWake && this.due("ceo", 0, now) && (this.store.setMeta("ceo_idle_streak", String(streak + 1)), true)) || (ceoWork && this.due("ceo", WORK_WAKE_MS, now)))) this.ceoCycle(now)
     if (this.config.modules.executive === "ceo+coo") this.cooReviews(now)
     if (this.due("tripwires", durationMs(this.config.runtime.tick), now)) this.tripwires(now)
     if (this.due("audit", DAY, now)) this.auditWatch(now)

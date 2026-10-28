@@ -287,13 +287,35 @@ describe("the company does not stop", () => {
     await sup.boot()
     await cycle(sup, clock, 1) // first CEO cycle (due at boot): opens nothing
     expect(cycles).toBe(1)
-    await cycle(sup, clock, 2) // within the hour: no second cycle yet
+    await cycle(sup, clock, 3) // three minutes: no second cycle yet (the first idle wake is at five)
     expect(cycles).toBe(1)
-    clock.now += 3_600_000
-    await cycle(sup, clock, 1) // idle wake after an hour with nothing open
+    await cycle(sup, clock, 3) // past five minutes: woken, opens the next ticket
     expect(cycles).toBe(2)
-    expect(store.ticketsIn(["triaged", "new"]).length).toBe(1)
+    expect(store.allTickets().length).toBe(1) // opened by the CEO (and already picked up by the fake senior)
     await sup.stop()
+  })
+  test("idle wakes back off (5, 10, 20… minutes up to an hour) while the strategy yields nothing; a boot with an empty backlog starts at once", async () => {
+    const c = company("backoff", (raw) => { ((raw["policy"] as Record<string, Record<string, unknown>>)["executive"] as Record<string, unknown>)["ceo_cycle"] = "24h" })
+    const clock = { now: Date.UTC(2026, 9, 28, 9) }
+    let cycles = 0
+    const engine = new FakeEngine({ ceo: async ({ spec }) => { if (spec.prompt.startsWith("# CEO cycle")) cycles++; return {} } })
+    const { sup, store } = makeSupervisor(c, engine, clock)
+    await sup.boot()
+    await cycle(sup, clock, 1)
+    expect(cycles).toBe(1) // boot
+    const at: Array<number> = []
+    for (let i = 0; i < 70; i++) { const before = cycles; await cycle(sup, clock, 1); if (cycles > before) at.push(i + 1) }
+    expect(at).toEqual([5, 15, 35]) // 5, then 10, then 20 minutes later; the next would be 40
+    expect(store.getMeta("ceo_idle_streak")).toBe("3")
+    await sup.stop()
+    // a restart with an empty backlog (and the last CEO run more than two minutes ago) runs the CEO at once
+    clock.now += 10 * 60_000
+    const again = makeSupervisor(c, engine, clock)
+    await again.sup.boot()
+    const before = cycles
+    await cycle(again.sup, clock, 1)
+    expect(cycles).toBe(before + 1)
+    await again.sup.stop()
   })
   test("work only the CEO can move wakes it within minutes, once per batch, not every tick", async () => {
     const c = company("wake", (raw) => { ((raw["policy"] as Record<string, Record<string, unknown>>)["executive"] as Record<string, unknown>)["ceo_cycle"] = "24h" })
