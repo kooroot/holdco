@@ -19,6 +19,7 @@ import { liveNotifier } from "../supervisor/notify.ts"
 import { latestReleaseTag } from "../supervisor/org.ts"
 import { Supervisor } from "../supervisor/supervisor.ts"
 import { startDashboard } from "../dashboard/server.ts"
+import { discoverChatId, TelegramBridge, telegramConfig } from "../supervisor/telegram.ts"
 import type { Level } from "../schema/interrupts.ts"
 
 export class OperatorError extends Error {}
@@ -101,9 +102,16 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
       await sup.boot()
       sup.start()
       const dash = startDashboard({ root: dir, config: () => loadConfig(dir), store: sup.store, now: () => Date.now(), supervisor: sup, saveConfig: (c, m) => saveConfig(dir, c, m) }, Number(process.env["HOLDCO_DASHBOARD_PORT"] ?? args.flag("dashboard-port") ?? 7117))
-      console.log(`supervising ${config.company.name}; tick ${config.runtime.tick}; tools on 127.0.0.1:${sup.tools.port}\ndashboard: ${dash.url}`)
+      const tg = telegramConfig(config, process.env)
+      const bridge = tg ? new TelegramBridge({ ctx: { root: dir, config: () => loadConfig(dir), store: sup.store, now: () => Date.now(), supervisor: sup, saveConfig: (c, m) => saveConfig(dir, c, m) }, token: tg.token, chatId: tg.chatId, log: (l) => console.error(l) }) : undefined
+      if (bridge) {
+        void bridge.start()
+        setInterval(() => void bridge.announce(), 15_000)
+      }
+      console.log(`supervising ${config.company.name}; tick ${config.runtime.tick}; tools on 127.0.0.1:${sup.tools.port}\ndashboard: ${dash.url}${bridge ? "\ntelegram: listening for the Operator's commands" : ""}`)
       const stop = async () => {
         console.log("stopping…")
+        bridge?.stop()
         dash.close()
         await sup.stop()
         try {
@@ -187,6 +195,34 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
       console.log(`dashboard: ${dash.url}\n(the link carries your Operator token; on a server, forward the port over SSH: ssh -L ${dash.port}:127.0.0.1:${dash.port} <host>)`)
       if (args.has("open")) spawnSync(process.platform === "darwin" ? "open" : "xdg-open", [dash.url], { stdio: "ignore" })
       await new Promise(() => {})
+      return true
+    }
+    case "telegram": {
+      // `holdco telegram setup` pairs the bot with your chat; `holdco telegram` runs the bridge without the supervisor.
+      const config = loadConfig(dir)
+      const tokenEnv = (config.alerts.channels.find((c) => c.type === "telegram") as { bot_token_env?: string } | undefined)?.bot_token_env ?? "TELEGRAM_BOT_TOKEN"
+      const token = process.env[tokenEnv]
+      if (!token) throw new OperatorError(`${tokenEnv} is not set. Create a bot with @BotFather, put its token in the env file as ${tokenEnv}, then run holdco telegram setup`)
+      if (sub === "setup") {
+        console.log(`Open Telegram, find your bot, and send it any message (waiting up to 2 minutes)…`)
+        const found = await discoverChatId(token)
+        if (!found) throw new OperatorError("no message arrived; send the bot a message and run setup again")
+        const channels = config.alerts.channels.some((c) => c.type === "telegram")
+          ? config.alerts.channels.map((c) => (c.type === "telegram" ? { ...c, chat_id: found.chatId } : c))
+          : [{ type: "telegram" as const, bot_token_env: tokenEnv, chat_id: found.chatId }, ...config.alerts.channels]
+        saveConfig(dir, { ...config, alerts: { ...config.alerts, channels } }, `telegram: paired with chat ${found.chatId}`)
+        const bridge = new TelegramBridge({ ctx: { root: dir, config: () => loadConfig(dir), store: Store.open(dir), now: () => Date.now(), saveConfig: (c, m) => saveConfig(dir, c, m) }, token, chatId: found.chatId })
+        await bridge.send(`Paired with ${config.company.name}. Send /help for commands; decisions arrive here with buttons.`)
+        console.log(`paired with ${found.name} (chat ${found.chatId}); company.yaml committed. The supervisor serves Telegram from now on.`)
+        return true
+      }
+      const tg = telegramConfig(config, process.env)
+      if (!tg) throw new OperatorError("no Telegram channel with a chat_id; run holdco telegram setup")
+      const store = Store.open(dir)
+      const bridge = new TelegramBridge({ ctx: { root: dir, config: () => loadConfig(dir), store, now: () => Date.now(), saveConfig: (c, m) => saveConfig(dir, c, m) }, token: tg.token, chatId: tg.chatId, log: (l) => console.error(l) })
+      setInterval(() => void bridge.announce(), 15_000)
+      console.log("telegram bridge running (no supervisor in this process); Ctrl-C to stop")
+      await bridge.start()
       return true
     }
     case "status": {
