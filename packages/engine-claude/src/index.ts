@@ -3,7 +3,7 @@
  * Live runs need ANTHROPIC_API_KEY (or the engine's configured auth_env) and are exercised by the
  * M3 smoke test; the option mapping and result mapping are unit-tested here.
  */
-import { query, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk"
+import { query, type SDKMessage, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk"
 import { spawnSync } from "node:child_process"
 import { existsSync, readFileSync } from "node:fs"
 import type { Engine, EngineCapabilities, Outcome, ProbeContext, ProbeResult, SessionEvent, SessionSpec } from "@holdco/kernel/engine"
@@ -33,12 +33,14 @@ const run = async (spec: SessionSpec, onEvent: (e: SessionEvent) => void, signal
   let sessionId: string | undefined
   let result: SDKResultMessage | undefined
   try {
+    const pending = new Map<string, { name: string; input: unknown }>() // tool_use id → call, until its result arrives
     for await (const msg of query({ prompt: spec.prompt, options: toClaudeOptions(spec, controller, onEvent) })) {
       onEvent({ kind: "activity" })
       if (sessionId === undefined && "session_id" in msg && typeof msg.session_id === "string") {
         sessionId = msg.session_id
         onEvent({ kind: "started", engineSessionId: sessionId })
       }
+      if (msg.type === "assistant" || msg.type === "user") for (const e of translate(msg, pending)) onEvent(e)
       if (msg.type === "result") result = msg
     }
   } catch (e) {
@@ -48,6 +50,38 @@ const run = async (spec: SessionSpec, onEvent: (e: SessionEvent) => void, signal
   }
   if (result === undefined) return signal.aborted ? aborted(sessionId) : { status: "error", finalText: "", costUsd: 0, costSource: "engine", turns: 0, error: "no result message" }
   return fromResult(result, sessionId)
+}
+
+const clip = (v: unknown, n = 400): string => { const t = typeof v === "string" ? v : JSON.stringify(v) ?? ""; return t.length > n ? `${t.slice(0, n)}…` : t }
+const FILE_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"])
+
+/**
+ * SDK messages → SessionEvents for the live feed and the tripwires: a `tool_use` block is remembered
+ * until its `tool_result` says whether it worked; Bash becomes `command`, file tools `file_change`,
+ * everything else `tool` (MCP tools keep their `mcp__server__name` id). Text blocks become `message`.
+ */
+const translate = (msg: SDKMessage, pending: Map<string, { name: string; input: unknown }>): Array<SessionEvent> => {
+  const out: Array<SessionEvent> = []
+  const content = msg.type === "assistant" || msg.type === "user" ? msg.message.content : undefined
+  if (!Array.isArray(content)) return out
+  for (const block of content as unknown as Array<Record<string, unknown>>) {
+    if (msg.type === "assistant" && block["type"] === "text" && typeof block["text"] === "string" && block["text"].trim()) out.push({ kind: "message", text: clip(block["text"], 1200) })
+    if (msg.type === "assistant" && block["type"] === "tool_use" && typeof block["id"] === "string" && typeof block["name"] === "string") {
+      pending.set(block["id"], { name: block["name"], input: block["input"] })
+      const input = (block["input"] ?? {}) as Record<string, unknown>
+      if (FILE_TOOLS.has(block["name"]) && typeof input["file_path"] === "string") out.push({ kind: "file_change", paths: [input["file_path"]] })
+    }
+    if (msg.type === "user" && block["type"] === "tool_result" && typeof block["tool_use_id"] === "string") {
+      const call = pending.get(block["tool_use_id"])
+      pending.delete(block["tool_use_id"])
+      if (!call) continue
+      const ok = block["is_error"] !== true
+      const input = (call.input ?? {}) as Record<string, unknown>
+      if (call.name === "Bash") out.push({ kind: "command", command: clip(input["command"] ?? "", 300), exitCode: ok ? 0 : 1 })
+      else out.push({ kind: "tool", name: call.name, ok, detail: clip(typeof input["file_path"] === "string" ? input["file_path"] : typeof input["pattern"] === "string" ? input["pattern"] : typeof input["query"] === "string" ? input["query"] : input, 160) })
+    }
+  }
+  return out
 }
 
 /** `claude auth status` with the environment a session would get: subscription login (OAuth) or key. */

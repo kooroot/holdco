@@ -8,6 +8,7 @@ import { Schema } from "effect"
 import { CompanyConfig } from "../src/config/company.ts"
 import { renderCompanyYaml, scaffold } from "../src/scaffold/scaffold.ts"
 import { Store } from "../src/store/store.ts"
+import { appendSessionEvent } from "../src/supervisor/journal.ts"
 import { dashboardToken, startDashboard, type DashboardServer } from "../src/dashboard/server.ts"
 import { readControl } from "../src/supervisor/control.ts"
 
@@ -154,6 +155,22 @@ describe("dashboard", () => {
     const state = (await call("/api/state")).body
     expect(state.activity[0].ticket_id).toBe(t.id)
     expect(state.org.departments.map((x: any) => x.id)).toEqual(["engineering"])
+  })
+  test("a session's journal is served as the live feed, incrementally, with the session's status", async () => {
+    appendSessionEvent(dir, "s1", { kind: "started", engineSessionId: "abc" }, now)
+    appendSessionEvent(dir, "s1", { kind: "command", command: "bun test", exitCode: 0 }, now + 1000)
+    appendSessionEvent(dir, "s1", { kind: "message", text: "Tests pass; writing the doc." }, now + 2000)
+    appendSessionEvent(dir, "s1", { kind: "tool", name: "Read", ok: true, detail: "src/fee.ts" }, now + 3000)
+    appendSessionEvent(dir, "s1", { kind: "blocked", reason: "governance/x.md" }, now + 4000)
+    const all = await call("/api/session/s1/events")
+    expect(all.status).toBe(200)
+    expect(all.body.running).toBe(false) // s1 ended in the fixture; the feed stays readable afterwards
+    expect(all.body.status).toBe("success")
+    expect(all.body.events.map((e: any) => [e.i, e.kind, e.text, e.ok])).toEqual([[0, "started", "session abc", undefined], [1, "command", "bun test", true], [2, "message", "Tests pass; writing the doc.", undefined], [3, "tool", "Read src/fee.ts", true], [4, "blocked", "governance/x.md", false]])
+    const tail = await call("/api/session/s1/events?after=2")
+    expect(tail.body.events.map((e: any) => e.i)).toEqual([3, 4])
+    expect((await call("/api/session/nope/events")).status).toBe(400)
+    expect((await call("/api/session/..%2Fx/events")).status).toBe(400)
   })
   test("files of a branch are listed and read; markdown is served as text", async () => {
     const f = await call("/api/ticket/ENG-1/files")

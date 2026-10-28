@@ -83,7 +83,9 @@ export interface SessionSpec {
 export type SessionEvent =
   | { readonly kind: "started"; readonly engineSessionId: string }
   | { readonly kind: "activity" }
-  | { readonly kind: "tool"; readonly name: string; readonly ok: boolean }
+  /** The agent said something (a text block); `text` is what the Operator sees in the live feed, truncated by the adapter. */
+  | { readonly kind: "message"; readonly text: string }
+  | { readonly kind: "tool"; readonly name: string; readonly ok: boolean; readonly detail?: string }
   | { readonly kind: "command"; readonly command: string; readonly exitCode: number | null }
   | { readonly kind: "file_change"; readonly paths: ReadonlyArray<string> }
   | { readonly kind: "blocked"; readonly reason: string }

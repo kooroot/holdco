@@ -3,6 +3,7 @@
  * full record with its diff, the blind audit sample, and the actions the Operator may take. Every
  * action here is the same operation the CLI performs; the dashboard is a second front for it.
  */
+import { readSessionEvents } from "../supervisor/journal.ts"
 import { spawnSync } from "node:child_process"
 import { existsSync, readFileSync, writeFileSync } from "node:fs"
 import * as NodePath from "node:path"
@@ -185,6 +186,14 @@ export const snapshot = (ctx: DashboardContext) => {
 }
 
 /** Files a branch changed versus its base, and one file's content at the branch head (the deliverables viewer). */
+/** The live feed: the session's journal after line `after`, with its current status from the store. */
+export const sessionEvents = (ctx: DashboardContext, id: string, after: number) => {
+  if (!/^[A-Za-z0-9_-]+$/.test(id)) throw new ActionError("not a session id")
+  const row = ctx.store.session(id)
+  if (!row) throw new ActionError(`no session ${id}`)
+  return { session_id: id, running: row.ended_at === null, status: row.status ?? null, cost_usd: row.cost_usd, events: readSessionEvents(ctx.root, id, after) }
+}
+
 export const ticketFiles = (ctx: DashboardContext, id: string): { base: string; files: Array<{ path: string; status: string }> } => {
   const t = ctx.store.ticket(id)
   if (!t?.branch) return { base: "", files: [] }

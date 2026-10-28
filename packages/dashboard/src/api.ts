@@ -31,6 +31,7 @@ export const api = {
   ticket: (id: string, blind = false) => run(client.dashboard.ticket({ params: { id }, query: blind ? { blind: "1" } : {} })),
   files: (id: string) => run(client.dashboard.files({ params: { id } })),
   file: (id: string, path: string) => run(client.dashboard.file({ params: { id }, query: { path } })),
+  events: (id: string, after: number) => run(client.dashboard.events({ params: { id }, query: after >= 0 ? { after: String(after) } : {} })),
   act: (a: Action) => run(client.dashboard.act({ payload: a })),
 }
 export type { Action, Snapshot, TicketDetail } from "@holdco/kernel/dashboard"

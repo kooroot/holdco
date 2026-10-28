@@ -20,6 +20,7 @@ import { demotionDue, graduationCheck } from "../policy/graduation.ts"
 import { evaluateGuard } from "../hooks/guard.ts"
 import { evaluateInterrupts } from "../hooks/interrupts.ts"
 import type { Engine, Outcome, RoleDefinition, SessionEvent, SessionSpec } from "../engine/types.ts"
+import { appendSessionEvent } from "./journal.ts"
 import type { Interrupt } from "../schema/interrupts.ts"
 import { Brief } from "../protocol/brief.ts"
 import { Return } from "../protocol/return.ts"
@@ -1185,6 +1186,7 @@ export class Supervisor {
   }
 
   private onEvent(r: Running, e: SessionEvent) {
+    if (e.kind !== "activity") appendSessionEvent(this.root, r.sessionId, e, this.now())
     const t = this.store.ticket(r.ticketId)
     if (t?.lease_holder === r.sessionId) this.store.renewLease(t.id, r.sessionId, durationMs(this.config.runtime.session_timeout) + durationMs(this.config.runtime.lease_grace), this.now())
     if (e.kind === "tool" && !e.ok) {

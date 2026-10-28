@@ -1,5 +1,5 @@
 /** One ticket in full, as a right-hand drawer: overview, files, diff, notes, and the blocked decision. */
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { style, vars } from "../../zyzz.config.ts"
 import { ago, clock, STATE_LABEL, usd } from "../format.ts"
 import { toast, useAct, useSnapshot, useTicket } from "../hooks.ts"
@@ -7,6 +7,7 @@ import { useNewTicket } from "../nav.ts"
 import { cn, Button, Card, Code, Kv, Pill, Tabs, Td, VerdictPill, ui } from "../ui.tsx"
 import { Diff } from "./Diff.tsx"
 import { Files } from "./Files.tsx"
+import { Live } from "./Live.tsx"
 
 const st = {
   scrim: style({ position: "fixed", inset: "0 !custom", backgroundColor: "rgba(0,0,0,.25) !custom", zIndex: 39 }),
@@ -25,7 +26,8 @@ export const Drawer = ({ id, onClose }: { id: string; onClose: () => void }) => 
   const snap = useSnapshot()
   const act = useAct()
   const setNew = useNewTicket()
-  const [tab, setTab] = useState<"overview" | "files" | "diff">("overview")
+  const [tab, setTab] = useState<"overview" | "live" | "files" | "diff">(sessionStorage.getItem("holdco.tab") === "live" ? "live" : "overview")
+  useEffect(() => { sessionStorage.removeItem("holdco.tab") }, [])
   const [note, setNote] = useState("")
   const [decision, setDecision] = useState("")
   const d = q.data
@@ -46,7 +48,7 @@ export const Drawer = ({ id, onClose }: { id: string; onClose: () => void }) => 
         <div {...st.dc()}>
           {q.isError ? <p {...ui.muted()}>{q.error.message}</p> : !d || !t ? <p {...ui.muted()}>Loading…</p> : (
             <>
-              <Tabs tabs={[["overview", "Overview"], ["files", "Files"], ["diff", "Diff"]]} value={tab} onChange={setTab} right={canEdit ? <Button sm onClick={() => { snap.data; setNew(true); sessionStorage.setItem("holdco.edit", id) }}>Edit</Button> : null} />
+              <Tabs tabs={[["overview", "Overview"], ["live", d.sessions.some((x) => x.ended_at === null) ? "Live ●" : "Log"], ["files", "Files"], ["diff", "Diff"]]} value={tab} onChange={setTab} right={canEdit ? <Button sm onClick={() => { snap.data; setNew(true); sessionStorage.setItem("holdco.edit", id) }}>Edit</Button> : null} />
               {tab === "overview" ? (
                 <div {...ui.stack()}>
                   <Kv rows={[["Goal", t.goal], ["Why", t.why], ["Done when", <ul {...ui.criteria()}>{t.done_criteria.map((c) => <li key={c}>{c}</li>)}</ul>], ...(t.branch ? [["Branch", <Code>{t.branch}</Code>] as [string, React.ReactNode]] : []), ["Cost", `${usd(d.cost)} across ${d.sessions.length} session${d.sessions.length === 1 ? "" : "s"}`], ["Attempts", String(t.attempts)]]} />
@@ -70,7 +72,7 @@ export const Drawer = ({ id, onClose }: { id: string; onClose: () => void }) => 
                     <div {...ui.row()} style={{ marginTop: 8 }}><input {...ui.input()} style={{ flex: 1 }} value={note} onChange={(e) => setNote(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") (e.currentTarget.nextSibling as HTMLButtonElement)?.click() }} placeholder="Tell the senior or the judge something; the next session on this ticket reads it" /><Button tone="primary" sm onClick={() => { const body = note.trim(); if (!body) return; void act({ kind: "comment", id, body }, (r) => `Note saved; it reaches ${String(r["reaches"])}`).then((r) => { if (r) { setNote(""); void q.refetch() } }) }}>Add note</Button></div>
                   </div>
                 </div>
-              ) : tab === "files" ? <Files id={id} stacked /> : d.diff ? <div><h3 {...ui.h3()} style={{ marginBottom: 8 }}>Diff vs {d.diff.base}</h3><Diff diff={d.diff} /></div> : <div {...cn(ui.muted(), ui.small())}>No branch yet.</div>}
+              ) : tab === "live" ? <Live sessions={d.sessions} now={snap.data?.now ?? Date.now()} /> : tab === "files" ? <Files id={id} stacked /> : d.diff ? <div><h3 {...ui.h3()} style={{ marginBottom: 8 }}>Diff vs {d.diff.base}</h3><Diff diff={d.diff} /></div> : <div {...cn(ui.muted(), ui.small())}>No branch yet.</div>}
             </>
           )}
         </div>

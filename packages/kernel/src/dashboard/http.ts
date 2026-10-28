@@ -6,7 +6,7 @@
 import { Effect, FileSystem, Layer, Path } from "effect"
 import { HttpApiBuilder } from "effect/http-api"
 import { Etag, HttpPlatform, HttpRouter } from "effect/http"
-import { act, ActionError, auditSample, type DashboardContext, snapshot, ticketDetail, ticketFile, ticketFiles } from "./api.ts"
+import { act, ActionError, auditSample, type DashboardContext, sessionEvents, snapshot, ticketDetail, ticketFile, ticketFiles } from "./api.ts"
 import { DashboardApi } from "./contract.ts"
 import { DashboardError } from "./schema.ts"
 
@@ -21,6 +21,7 @@ export const handlersLayer = (ctx: DashboardContext) =>
       .handle("ticket", ({ params, query }) => attempt(() => ticketDetail(ctx, params.id, { blind: query.blind === "1" })))
       .handle("files", ({ params }) => attempt(() => ticketFiles(ctx, params.id)))
       .handle("file", ({ params, query }) => attempt(() => ticketFile(ctx, params.id, query.path)))
+      .handle("events", ({ params, query }) => attempt(() => sessionEvents(ctx, params.id, Number(query.after ?? -1))))
       .handle("audit", () => Effect.sync(() => ({ sample: auditSample(ctx).map((t) => t.id) })))
       .handle("act", ({ payload }) => attempt(() => act(ctx, payload))),
   )

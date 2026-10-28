@@ -19,7 +19,7 @@ const st = {
   sect: style({ padding: "12px 14px 6px !custom" }),
 }
 
-const TicketLink = ({ id }: { id: string }) => { const open = useOpenTicket(); return /^(CEO|COO|IMPROVEMENT)-/.test(id) ? <Code>{id}</Code> : <a href="#" {...ui.link()} onClick={(e) => { e.preventDefault(); open(id) }}><Code>{id}</Code></a> }
+const TicketLink = ({ id, live }: { id: string; live?: boolean }) => { const open = useOpenTicket(); return /^(CEO|COO|IMPROVEMENT)-/.test(id) ? <Code>{id}</Code> : <a href="#" {...ui.link()} onClick={(e) => { e.preventDefault(); if (live) sessionStorage.setItem("holdco.tab", "live"); open(id) }}><Code>{id}</Code></a> }
 
 export const Home = () => {
   const q = useSnapshot()
@@ -48,7 +48,7 @@ export const Home = () => {
           </Card>
           <div {...ui.stack()}>
             <Card><div {...st.sect()}><h3 {...ui.h3()}>Running now</h3></div>
-              {S.running.length ? <table {...ui.table()}><tbody>{S.running.map((r) => <tr key={r.id}><Td><Code>{r.role}</Code><div {...cn(ui.small(), ui.muted())}>{r.engine}:{r.model}</div></Td><Td><TicketLink id={r.ticket_id} /></Td><Td className={cn(ui.small(), ui.muted(), ui.num()).className}>{ago(S.now - r.started_at)}</Td></tr>)}</tbody></table> : <Empty>{S.supervisor.alive ? "Idle. Sessions start as tickets become ready." : "Supervisor not running — start it with holdco supervise."}</Empty>}
+              {S.running.length ? <table {...ui.table()}><tbody>{S.running.map((r) => <tr key={r.id}><Td><Code>{r.role}</Code><div {...cn(ui.small(), ui.muted())}>{r.engine}:{r.model}</div></Td><Td><TicketLink id={r.ticket_id} live /></Td><Td className={cn(ui.small(), ui.muted(), ui.num()).className}>{ago(S.now - r.started_at)} <span {...ui.muted()}>· watch</span></Td></tr>)}</tbody></table> : <Empty>{S.supervisor.alive ? "Idle. Sessions start as tickets become ready." : "Supervisor not running — start it with holdco supervise."}</Empty>}
             </Card>
             <Card><div {...st.sect()}><h3 {...ui.h3()}>Finished in the last 24h</h3></div>
               {S.done_24h.length ? <table {...ui.table()}><tbody>{S.done_24h.map((t) => <tr key={t.id}><Td><TicketLink id={t.id} /></Td><Td>{t.title}</Td><Td className={cn(ui.small(), ui.muted()).className}>{t.department}</Td><Td className={cn(ui.num(), ui.small()).className}>{usd(t.cost)}</Td></tr>)}</tbody></table> : <Empty>Nothing finished in the last day.</Empty>}

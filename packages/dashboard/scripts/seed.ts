@@ -1,5 +1,7 @@
 // Dev fixture: a company with a week of activity, served by the dashboard API. `bun scripts/seed.ts` then `bun run dev`.
 // Seed a richer company for screenshots, start the dashboard, print the URL.
+import { appendSessionEvent } from "../../kernel/src/supervisor/journal.ts"
+import type { SessionEvent } from "../../kernel/src/engine/types.ts"
 import { spawnSync } from "node:child_process"
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import * as NodePath from "node:path"
@@ -50,6 +52,23 @@ const roles = [["engineering-senior","senior","claude","opus",0.62,6],["verifica
 let n = 0
 for (let d = 0; d < 12; d++) for (const [role, kind, engine, model, cost, turns] of roles) { if (Math.random() < 0.4) continue; const id = `s-${d}-${n++}`; const at = now - d * 24 * H - Math.random() * 20 * H; store.startSession({ id, ticket_id: t1.id, parent_session: null, role, kind, department: kind === "verification" ? "verification" : kind === "ceo" || kind === "coo" ? "executive" : "engineering", engine, model, worktree: null, started_at: at, boot_id: "b", release: "r0" }); const c = cost * (0.6 + Math.random()); store.endSession(id, { ended_at: at + 600_000, status: "success", turns, cost_usd: c, cost_source: engine === "codex" ? "price_table" : "engine", report: { ok: true } }); store.charge({ at: at + 600_000, role, department: kind === "verification" ? "verification" : kind === "ceo" || kind === "coo" ? "executive" : "engineering", project: "mapae", session_id: id, usd: c, source: "engine" }) }
 store.startSession({ id: "s-live", ticket_id: t1.id, parent_session: null, role: "engineering-senior", kind: "senior", department: "engineering", engine: "claude", model: "opus", worktree: null, started_at: now - 7 * 60_000, boot_id: "b", release: "r0" })
+// a journal that keeps growing, so the Live tab has something to follow
+const script: Array<SessionEvent> = [
+  { kind: "started", engineSessionId: "7f3a-seed" },
+  { kind: "message", text: "Reading the ticket and the fee module before changing anything." },
+  { kind: "tool", name: "Read", ok: true, detail: "packages/seller/src/index.ts" },
+  { kind: "tool", name: "Grep", ok: true, detail: "fee\\(" },
+  { kind: "command", command: "bun test packages/seller", exitCode: 1 },
+  { kind: "message", text: "One test fails on rounding: 97.499 → 97.5 expected. The fee is applied before rounding; moving the rounding to the end." },
+  { kind: "file_change", paths: ["packages/seller/src/index.ts"] },
+  { kind: "command", command: "bun test packages/seller", exitCode: 0 },
+  { kind: "tool", name: "mcp__holdco__ticket_note", ok: true, detail: "rounding moved to settle()" },
+  { kind: "tool", name: "Read", ok: false, detail: "governance/strategy.md" },
+  { kind: "message", text: "Tests pass. Writing the summary and handing over to Verification." },
+]
+let k = 0
+const tick = () => { if (k < script.length) { appendSessionEvent(dir, "s-live", script[k] as SessionEvent, Date.now()); k++; setTimeout(tick, k < 4 ? 400 : 2500) } }
+tick()
 store.recordAudit(now - 9 * 24 * H, 10)
 spawnSync("git", ["tag", "-a", "rc-1", "-m", "candidate"], { cwd: dir })
 store.addRelease("rc-1", now - 20 * H, now + 52 * H, "IMP-4: tighter delegation brief for seniors", "candidate")
