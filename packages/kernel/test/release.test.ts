@@ -339,7 +339,9 @@ describe("candidate releases, canary and promotion (D53)", () => {
     const item = store.inboxOpen().find((i) => i.kind === "candidate_withdrawn")!
     expect(item.urgency).toBe("urgent")
     expect(sent.some((s) => s.startsWith("critical: candidate rc-1 withdrawn"))).toBe(true)
-    // the next release number is not reused
+    // the next release number is not reused, and a candidate tag is never mistaken for the release
+    const { latestReleaseTag } = await import("../src/supervisor/org.ts")
+    expect(latestReleaseTag(c.dir)).toBe("r0")
     expect(sup.release("manual", clock.now)).toBe("r2")
     await sup.stop()
   })

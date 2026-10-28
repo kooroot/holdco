@@ -18,6 +18,7 @@ import { undoAction } from "../supervisor/executors.ts"
 import { liveNotifier } from "../supervisor/notify.ts"
 import { latestReleaseTag } from "../supervisor/org.ts"
 import { Supervisor } from "../supervisor/supervisor.ts"
+import { startDashboard } from "../dashboard/server.ts"
 import type { Level } from "../schema/interrupts.ts"
 
 export class OperatorError extends Error {}
@@ -99,9 +100,11 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
       writeFileSync(lock, String(process.pid), { mode: 0o600 })
       await sup.boot()
       sup.start()
-      console.log(`supervising ${config.company.name}; tick ${config.runtime.tick}; tools on 127.0.0.1:${sup.tools.port}`)
+      const dash = startDashboard({ root: dir, config: () => loadConfig(dir), store: sup.store, now: () => Date.now(), supervisor: sup, saveConfig: (c, m) => saveConfig(dir, c, m) }, Number(process.env["HOLDCO_DASHBOARD_PORT"] ?? args.flag("dashboard-port") ?? 7117))
+      console.log(`supervising ${config.company.name}; tick ${config.runtime.tick}; tools on 127.0.0.1:${sup.tools.port}\ndashboard: ${dash.url}`)
       const stop = async () => {
         console.log("stopping…")
+        dash.close()
         await sup.stop()
         try {
           unlinkSync(lock)
@@ -175,6 +178,15 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
       console.log(ok ? "\nsmoke: ok — the company works on this machine. Next: holdco service install, then open real tickets." : "\nsmoke: not done — read the events above; session reports are in .holdco/sessions/<id>/")
       store.close()
       if (!ok) throw new OperatorError("smoke test did not reach done")
+      return true
+    }
+    case "dashboard": {
+      // Standalone: works while the supervisor runs in another process (shared SQLite) or not at all.
+      const store = Store.open(dir)
+      const dash = startDashboard({ root: dir, config: () => loadConfig(dir), store, now: () => Date.now(), saveConfig: (c, m) => saveConfig(dir, c, m) }, Number(args.flag("port") ?? 7118))
+      console.log(`dashboard: ${dash.url}\n(the link carries your Operator token; on a server, forward the port over SSH: ssh -L ${dash.port}:127.0.0.1:${dash.port} <host>)`)
+      if (args.has("open")) spawnSync(process.platform === "darwin" ? "open" : "xdg-open", [dash.url], { stdio: "ignore" })
+      await new Promise(() => {})
       return true
     }
     case "status": {

@@ -42,6 +42,8 @@ Before anything runs unattended, let the company do one small thing with real mo
 bunx holdco supervise                    # foreground; put it under systemd/launchd for 24/7
 ```
 
+The supervisor also serves your **dashboard** on `127.0.0.1:7117` and prints its link (the link carries your Operator token, read from `.holdco/`, which agents cannot see). Without a running supervisor, `bunx holdco dashboard --open` serves it alone. Seven views: Inbox (approve or reject with the deadline in sight; `j`/`k`, `a`/`r`), Tickets (board with a drawer per ticket: timeline, sessions, verdict, diff), Audit (the weekly blind sample: diff and criteria first, the judge's verdict only after you grade), Quality (agreement per action type, promotion when eligible), Releases (the candidate under watch, promote or withdraw, action log with rollback), Sessions & spend, Controls (interrupts). On a server, forward the port: `ssh -L 7117:127.0.0.1:7117 <host>`.
+
 The supervisor is LLM-free. Every `runtime.tick` it: pings the heartbeat, applies interrupts, reaps dead sessions, classifies verified work, routes approvals, expires unanswered inbox items, runs the scheduled jobs (CEO cycle, COO reviews, tripwires, audit watch, graduation proposals, Improvement cycle, digest, release), and dispatches sessions (Verification first, then executives, then production) within budget shares and slots. Sessions run on the engine and model `company.yaml:roles` names for each role.
 
 ### 4. Give it work
@@ -107,7 +109,7 @@ An action with no entry reaches your inbox as a "manual action" item with the br
 
 ### 3. 돌리기
 
-`bunx holdco supervise`. 24/7이면 systemd/launchd 아래에 둡니다. 슈퍼바이저에는 LLM이 없습니다. 매 틱마다 하트비트, 인터럽트 적용, 죽은 세션 회수, 검증된 작업 분류, 승인 경로, 인박스 시한 만료, 예약 작업(CEO 주기, COO 검토, 트립와이어, 감사 감시, 승격 제안, 개선 주기, 다이제스트, 릴리스), 그리고 예산 몫과 슬롯 안에서의 세션 배분(검증 → 경영진 → 생산 순)을 수행합니다. 세션은 `company.yaml:roles`가 역할마다 지정한 엔진과 모델로 돕니다.
+`bunx holdco supervise`. 슈퍼바이저가 **대시보드**를 `127.0.0.1:7117`에 함께 띄우고 링크를 출력합니다(링크에 운영자 토큰이 들어 있고, 토큰은 에이전트가 못 읽는 `.holdco/`에 있음). 슈퍼바이저 없이도 `bunx holdco dashboard --open`으로 볼 수 있습니다. 화면 일곱 개: 인박스(시한을 보며 승인·거절, `j`/`k`, `a`/`r`), 티켓 보드(티켓마다 타임라인·세션·판정·diff 서랍), 감사(주간 블라인드 샘플 — diff와 기준을 먼저 보고 채점하면 그때 심판 판정이 열림), 품질(행동 유형별 일치율, 조건 충족 시 승격), 릴리스(감시 중인 후보, 승격·철회, 롤백 가능한 행동 로그), 세션·지출, 제어(인터럽트). 서버에서는 `ssh -L 7117:127.0.0.1:7117 <host>`로 포트를 연결합니다. 24/7이면 systemd/launchd 아래에 둡니다. 슈퍼바이저에는 LLM이 없습니다. 매 틱마다 하트비트, 인터럽트 적용, 죽은 세션 회수, 검증된 작업 분류, 승인 경로, 인박스 시한 만료, 예약 작업(CEO 주기, COO 검토, 트립와이어, 감사 감시, 승격 제안, 개선 주기, 다이제스트, 릴리스), 그리고 예산 몫과 슬롯 안에서의 세션 배분(검증 → 경영진 → 생산 순)을 수행합니다. 세션은 `company.yaml:roles`가 역할마다 지정한 엔진과 모델로 돕니다.
 
 ### 4. 일 주기
 

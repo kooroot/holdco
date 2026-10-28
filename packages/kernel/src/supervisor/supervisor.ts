@@ -249,7 +249,7 @@ export class Supervisor {
   /** L4 is one-shot (D26): restore org files from the previous release, tag, clear the entry. */
   private executeL4(it: Interrupt, now: number) {
     if (this.candidate) this.withdrawCandidate(`L4: ${it.reason ?? ""}`, now)
-    const tags = spawnSync("git", ["tag", "--list", "r*", "--sort=-creatordate"], { cwd: this.root, encoding: "utf8" }).stdout.split("\n").filter((s) => s.trim())
+    const tags = spawnSync("git", ["tag", "--list", "r*", "--sort=-creatordate"], { cwd: this.root, encoding: "utf8" }).stdout.split("\n").map((s) => s.trim()).filter((s) => /^r\d+$/.test(s))
     const previous = tags[1]
     if (previous) {
       spawnSync("git", ["checkout", previous, "--", "org", "protocols", "improvement"], { cwd: this.root })

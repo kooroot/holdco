@@ -1,0 +1,610 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Holdco</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:ital,wght@0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a left rail of seven views, a content column, and a right drawer for one ticket. The inbox is the front door. */
+:root {
+  --bg: #f4f5f2; --surface: #ffffff; --surface-2: #eceeea; --ink: #15181c; --muted: #667085; --line: #dfe3dd; --line-strong: #c7ccc4;
+  --signal: #b2500f; --signal-soft: #fbe9dc; --ok: #1d7a5f; --ok-soft: #dcf2ea; --bad: #b42318; --bad-soft: #fde3e1;
+  --kernel: #3a4ead; --kernel-soft: #e4e8fa; --warn: #9a6700; --warn-soft: #fff1cc; --focus: #3a4ead;
+  --diff-add: #e6f4ea; --diff-del: #fbe8e6; --diff-add-ink: #0f5132; --diff-del-ink: #7a1f17;
+  --ui: "Instrument Sans", "Helvetica Neue", Arial, sans-serif; --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --rail: 232px; --drawer: 560px; --radius: 8px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #121417; --surface: #1a1d21; --surface-2: #22262b; --ink: #e7e9e6; --muted: #9aa3ad; --line: #2a2f36; --line-strong: #3a414a;
+  --signal: #e58a3c; --signal-soft: #3a2614; --ok: #4cc39a; --ok-soft: #14332a; --bad: #f07070; --bad-soft: #3b1a1a;
+  --kernel: #93a4ff; --kernel-soft: #232a4a; --warn: #e2b93b; --warn-soft: #3a2f10; --focus: #93a4ff;
+  --diff-add: #15301f; --diff-del: #3a1d1a; --diff-add-ink: #9be2b4; --diff-del-ink: #f3a9a2;
+  color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #121417; --surface: #1a1d21; --surface-2: #22262b; --ink: #e7e9e6; --muted: #9aa3ad; --line: #2a2f36; --line-strong: #3a414a;
+  --signal: #e58a3c; --signal-soft: #3a2614; --ok: #4cc39a; --ok-soft: #14332a; --bad: #f07070; --bad-soft: #3b1a1a;
+  --kernel: #93a4ff; --kernel-soft: #232a4a; --warn: #e2b93b; --warn-soft: #3a2f10; --focus: #93a4ff;
+  --diff-add: #15301f; --diff-del: #3a1d1a; --diff-add-ink: #9be2b4; --diff-del-ink: #f3a9a2;
+  color-scheme: dark; }
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--ui); font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
+a { color: inherit; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+code, .mono { font-family: var(--mono); font-size: 12.5px; }
+.num { font-variant-numeric: tabular-nums; }
+h1, h2, h3 { margin: 0; font-weight: 600; letter-spacing: -0.01em; }
+h1 { font-size: 20px; } h2 { font-size: 16px; } h3 { font-size: 14px; }
+p { margin: 0; }
+.muted { color: var(--muted); }
+.small { font-size: 12.5px; }
+
+/* frame */
+.app { display: grid; grid-template-columns: var(--rail) 1fr; min-height: 100%; }
+.rail { position: sticky; top: 0; height: 100vh; border-right: 1px solid var(--line); background: var(--surface); display: flex; flex-direction: column; padding: 18px 12px; gap: 6px; }
+.brand { display: flex; align-items: baseline; gap: 10px; padding: 4px 10px 14px; }
+.brand h1 { font-size: 17px; }
+.brand .rel { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.nav a { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; border-radius: 6px; text-decoration: none; color: var(--ink); }
+.nav a:hover { background: var(--surface-2); }
+.nav a.active { background: var(--kernel-soft); color: var(--kernel); font-weight: 500; }
+.nav .count { font-family: var(--mono); font-size: 11.5px; padding: 1px 7px; border-radius: 999px; background: var(--surface-2); color: var(--muted); }
+.nav .count.hot { background: var(--signal); color: #fff; }
+.nav .count.zero { display: none; }
+.rail .foot { margin-top: auto; padding: 10px; display: grid; gap: 8px; }
+.status { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+.dot.on { background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft); }
+.dot.off { background: var(--bad); }
+.dot.hold { background: var(--warn); }
+main { padding: 26px 32px 60px; max-width: 1240px; width: 100%; min-width: 0; }
+.view { display: none; }
+.view.active { display: block; }
+.head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 18px; flex-wrap: wrap; }
+.head p { max-width: 64ch; }
+.toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+/* primitives */
+.btn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); font-weight: 500; line-height: 1.3; }
+.btn:hover { background: var(--surface-2); }
+.btn:disabled { opacity: .5; cursor: default; }
+.btn.ok { background: var(--ok); border-color: var(--ok); color: #fff; }
+.btn.ok:hover { filter: brightness(1.06); }
+.btn.bad { background: var(--surface); border-color: var(--bad); color: var(--bad); }
+.btn.bad:hover { background: var(--bad-soft); }
+.btn.primary { background: var(--kernel); border-color: var(--kernel); color: #fff; }
+.btn.danger { background: var(--bad); border-color: var(--bad); color: #fff; }
+.btn.sm { padding: 3px 9px; font-size: 12.5px; }
+.btn kbd { font-family: var(--mono); font-size: 10.5px; padding: 0 5px; border-radius: 4px; background: rgba(127,127,127,.18); }
+.pill { display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 500; background: var(--surface-2); color: var(--muted); white-space: nowrap; }
+.pill.ok { background: var(--ok-soft); color: var(--ok); }
+.pill.bad { background: var(--bad-soft); color: var(--bad); }
+.pill.signal { background: var(--signal-soft); color: var(--signal); }
+.pill.kernel { background: var(--kernel-soft); color: var(--kernel); }
+.pill.warn { background: var(--warn-soft); color: var(--warn); }
+.pill.mono { font-family: var(--mono); font-weight: 400; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+.card.pad { padding: 16px 18px; }
+.stack { display: grid; gap: 12px; }
+.row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+.input, textarea.input { width: 100%; padding: 7px 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); }
+textarea.input { min-height: 64px; resize: vertical; }
+select.input { width: auto; }
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-weight: 500; color: var(--muted); font-size: 12.5px; }
+tr:last-child td { border-bottom: 0; }
+.empty { padding: 36px 20px; text-align: center; color: var(--muted); }
+.empty strong { display: block; color: var(--ink); font-weight: 500; margin-bottom: 4px; }
+.meter { height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
+.meter > i { display: block; height: 100%; background: var(--kernel); border-radius: 3px; transition: width .3s; }
+.meter > i.warn { background: var(--warn); } .meter > i.bad { background: var(--bad); }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; font-size: 13px; }
+.kv dt { color: var(--muted); } .kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+details > summary { cursor: pointer; color: var(--muted); font-size: 13px; list-style: none; }
+details > summary::before { content: "▸ "; } details[open] > summary::before { content: "▾ "; }
+.toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 9px 14px; border-radius: 8px; font-size: 13px; opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 50; max-width: min(90vw, 520px); }
+.toast.show { opacity: 1; }
+.toast.err { background: var(--bad); color: #fff; }
+
+/* inbox */
+.item { display: grid; grid-template-columns: 1fr auto; gap: 10px 16px; padding: 14px 16px 14px 18px; border-left: 3px solid transparent; border-bottom: 1px solid var(--line); background: var(--surface); }
+.item:first-child { border-radius: var(--radius) var(--radius) 0 0; } .item:last-child { border-bottom: 0; border-radius: 0 0 var(--radius) var(--radius); }
+.item.urgent { border-left-color: var(--signal); }
+.item.sel { background: var(--surface-2); }
+.item .title { font-weight: 500; }
+.item .meta { color: var(--muted); font-size: 12.5px; margin-top: 2px; display: flex; gap: 10px; flex-wrap: wrap; }
+.item .body { grid-column: 1 / -1; display: none; gap: 10px; }
+.item.open .body { display: grid; }
+.item .acts { display: flex; gap: 6px; align-self: start; }
+.expire { font-variant-numeric: tabular-nums; }
+.expire.soon { color: var(--signal); font-weight: 500; }
+.proposal { background: var(--surface-2); border-radius: 6px; padding: 10px 12px; font-size: 13px; }
+.note { width: 100%; padding: 6px 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); }
+
+/* board */
+.board { display: grid; grid-template-columns: repeat(6, minmax(190px, 1fr)); gap: 10px; overflow-x: auto; }
+.col h3 { font-size: 12.5px; color: var(--muted); font-weight: 500; display: flex; justify-content: space-between; margin-bottom: 8px; padding: 0 2px; }
+.col .cards { display: grid; gap: 8px; min-height: 40px; }
+.tcard { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 9px 10px; cursor: pointer; display: grid; gap: 4px; }
+.tcard:hover { border-color: var(--line-strong); }
+.tcard .id { font-family: var(--mono); font-size: 11.5px; color: var(--muted); display: flex; justify-content: space-between; gap: 8px; } .tcard .id span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tcard .t { font-size: 13px; line-height: 1.35; }
+.tcard.blocked { border-left: 3px solid var(--signal); }
+.tcard .flag { font-size: 11.5px; color: var(--signal); }
+
+/* audit */
+.audit { display: grid; grid-template-columns: 300px 1fr; gap: 16px; align-items: start; }
+.sample { display: grid; }
+.sample a { display: grid; gap: 2px; padding: 10px 12px; border-bottom: 1px solid var(--line); text-decoration: none; }
+.sample a:last-child { border-bottom: 0; }
+.sample a.active { background: var(--kernel-soft); }
+.sample a.done { opacity: .6; }
+.sample .id { font-family: var(--mono); font-size: 11.5px; color: var(--muted); display: flex; justify-content: space-between; }
+.criteria { margin: 0; padding-left: 18px; }
+.gradebar { position: sticky; bottom: 0; background: var(--surface); border-top: 1px solid var(--line); padding: 12px 16px; display: grid; gap: 8px; border-radius: 0 0 var(--radius) var(--radius); }
+.verdict-reveal { border-radius: 6px; padding: 12px 14px; display: grid; gap: 6px; animation: rise .35s ease-out; }
+.verdict-reveal.agree { background: var(--ok-soft); } .verdict-reveal.disagree { background: var(--bad-soft); }
+@keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .verdict-reveal { animation: none; } .meter > i { transition: none; } }
+
+/* diff */
+.diff { font-family: var(--mono); font-size: 12px; line-height: 1.5; }
+.file { border: 1px solid var(--line); border-radius: 6px; margin-bottom: 10px; overflow: hidden; }
+.file > summary { padding: 7px 12px; background: var(--surface-2); color: var(--ink); font-family: var(--mono); font-size: 12px; display: flex; gap: 10px; }
+.file > summary > span:first-child { flex: 1; } .file > summary > span:first-child::before { content: "▾ "; color: var(--muted); } .file:not([open]) > summary > span:first-child::before { content: "▸ "; }
+.file .stat { color: var(--muted); }
+.file .stat b { font-weight: 500; } .file .stat .a { color: var(--ok); } .file .stat .d { color: var(--bad); }
+.hunk { overflow-x: auto; }
+.ln { display: grid; grid-template-columns: 44px 44px 1fr; white-space: pre; }
+.ln > span:nth-child(-n+2) { color: var(--muted); text-align: right; padding-right: 10px; user-select: none; }
+.ln > span:last-child { padding-left: 10px; }
+.ln.add { background: var(--diff-add); color: var(--diff-add-ink); }
+.ln.del { background: var(--diff-del); color: var(--diff-del-ink); }
+.ln.hd { color: var(--kernel); background: var(--surface-2); }
+
+/* drawer */
+.drawer { position: fixed; top: 0; right: 0; height: 100vh; width: min(var(--drawer), 100vw); background: var(--surface); border-left: 1px solid var(--line); box-shadow: -12px 0 40px rgba(0,0,0,.12); transform: translateX(100%); transition: transform .2s ease-out; z-index: 40; display: grid; grid-template-rows: auto 1fr; }
+.drawer.open { transform: none; }
+.drawer .dh { padding: 16px 20px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }
+.drawer .dc { overflow: auto; padding: 16px 20px 40px; display: grid; gap: 16px; align-content: start; }
+.timeline { display: grid; gap: 0; }
+.ev { display: grid; grid-template-columns: 62px 1fr; gap: 10px; padding: 6px 0; border-left: 2px solid var(--line); margin-left: 4px; padding-left: 12px; font-size: 13px; }
+.ev .at { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+.ev .st { font-weight: 500; }
+.ev .nt { color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+.scrim { position: fixed; inset: 0; background: rgba(0,0,0,.25); opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 39; }
+.scrim.on { opacity: 1; pointer-events: auto; }
+
+/* spend */
+.bars { display: flex; align-items: flex-end; gap: 4px; height: 90px; }
+.bars > div { flex: 1; background: var(--kernel); border-radius: 3px 3px 0 0; min-height: 2px; position: relative; }
+.bars > div span { position: absolute; bottom: -18px; left: 0; right: 0; text-align: center; font-size: 10px; color: var(--muted); font-family: var(--mono); }
+.big { font-size: 26px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+
+/* controls */
+.levels { display: grid; gap: 8px; }
+.level { display: grid; grid-template-columns: 44px 1fr; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; }
+.level b { font-family: var(--mono); }
+
+/* help */
+.help { position: fixed; bottom: 12px; right: 16px; font-size: 12px; color: var(--muted); display: flex; gap: 10px; pointer-events: none; background: var(--bg); padding: 4px 8px; border-radius: 6px; opacity: .9; }
+.help kbd { font-family: var(--mono); padding: 0 5px; border: 1px solid var(--line-strong); border-radius: 4px; }
+
+@media (max-width: 900px) {
+  .app { grid-template-columns: 1fr; }
+  .rail { position: static; height: auto; flex-direction: row; flex-wrap: wrap; border-right: 0; border-bottom: 1px solid var(--line); padding: 10px 12px; }
+  .rail .foot { margin-top: 0; width: 100%; }
+  main { padding: 18px 16px 60px; }
+  .audit { grid-template-columns: 1fr; }
+  .board { grid-template-columns: repeat(6, 220px); }
+  .help { display: none; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="rail">
+    <div class="brand"><h1 id="co">Holdco</h1><span class="rel mono" id="rel">r0</span></div>
+    <nav class="nav" id="nav">
+      <a href="#inbox" data-view="inbox">Inbox <span class="count" id="n-inbox">0</span></a>
+      <a href="#board" data-view="board">Tickets <span class="count" id="n-board">0</span></a>
+      <a href="#audit" data-view="audit">Audit <span class="count" id="n-audit">0</span></a>
+      <a href="#quality" data-view="quality">Quality</a>
+      <a href="#releases" data-view="releases">Releases <span class="count" id="n-rel">0</span></a>
+      <a href="#spend" data-view="spend">Sessions &amp; spend</a>
+      <a href="#controls" data-view="controls">Controls <span class="count" id="n-int">0</span></a>
+    </nav>
+    <div class="foot">
+      <div class="status"><i class="dot" id="sup-dot"></i><span id="sup-text">connecting…</span></div>
+      <div class="status"><span id="spend-line" class="num">—</span></div>
+      <div class="meter"><i id="spend-meter" style="width:0"></i></div>
+    </div>
+  </aside>
+
+  <main>
+    <!-- Inbox -->
+    <section class="view" id="view-inbox">
+      <div class="head">
+        <div><h2>Inbox</h2><p class="muted">Decisions only you can make. Unanswered items reject themselves at the deadline; urgent ones alert you at once.</p></div>
+        <div class="toolbar"><span class="small muted" id="inbox-summary"></span></div>
+      </div>
+      <div class="card" id="inbox-list"></div>
+    </section>
+
+    <!-- Board -->
+    <section class="view" id="view-board">
+      <div class="head">
+        <div><h2>Tickets</h2><p class="muted">Every piece of work, by where the kernel holds it. Blocked tickets wait on a decision.</p></div>
+        <div class="toolbar"><select class="input" id="board-dept"><option value="">All departments</option></select><label class="small muted"><input type="checkbox" id="board-done"> show done (7d)</label></div>
+      </div>
+      <div class="board" id="board"></div>
+    </section>
+
+    <!-- Audit -->
+    <section class="view" id="view-audit">
+      <div class="head">
+        <div><h2>Weekly audit</h2><p class="muted">Grade the sample before you see the judge's verdict. Your grades calibrate Verification; skipping two weeks freezes graduation and improvement.</p></div>
+        <div class="toolbar"><span class="pill" id="audit-progress">0 of 0</span><button class="btn primary" id="audit-done">Finish this week's audit</button></div>
+      </div>
+      <div class="audit">
+        <div class="card sample" id="audit-sample"></div>
+        <div class="card" id="audit-pane"><div class="empty"><strong>Pick a ticket</strong>The branch diff, the goal and the done criteria appear here.</div></div>
+      </div>
+    </section>
+
+    <!-- Quality -->
+    <section class="view" id="view-quality">
+      <div class="head">
+        <div><h2>Quality</h2><p class="muted">How often the judge agrees with you, per action type. Agreement earns autonomy; disagreement takes it back.</p></div>
+        <div class="toolbar"><span class="small muted" id="quality-summary"></span></div>
+      </div>
+      <div class="card"><table id="quality-table"></table></div>
+    </section>
+
+    <!-- Releases -->
+    <section class="view" id="view-releases">
+      <div class="head">
+        <div><h2>Releases</h2><p class="muted">Changes to the organization ship as candidates, run on part of the traffic, and are promoted only if they hold up.</p></div>
+      </div>
+      <div class="stack">
+        <div id="candidate"></div>
+        <div class="grid2">
+          <div class="card"><table id="releases-table"></table></div>
+          <div class="card"><table id="actions-table"></table></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Spend -->
+    <section class="view" id="view-spend">
+      <div class="head"><div><h2>Sessions &amp; spend</h2><p class="muted">Costs are metered in USD at API rates even on a subscription, so budgets and tripwires mean the same everywhere.</p></div></div>
+      <div class="stack">
+        <div class="grid2">
+          <div class="card pad"><div class="small muted">This month</div><div class="big" id="spend-month">$0</div><div class="small muted" id="spend-month-sub"></div><div class="meter" style="margin-top:8px"><i id="spend-month-meter" style="width:0"></i></div></div>
+          <div class="card pad"><div class="small muted">Last 14 days</div><div class="bars" id="spend-bars"></div></div>
+        </div>
+        <div class="card"><table id="shares-table"></table></div>
+        <div class="card"><table id="sessions-table"></table></div>
+      </div>
+    </section>
+
+    <!-- Controls -->
+    <section class="view" id="view-controls">
+      <div class="head"><div><h2>Controls</h2><p class="muted">Interrupts stop work in layers. Raising one is immediate; sessions are aborted on the next tick.</p></div></div>
+      <div class="grid2">
+        <div class="card pad stack">
+          <h3>Active interrupts</h3>
+          <div id="interrupts"></div>
+        </div>
+        <div class="card pad stack">
+          <h3>Raise an interrupt</h3>
+          <div class="levels" id="levels"></div>
+          <div class="row">
+            <select class="input" id="int-level"><option>L1</option><option>L2</option><option>L3</option><option>L4</option><option>L5</option></select>
+            <input class="input" id="int-target" placeholder="target: role, department, or *" style="flex:1">
+          </div>
+          <input class="input" id="int-reason" placeholder="reason (written to the control file and the digest)">
+          <div class="row"><button class="btn danger" id="int-raise">Raise</button><span class="small muted" id="int-hint"></span></div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer"><div class="dh"><div id="d-head"></div><button class="btn sm" id="d-close">Close <kbd>esc</kbd></button></div><div class="dc" id="d-body"></div></aside>
+<div class="toast" id="toast"></div>
+<div class="help"><span><kbd>j</kbd><kbd>k</kbd> move</span><span><kbd>a</kbd> approve</span><span><kbd>r</kbd> reject</span><span><kbd>1</kbd>–<kbd>7</kbd> views</span></div>
+
+<script>
+(() => {
+  // ── auth & transport ─────────────────────────────────────────────────────
+  const params = new URLSearchParams(location.search);
+  let token = params.get("t");
+  try { if (token) localStorage.setItem("holdco.token", token); else token = localStorage.getItem("holdco.token"); } catch {}
+  if (params.get("t")) history.replaceState(null, "", location.pathname + location.hash);
+  const api = async (path, opts = {}) => {
+    const r = await fetch(path, { ...opts, headers: { "authorization": `Bearer ${token}`, "content-type": "application/json", ...(opts.headers || {}) } });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(body.error || `${r.status}`);
+    return body;
+  };
+  const act = async (a) => { const r = await api("/api/act", { method: "POST", body: JSON.stringify(a) }); await refresh(); return r; };
+
+  // ── helpers ──────────────────────────────────────────────────────────────
+  const $ = (s, el = document) => el.querySelector(s);
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const usd = (n) => "$" + (Number(n) || 0).toFixed(2);
+  const ago = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); if (s < 60) return `${s}s`; const m = Math.round(s / 60); if (m < 60) return `${m}m`; const h = Math.round(m / 60); if (h < 48) return `${h}h`; return `${Math.round(h / 24)}d`; };
+  const left = (ms) => { if (ms <= 0) return "expired"; const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000); return h > 0 ? `${h}h ${m}m` : `${m}m`; };
+  const clock = (t) => new Date(t).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  const tier = (t) => `<span class="pill mono">${esc(t)}</span>`;
+  const toastEl = $("#toast"); let toastTimer;
+  const toast = (msg, err = false) => { toastEl.textContent = msg; toastEl.className = "toast show" + (err ? " err" : ""); clearTimeout(toastTimer); toastTimer = setTimeout(() => toastEl.className = "toast", err ? 5000 : 2200); };
+  const run = async (fn, okMsg) => { try { const r = await fn(); if (okMsg) toast(typeof okMsg === "function" ? okMsg(r) : okMsg); return r; } catch (e) { toast(e.message, true); } };
+  const STATE_LABEL = { new: "New", triaged: "Triaged", in_progress: "In progress", ready_for_verification: "Verifying", verified: "Verified", awaiting_approval: "Approval", done: "Done", rejected: "Rejected", blocked: "Blocked", declined: "Declined", rolled_back: "Rolled back" };
+  const KIND_LABEL = { t3: "Approval needed", t2_objection: "COO objected", coo_timeout: "COO did not answer", triage: "Triage", blocked: "Blocked ticket", graduation: "Graduation proposal", issue: "Issue from an agent", manual_action: "Run by hand", candidate_withdrawn: "Candidate withdrawn" };
+
+  // ── state ────────────────────────────────────────────────────────────────
+  let S = null;
+  let view = (location.hash || "#inbox").slice(1);
+  let sel = { inbox: 0, audit: null, auditGraded: {} };
+  const views = ["inbox", "board", "audit", "quality", "releases", "spend", "controls"];
+  const show = (v) => { if (!views.includes(v)) v = "inbox"; view = v; document.querySelectorAll(".view").forEach((el) => el.classList.toggle("active", el.id === "view-" + v)); document.querySelectorAll("#nav a").forEach((a) => a.classList.toggle("active", a.dataset.view === v)); if (v === "audit" && S) renderAudit(); };
+  window.addEventListener("hashchange", () => show(location.hash.slice(1)));
+
+  async function refresh() {
+    try { S = await api("/api/state"); render(); } catch (e) { $("#sup-text").textContent = "dashboard unreachable: " + e.message; $("#sup-dot").className = "dot off"; }
+  }
+
+  function render() {
+    $("#co").textContent = S.company.name;
+    $("#rel").textContent = S.supervisor.release + (S.supervisor.candidate ? ` → ${S.supervisor.candidate}` : "");
+    const halted = S.interrupts.some((i) => i.level === "L5");
+    $("#sup-dot").className = "dot " + (S.supervisor.alive ? (S.interrupts.length ? "hold" : "on") : "off");
+    $("#sup-text").textContent = S.supervisor.alive ? (halted ? "halted (L5)" : S.interrupts.length ? `running · ${S.interrupts.length} interrupt${S.interrupts.length > 1 ? "s" : ""}` : `running · ${S.running.length} session${S.running.length === 1 ? "" : "s"}`) : "supervisor not running";
+    const ratio = S.budget.spent_month / S.budget.monthly;
+    $("#spend-line").textContent = `${usd(S.budget.spent_month)} of ${usd(S.budget.monthly)} this month`;
+    const m = $("#spend-meter"); m.style.width = Math.min(100, ratio * 100) + "%"; m.className = ratio > 0.9 ? "bad" : ratio > 0.7 ? "warn" : "";
+    const urgent = S.inbox.filter((i) => i.urgency === "urgent").length;
+    const count = (id, n, hot) => { const el = $(id); el.textContent = n; el.className = "count" + (n === 0 ? " zero" : "") + (hot ? " hot" : ""); };
+    count("#n-inbox", S.inbox.length, urgent > 0);
+    count("#n-board", S.tickets.filter((t) => !["done", "declined", "rolled_back"].includes(t.state)).length, false);
+    const toGrade = S.audit.sample.filter((t) => !sel.auditGraded[t.id]).length;
+    count("#n-audit", toGrade, S.audit.due && toGrade > 0);
+    count("#n-rel", S.candidate ? 1 : 0, false);
+    count("#n-int", S.interrupts.length, S.interrupts.length > 0);
+    renderInbox(); renderBoard(); renderQuality(); renderReleases(); renderSpend(); renderControls();
+    if (view === "audit") renderAudit();
+    show(view);
+  }
+
+  // ── inbox ────────────────────────────────────────────────────────────────
+  function renderInbox() {
+    const list = $("#inbox-list");
+    const items = [...S.inbox].sort((a, b) => (a.urgency === b.urgency ? a.created_at - b.created_at : a.urgency === "urgent" ? -1 : 1));
+    $("#inbox-summary").textContent = items.length ? `${items.length} waiting${items.filter((i) => i.urgency === "urgent").length ? `, ${items.filter((i) => i.urgency === "urgent").length} urgent` : ""}` : "";
+    if (!items.length) { list.innerHTML = `<div class="empty"><strong>Nothing waiting on you</strong>The company is working within its rules.</div>`; return; }
+    if (sel.inbox >= items.length) sel.inbox = items.length - 1;
+    list.innerHTML = items.map((i, idx) => {
+      const t = i.ticket; const p = i.proposal; const r = i.review; const v = i.verdict;
+      const exp = i.expires_at ? i.expires_at - S.now : null;
+      const title = esc(i.payload.title || KIND_LABEL[i.kind] || i.kind);
+      const detail = [
+        t ? `<dl class="kv"><dt>Ticket</dt><dd><a href="#" data-open="${esc(t.id)}"><code>${esc(t.id)}</code></a> ${esc(t.title)} <span class="pill">${esc(t.department)}</span>${t.action ? ` <span class="pill mono">${esc(t.action)}</span>` : ""}</dd><dt>Goal</dt><dd>${esc(t.goal)}</dd>${t.branch ? `<dt>Branch</dt><dd><code>${esc(t.branch)}</code></dd>` : ""}${v ? `<dt>Verdict</dt><dd><span class="pill ${v.verdict === "approve" ? "ok" : v.verdict === "reject" ? "bad" : "warn"}">${esc(v.verdict)}</span> ${esc(v.overall)}/4, ${esc(v.confidence)} confidence — ${esc(v.summary)}</dd>` : ""}</dl>` : "",
+        p ? `<div class="proposal"><b>CEO proposes:</b> ${esc(p.decision)}<br><span class="muted">Why now:</span> ${esc(p.why_now)}<br><span class="muted">Cost:</span> ${esc(p.expected_cost)} · <span class="muted">Rollback:</span> ${esc(p.rollback_plan)} · <span class="muted">Risk:</span> ${esc(p.risk)}${p.alternatives_rejected?.length ? `<br><span class="muted">Rejected alternatives:</span> ${esc(p.alternatives_rejected.join("; "))}` : ""}</div>` : "",
+        r ? `<div class="proposal"><b>COO ${esc(r.decision)}s:</b> ${esc(r.reasoning)}</div>` : "",
+        Object.entries(i.payload).filter(([k]) => !["title", "proposal", "review"].includes(k)).map(([k, val]) => `<div class="small"><span class="muted">${esc(k)}:</span> ${esc(typeof val === "string" ? val : JSON.stringify(val))}</div>`).join(""),
+        `<input class="note" placeholder="note (optional; goes to the ticket and the digest)" data-note="${i.id}">`,
+      ].join("");
+      return `<div class="item ${i.urgency}${idx === sel.inbox ? " sel open" : ""}" data-idx="${idx}" data-id="${i.id}">
+        <div><div class="title">${title}</div><div class="meta"><span class="pill ${i.urgency === "urgent" ? "signal" : ""}">${esc(KIND_LABEL[i.kind] || i.kind)}</span><span>${ago(S.now - i.created_at)} ago</span>${exp !== null ? `<span class="expire ${exp < 6 * 3600000 ? "soon" : ""}">rejects itself in ${left(exp)}</span>` : ""}</div></div>
+        <div class="acts"><button class="btn ok sm" data-act="approved" data-id="${i.id}">Approve <kbd>a</kbd></button><button class="btn bad sm" data-act="rejected" data-id="${i.id}">Reject <kbd>r</kbd></button></div>
+        <div class="body">${detail}</div></div>`;
+    }).join("");
+    list.querySelectorAll(".item").forEach((el) => el.addEventListener("click", (e) => { if (e.target.closest("button, a, input")) return; sel.inbox = Number(el.dataset.idx); list.querySelectorAll(".item").forEach((x) => x.classList.toggle("open", x === el)); list.querySelectorAll(".item").forEach((x) => x.classList.toggle("sel", x === el)); }));
+    list.querySelectorAll("[data-act]").forEach((b) => b.addEventListener("click", () => decide(Number(b.dataset.id), b.dataset.act)));
+    list.querySelectorAll("[data-open]").forEach((a) => a.addEventListener("click", (e) => { e.preventDefault(); openTicket(a.dataset.open); }));
+  }
+  const decide = (id, decision) => {
+    const note = $(`[data-note="${id}"]`)?.value || undefined;
+    const item = S.inbox.find((i) => i.id === id);
+    if (decision === "approved" && item && ["t3", "manual_action", "graduation"].includes(item.kind) && !confirm(`Approve "${item.payload.title || item.kind}"? The kernel executes it on the next tick.`)) return;
+    run(() => act({ kind: "inbox", id, decision, note }), decision === "approved" ? "Approved" : "Rejected");
+  };
+
+  // ── board ────────────────────────────────────────────────────────────────
+  function renderBoard() {
+    const depts = $("#board-dept"); const cur = depts.value;
+    depts.innerHTML = `<option value="">All departments</option>` + [...new Set(S.tickets.map((t) => t.department))].sort().map((d) => `<option ${d === cur ? "selected" : ""}>${esc(d)}</option>`).join("");
+    const showDone = $("#board-done").checked;
+    const cols = [["Triaged", ["new", "triaged"]], ["In progress", ["in_progress", "rejected"]], ["Verifying", ["ready_for_verification", "verified"]], ["Approval", ["awaiting_approval"]], ["Blocked", ["blocked"]], ["Done", ["done", "declined", "rolled_back"]]];
+    const tickets = S.tickets.filter((t) => !depts.value || t.department === depts.value);
+    $("#board").innerHTML = cols.map(([name, states]) => {
+      let ts = tickets.filter((t) => states.includes(t.state)).sort((a, b) => b.updated_at - a.updated_at);
+      if (name === "Done" && !showDone) ts = ts.slice(0, 5);
+      return `<div class="col"><h3><span>${name}</span><span class="num">${ts.length}</span></h3><div class="cards">${ts.map((t) => `<div class="tcard ${t.state === "blocked" ? "blocked" : ""}" data-open="${esc(t.id)}"><div class="id"><span>${esc(t.id)}</span><span>${t.cost ? usd(t.cost) : ""}</span></div><div class="t">${esc(t.title)}</div><div class="id"><span>${esc(t.department)}${t.action ? ` · ${esc(t.action)}` : ""}</span><span>${ago(S.now - t.updated_at)}</span></div>${t.state === "blocked" ? `<div class="flag">needs a decision</div>` : t.interrupt_flag ? `<div class="flag">paused: ${esc(t.interrupt_flag)}</div>` : t.state === "rejected" ? `<div class="flag muted">rejected, retrying (${t.attempts})</div>` : ""}</div>`).join("") || `<div class="small muted" style="padding:6px 2px">—</div>`}</div></div>`;
+    }).join("");
+    $("#board").querySelectorAll("[data-open]").forEach((c) => c.addEventListener("click", () => openTicket(c.dataset.open)));
+  }
+  $("#board-dept").addEventListener("change", renderBoard); $("#board-done").addEventListener("change", renderBoard);
+
+  // ── ticket drawer ────────────────────────────────────────────────────────
+  const drawer = $("#drawer"), scrim = $("#scrim");
+  const closeDrawer = () => { drawer.classList.remove("open"); scrim.classList.remove("on"); };
+  $("#d-close").addEventListener("click", closeDrawer); scrim.addEventListener("click", closeDrawer);
+  async function openTicket(id) {
+    drawer.classList.add("open"); scrim.classList.add("on");
+    $("#d-head").innerHTML = `<code>${esc(id)}</code>`; $("#d-body").innerHTML = `<div class="muted">Loading…</div>`;
+    const d = await run(() => api(`/api/ticket/${encodeURIComponent(id)}`));
+    if (!d) return;
+    const t = d.ticket;
+    $("#d-head").innerHTML = `<div><div class="row" style="gap:8px"><code>${esc(t.id)}</code><span class="pill ${t.state === "blocked" ? "signal" : t.state === "done" ? "ok" : ""}">${esc(STATE_LABEL[t.state] || t.state)}</span><span class="pill">${esc(t.department)}</span>${t.action ? `<span class="pill mono">${esc(t.action)}</span>` : ""}</div><h3 style="margin-top:6px">${esc(t.title)}</h3></div>`;
+    const v = d.verdict;
+    $("#d-body").innerHTML = [
+      `<dl class="kv"><dt>Goal</dt><dd>${esc(t.goal)}</dd><dt>Why</dt><dd>${esc(t.why)}</dd><dt>Done when</dt><dd><ul class="criteria">${t.done_criteria.map((c) => `<li>${esc(c)}</li>`).join("")}</ul></dd>${t.branch ? `<dt>Branch</dt><dd><code>${esc(t.branch)}</code></dd>` : ""}<dt>Cost</dt><dd>${usd(d.cost)} across ${d.sessions.length} session${d.sessions.length === 1 ? "" : "s"}</dd><dt>Attempts</dt><dd>${t.attempts}</dd></dl>`,
+      t.state === "blocked" ? `<div class="card pad stack"><b>Decision needed</b><p class="small" style="white-space:pre-wrap">${esc(t.note)}</p><input class="input" id="unblock-note" placeholder="your decision, in one line (the senior reads it)"><div class="row"><button class="btn primary" id="unblock-btn">Unblock with this decision</button><button class="btn bad" id="decline-btn">Decline the ticket</button></div></div>` : "",
+      v ? `<div class="card pad stack"><div class="row"><b>Verdict</b><span class="pill ${v.verdict === "approve" ? "ok" : v.verdict === "reject" ? "bad" : "warn"}">${esc(v.verdict)}</span><span class="muted small">${esc(v.overall)}/4 · ${esc(v.confidence)} confidence</span></div><p class="small">${esc(v.payload.summary)}</p>${v.payload.failures?.length ? `<ul class="criteria small">${v.payload.failures.map((f) => `<li><b>${esc(f.criterion)}</b>: ${esc(f.evidence)}</li>`).join("")}</ul>` : ""}${v.payload.gates?.length ? `<div class="small">${v.payload.gates.map((g) => `<span class="pill ${g.passed ? "ok" : "bad"} mono">${esc(g.gate)}</span>`).join(" ")}</div>` : ""}${d.label ? `<div class="small muted">You graded it <b>${esc(d.label.operator_verdict)}</b> on ${clock(d.label.at)}</div>` : ""}</div>` : "",
+      `<div><h3 style="margin-bottom:8px">Timeline</h3><div class="timeline">${d.events.map((e) => `<div class="ev"><span class="at">${clock(e.at)}</span><div><span class="st">${esc(STATE_LABEL[e.to_state] || e.to_state)}</span> <span class="muted small">${esc(e.actor)}</span>${e.note ? `<div class="nt small">${esc(e.note)}</div>` : ""}</div></div>`).join("")}</div></div>`,
+      d.sessions.length ? `<div><h3 style="margin-bottom:8px">Sessions</h3><table>${d.sessions.map((s) => `<tr><td><code>${esc(s.role)}</code><div class="small muted">${esc(s.engine)}:${esc(s.model)}</div></td><td><span class="pill ${s.status === "success" ? "ok" : s.status ? "bad" : ""}">${esc(s.status || "running")}</span></td><td class="num small">${s.turns} turns</td><td class="num small">${usd(s.cost_usd)}</td></tr>`).join("")}</table></div>` : "",
+      d.diff ? `<div><h3 style="margin-bottom:8px">Diff vs ${esc(d.diff.base)}</h3>${renderDiff(d.diff)}</div>` : "",
+    ].join("");
+    $("#unblock-btn")?.addEventListener("click", () => { const note = $("#unblock-note").value.trim(); if (!note) return toast("Write the decision first", true); run(() => act({ kind: "unblock", id: t.id, note }), "Unblocked").then(closeDrawer); });
+    $("#decline-btn")?.addEventListener("click", () => { if (confirm(`Decline ${t.id}?`)) run(() => act({ kind: "decline", id: t.id }), "Declined").then(closeDrawer); });
+  }
+
+  // ── diff ─────────────────────────────────────────────────────────────────
+  function renderDiff(diff) {
+    if (!diff.patch.trim()) return `<div class="empty small">No changes against ${esc(diff.base)}.</div>`;
+    const files = []; let cur = null;
+    const lines = diff.patch.split("\n"); if (lines.at(-1) === "") lines.pop();
+    for (const line of lines) {
+      if (line.startsWith("diff --git")) { cur = { name: line.replace(/^diff --git a\/(.*) b\/.*$/, "$1"), lines: [], add: 0, del: 0 }; files.push(cur); continue; }
+      if (!cur) continue;
+      if (/^(index |--- |\+\+\+ |new file|deleted file|similarity|rename|old mode|new mode|Binary)/.test(line)) { if (line.startsWith("Binary")) cur.lines.push({ k: "hd", t: line }); continue; }
+      if (line.startsWith("@@")) { const m = /@@ -(\d+)(?:,\d+)? \+(\d+)/.exec(line); cur.o = Number(m?.[1] || 0); cur.n = Number(m?.[2] || 0); cur.lines.push({ k: "hd", t: line }); continue; }
+      if (line.startsWith("+")) { cur.add++; cur.lines.push({ k: "add", n: cur.n++, t: line.slice(1) }); }
+      else if (line.startsWith("-")) { cur.del++; cur.lines.push({ k: "del", o: cur.o++, t: line.slice(1) }); }
+      else if (line.startsWith("\\")) cur.lines.push({ k: "hd", t: line });
+      else { cur.lines.push({ k: "ctx", o: cur.o++, n: cur.n++, t: line.slice(1) }); }
+    }
+    return `<div class="diff">${files.map((f, i) => `<details class="file" ${f.lines.length < 400 || i === 0 ? "open" : ""}><summary><span>${esc(f.name)}</span><span class="stat"><b class="a">+${f.add}</b> <b class="d">−${f.del}</b></span></summary><div class="hunk">${f.lines.map((l) => l.k === "hd" ? `<div class="ln hd"><span></span><span></span><span>${esc(l.t)}</span></div>` : `<div class="ln ${l.k}"><span>${l.o ?? ""}</span><span>${l.n ?? ""}</span><span>${esc(l.t)}</span></div>`).join("")}</div></details>`).join("")}${diff.truncated ? `<p class="small muted">Diff truncated at 400 KB; open the branch in your editor for the rest.</p>` : ""}</div>`;
+  }
+
+  // ── audit ────────────────────────────────────────────────────────────────
+  let auditCache = {};
+  function renderAudit() {
+    const sample = S.audit.sample;
+    const graded = sample.filter((t) => sel.auditGraded[t.id]).length;
+    $("#audit-progress").textContent = `${graded} of ${sample.length} graded · ${S.audit.labels_total} labels total${S.audit.agreement !== null ? ` · agreement ${S.audit.agreement.toFixed(2)}` : ""}`;
+    $("#audit-progress").className = "pill " + (S.audit.due ? "signal" : "ok");
+    $("#audit-done").disabled = sample.length > 0 && graded < sample.length;
+    $("#audit-done").title = S.audit.last_audit_at ? `last audit ${clock(S.audit.last_audit_at)}` : "no audit recorded yet";
+    if (!sample.length) { $("#audit-sample").innerHTML = `<div class="empty"><strong>Nothing to grade</strong>${S.audit.labels_total ? "Every recent verdict is graded. Record the audit so the week counts." : "Verdicts appear here once tickets have been judged."}</div>`; }
+    else {
+      if (!sel.audit || !sample.some((t) => t.id === sel.audit)) sel.audit = sample.find((t) => !sel.auditGraded[t.id])?.id ?? sample[0].id;
+      $("#audit-sample").innerHTML = sample.map((t) => `<a href="#" data-id="${esc(t.id)}" class="${t.id === sel.audit ? "active" : ""} ${sel.auditGraded[t.id] ? "done" : ""}"><span class="id"><span>${esc(t.id)}</span><span>${sel.auditGraded[t.id] ? (sel.auditGraded[t.id].agreement ? "agree" : "disagree") : t.confidence === "low" ? "low confidence" : ""}</span></span><span>${esc(t.title)}</span><span class="small muted">${esc(t.department)}${t.action ? ` · ${esc(t.action)}` : ""}</span></a>`).join("");
+      $("#audit-sample").querySelectorAll("a").forEach((a) => a.addEventListener("click", (e) => { e.preventDefault(); sel.audit = a.dataset.id; renderAudit(); }));
+      loadAuditPane(sel.audit);
+    }
+  }
+  async function loadAuditPane(id) {
+    const pane = $("#audit-pane");
+    if (!auditCache[id]) { pane.innerHTML = `<div class="empty">Loading ${esc(id)}…</div>`; auditCache[id] = await run(() => api(`/api/ticket/${encodeURIComponent(id)}?blind=1`)); if (!auditCache[id]) return; }
+    const d = auditCache[id]; const t = d.ticket; const g = sel.auditGraded[id];
+    pane.innerHTML = `
+      <div style="padding:16px 18px" class="stack">
+        <div><div class="row" style="gap:8px"><code>${esc(t.id)}</code><span class="pill">${esc(t.department)}</span>${t.action ? `<span class="pill mono">${esc(t.action)}</span>` : ""}<span class="muted small">${d.sessions.length} session${d.sessions.length === 1 ? "" : "s"}, ${usd(d.cost)}</span></div><h3 style="margin-top:6px">${esc(t.title)}</h3></div>
+        <dl class="kv"><dt>Goal</dt><dd>${esc(t.goal)}</dd><dt>Done when</dt><dd><ul class="criteria">${t.done_criteria.map((c) => `<li>${esc(c)}</li>`).join("")}</ul></dd><dt>Senior said</dt><dd class="small">${esc(d.events.filter((e) => e.to_state === "ready_for_verification").at(-1)?.note || "—")}</dd></dl>
+        ${d.diff ? renderDiff(d.diff) : `<div class="empty small">No branch to diff.</div>`}
+      </div>
+      <div class="gradebar">
+        ${g || d.verdict ? `<div class="verdict-reveal ${(g ? g.agreement : d.label && d.verdict.verdict === d.label.operator_verdict) ? "agree" : "disagree"}"><div class="row"><b>${g ? (g.agreement ? "You and the judge agree" : "You disagree with the judge") : "Already graded"}</b><span class="pill ${(g ? g.judge : d.verdict.verdict) === "approve" ? "ok" : "bad"}">judge: ${esc(g ? g.judge : d.verdict.verdict)}</span>${d.label || g ? `<span class="pill">you: ${esc(g ? g.mine : d.label.operator_verdict)}</span>` : ""}</div><p class="small">${esc(g ? g.summary : d.verdict.payload.summary)}</p></div>`
+          : `<div class="row"><b>Your verdict</b><span class="muted small">Grade from the diff and the criteria. The judge's verdict appears after you decide.</span></div>
+             <input class="input" id="grade-note" placeholder="note (optional)">
+             <div class="row"><button class="btn ok" data-grade="approve">Approve <kbd>a</kbd></button><button class="btn bad" data-grade="reject">Reject <kbd>r</kbd></button></div>`}
+      </div>`;
+    pane.querySelectorAll("[data-grade]").forEach((b) => b.addEventListener("click", () => grade(id, b.dataset.grade)));
+  }
+  const grade = async (id, verdict) => {
+    const note = $("#grade-note")?.value || undefined;
+    const r = await run(() => act({ kind: "grade", id, verdict, note }));
+    if (!r) return;
+    sel.auditGraded[id] = { mine: verdict, judge: r.judge, agreement: r.agreement, summary: r.summary };
+    renderAudit();
+  };
+  $("#audit-done").addEventListener("click", () => run(() => act({ kind: "audit_done" }), "Audit recorded for this week").then(() => { sel.auditGraded = {}; auditCache = {}; }));
+
+  // ── quality ──────────────────────────────────────────────────────────────
+  function renderQuality() {
+    const q = S.quality; const g = S.graduation_policy;
+    $("#quality-summary").textContent = `graduate at ${g.samples} labels and ${g.agreement} agreement · demote below ${g.demotion_agreement}`;
+    $("#quality-table").innerHTML = `<tr><th>Action</th><th>Tier</th><th>Verdicts 30d</th><th>Labels</th><th>Agreement</th><th></th></tr>` + q.map((a) => {
+      const agr = a.agreement; const w = agr === null ? 0 : agr * 100;
+      const cls = agr === null ? "" : agr >= g.agreement ? "" : agr < g.demotion_agreement ? "bad" : "warn";
+      return `<tr><td><code>${esc(a.id)}</code><div class="small muted">${esc(a.department)}</div></td><td>${tier(a.tier)}${a.effective !== a.tier ? ` <span class="pill warn">now ${esc(a.effective)}</span>` : ""}${a.graduation === "never" ? ` <span class="small muted">fixed</span>` : ""}</td><td class="num">${a.verdicts}</td><td class="num">${a.labels}</td><td style="min-width:160px"><div class="row" style="gap:8px"><div class="meter" style="flex:1"><i class="${cls}" style="width:${w}%"></i></div><span class="num small">${agr === null ? "—" : agr.toFixed(2)}</span></div></td><td>${a.eligible ? `<button class="btn primary sm" data-promote="${esc(a.id)}">Promote to ${esc(a.proposedTier)}</button>` : `<span class="small muted" title="${esc(a.reasons.join("; "))}">${esc(a.reasons[0] || "")}</span>`}</td></tr>`;
+    }).join("");
+    $("#quality-table").querySelectorAll("[data-promote]").forEach((b) => b.addEventListener("click", () => { if (confirm(`Promote ${b.dataset.promote} one tier? company.yaml is committed.`)) run(() => act({ kind: "promote", action: b.dataset.promote }), (r) => `Promoted ${r.from} → ${r.to}`); }));
+  }
+
+  // ── releases ─────────────────────────────────────────────────────────────
+  function renderReleases() {
+    const c = S.candidate; const pol = S.release_policy;
+    $("#candidate").innerHTML = c ? (() => {
+      const leftMs = c.watch_until - S.now;
+      const rr = (x) => x === null ? "—" : (x * 100).toFixed(0) + "%";
+      const replay = c.replay === "pending" ? `<span class="pill warn">replay gate running (${c.replays.length} done)</span>` : c.replay === "done" ? `<span class="pill ok">replay gate passed</span>` : c.replay === "skipped" ? `<span class="pill">replay skipped: no labeled branches</span>` : `<span class="pill">no judge change; canary only</span>`;
+      return `<div class="card pad stack"><div class="row"><h3>Candidate <code>${esc(c.tag)}</code></h3>${replay}<span class="muted small">${esc(c.changes)}</span></div>
+        <div class="grid2"><dl class="kv"><dt>Canary sessions</dt><dd class="num">${c.canary_sessions} (${(pol.canary_traffic * 100).toFixed(0)}% of production)</dd><dt>Reject rate</dt><dd class="num">candidate ${rr(c.canary_reject_rate)} · baseline ${rr(c.baseline_reject_rate)} · allowed +${(pol.max_regression * 100).toFixed(0)} pts</dd><dt>Decision</dt><dd>${leftMs > 0 ? `in ${left(leftMs)} (watch ${esc(pol.watch)})` : "on the next tick"}</dd></dl>
+        <div class="row" style="align-self:end"><button class="btn primary" id="rel-promote">Promote now</button><button class="btn bad" id="rel-withdraw">Withdraw</button></div></div>
+        ${c.replays.length ? `<details><summary>Replay results (${c.replays.length})</summary><table>${c.replays.map((r) => `<tr><td><code>${esc(r.ticket_id)}</code></td><td>you: ${esc(r.operator_verdict)}</td><td>was: ${esc(r.recorded_verdict)}</td><td>candidate: <b>${esc(r.candidate_verdict)}</b></td></tr>`).join("")}</table></details>` : ""}</div>`;
+    })() : `<div class="card pad row"><span class="muted">No candidate under watch. Improvement merges create one; <code>${esc(S.supervisor.release)}</code> is what every session runs on.</span><button class="btn sm" id="rel-promote" style="margin-left:auto">Tag a release now</button></div>`;
+    $("#rel-promote")?.addEventListener("click", () => { if (confirm(c ? `Promote ${c.tag} without waiting for the watch?` : "Tag the current organization as a new release?")) run(() => act({ kind: "release" }), (r) => `Released ${r.tag}`); });
+    $("#rel-withdraw")?.addEventListener("click", () => { if (confirm(`Withdraw ${c.tag}? main reverts to ${S.supervisor.release}.`)) run(() => act({ kind: "withdraw" }), "Withdrawn"); });
+    $("#releases-table").innerHTML = `<tr><th>Release</th><th>When</th><th>Status</th><th>Changes</th></tr>` + (S.releases.map((r) => `<tr><td><code>${esc(r.tag)}</code></td><td class="small muted">${clock(r.at)}</td><td><span class="pill ${r.status === "withdrawn" ? "bad" : r.status === "candidate" ? "warn" : "ok"}">${esc(r.status)}${r.promoted_to ? ` → ${esc(r.promoted_to)}` : ""}</span></td><td class="small">${esc(r.changes)}</td></tr>`).join("") || `<tr><td class="muted" colspan="4">No releases recorded since this database was created.</td></tr>`);
+    $("#actions-table").innerHTML = `<tr><th>Executed</th><th>Ticket</th><th>Tier</th><th></th></tr>` + (S.actions.map((a) => `<tr><td><code>${esc(a.action)}</code><div class="small muted">${clock(a.at)}</div></td><td>${a.ticket_id ? `<a href="#" data-open="${esc(a.ticket_id)}"><code>${esc(a.ticket_id)}</code></a>` : ""}</td><td>${tier(a.effective_tier)}</td><td>${a.rolled_back ? `<span class="pill bad">rolled back</span>` : a.undoable ? `<button class="btn sm" data-rollback="${a.id}">Roll back</button>` : `<span class="small muted">no undo</span>`}</td></tr>`).join("") || `<tr><td class="muted" colspan="4">No actions executed yet.</td></tr>`);
+    $("#actions-table").querySelectorAll("[data-rollback]").forEach((b) => b.addEventListener("click", () => { if (confirm("Roll back this action? The action type is demoted one tier and a follow-up ticket opens.")) run(() => act({ kind: "rollback", id: Number(b.dataset.rollback) }), "Rolled back"); }));
+    $("#actions-table").querySelectorAll("[data-open]").forEach((a) => a.addEventListener("click", (e) => { e.preventDefault(); openTicket(a.dataset.open); }));
+  }
+
+  // ── spend ────────────────────────────────────────────────────────────────
+  function renderSpend() {
+    const b = S.budget;
+    $("#spend-month").textContent = usd(b.spent_month);
+    $("#spend-month-sub").textContent = `of ${usd(b.monthly)} · ${usd(b.spent_today)} in the last 24h · ${usd(b.session_max)} cap per session`;
+    const r = b.spent_month / b.monthly; const mm = $("#spend-month-meter"); mm.style.width = Math.min(100, r * 100) + "%"; mm.className = r > 0.9 ? "bad" : r > 0.7 ? "warn" : "";
+    const max = Math.max(0.01, ...b.daily.map((d) => d.usd));
+    $("#spend-bars").innerHTML = b.daily.map((d) => `<div style="height:${Math.max(2, d.usd / max * 70)}px" title="${d.day}: ${usd(d.usd)}"><span>${d.day.slice(3)}</span></div>`).join("");
+    $("#shares-table").innerHTML = `<tr><th>Department</th><th>Share</th><th>Used</th><th style="min-width:200px"></th></tr>` + b.shares.map((s) => `<tr><td>${esc(s.department)}</td><td class="num">${usd(s.cap)}</td><td class="num">${usd(s.used)}</td><td><div class="row" style="gap:8px"><div class="meter" style="flex:1"><i class="${s.ratio > 0.95 ? "bad" : s.ratio > 0.8 ? "warn" : ""}" style="width:${Math.min(100, s.ratio * 100)}%"></i></div><span class="num small">${(s.ratio * 100).toFixed(0)}%</span></div></td></tr>`).join("");
+    const rows = [...S.running.map((s) => ({ ...s, status: null, cost_usd: 0, turns: 0 })), ...S.sessions.filter((s) => s.ended_at)];
+    $("#sessions-table").innerHTML = `<tr><th>Session</th><th>Ticket</th><th>Engine</th><th>Status</th><th>Turns</th><th>Cost</th><th>When</th></tr>` + (rows.map((s) => `<tr><td><code>${esc(s.role)}</code></td><td><a href="#" data-open="${esc(s.ticket_id)}"><code>${esc(s.ticket_id)}</code></a></td><td class="small">${esc(s.engine)}:${esc(s.model)}</td><td><span class="pill ${s.status === "success" ? "ok" : s.status ? "bad" : "kernel"}">${esc(s.status || "running")}</span></td><td class="num">${s.turns || ""}</td><td class="num">${s.status ? usd(s.cost_usd) : ""}</td><td class="small muted">${ago(S.now - s.started_at)} ago</td></tr>`).join("") || `<tr><td class="muted" colspan="7">No sessions in the last 7 days.</td></tr>`);
+    $("#sessions-table").querySelectorAll("[data-open]").forEach((a) => a.addEventListener("click", (e) => { e.preventDefault(); if (!/^(CEO|COO|IMPROVEMENT)-/.test(a.dataset.open)) openTicket(a.dataset.open); }));
+  }
+
+  // ── controls ─────────────────────────────────────────────────────────────
+  const LEVELS = { L1: ["one agent", "stops that role's sessions; target is a role id such as engineering-senior"], L2: ["a department", "stops the department and its dispatch; target is a department or *"], L3: ["Improvement", "freezes releases, graduation and improvement"], L4: ["the organization", "one-shot: restores the previous release and withdraws any candidate, then clears itself"], L5: ["everything", "halts the company until you resume"] };
+  function renderControls() {
+    $("#interrupts").innerHTML = S.interrupts.length ? S.interrupts.map((i) => `<div class="row" style="padding:8px 0;border-bottom:1px solid var(--line)"><span class="pill bad mono">${esc(i.level)}</span><code>${esc(i.target)}</code><span class="small muted" style="flex:1">${esc(i.reason || "")}</span><button class="btn sm" data-resume="${esc(i.level)}|${esc(i.target)}">Resume</button></div>`).join("") : `<div class="empty small">No interrupts. Everything that is allowed to run, runs.</div>`;
+    $("#interrupts").querySelectorAll("[data-resume]").forEach((b) => b.addEventListener("click", () => { const [level, target] = b.dataset.resume.split("|"); run(() => act({ kind: "resume", level, target }), `Resumed ${level} on ${target}`); }));
+    $("#levels").innerHTML = Object.entries(LEVELS).map(([l, [who, what]]) => `<div class="level"><b>${l}</b><div><div>${esc(who)}</div><div class="small muted">${esc(what)}</div></div></div>`).join("");
+    const hint = () => { const l = $("#int-level").value; $("#int-hint").textContent = l === "L3" || l === "L4" || l === "L5" ? "target is * for this level" : ""; if (["L3", "L4", "L5"].includes(l)) $("#int-target").value = "*"; };
+    $("#int-level").onchange = hint; hint();
+  }
+  $("#int-raise").addEventListener("click", () => {
+    const level = $("#int-level").value, target = $("#int-target").value.trim() || "*", reason = $("#int-reason").value.trim();
+    if (!reason) return toast("Give a reason; it is written to the control file", true);
+    if (!confirm(`Raise ${level} on ${target}?${level === "L4" ? " The organization is restored from the previous release." : level === "L5" ? " Everything stops." : ""}`)) return;
+    run(() => act({ kind: "interrupt", level, target, reason }), `${level} raised on ${target}`).then(() => { $("#int-reason").value = ""; });
+  });
+
+  // ── keyboard ─────────────────────────────────────────────────────────────
+  document.addEventListener("keydown", (e) => {
+    if (e.target.matches("input, textarea, select")) { if (e.key === "Escape") e.target.blur(); return; }
+    if (e.key === "Escape") return closeDrawer();
+    if (/^[1-7]$/.test(e.key)) { location.hash = "#" + views[Number(e.key) - 1]; return; }
+    if (view === "inbox" && S?.inbox.length) {
+      const items = document.querySelectorAll("#inbox-list .item");
+      if (e.key === "j" || e.key === "k") { sel.inbox = Math.max(0, Math.min(items.length - 1, sel.inbox + (e.key === "j" ? 1 : -1))); items.forEach((x, i) => { x.classList.toggle("sel", i === sel.inbox); x.classList.toggle("open", i === sel.inbox); }); items[sel.inbox]?.scrollIntoView({ block: "nearest" }); }
+      if (e.key === "a" || e.key === "r") { const id = Number(items[sel.inbox]?.dataset.id); if (id) decide(id, e.key === "a" ? "approved" : "rejected"); }
+    }
+    if (view === "audit" && sel.audit) {
+      if (e.key === "a" || e.key === "r") { if (!sel.auditGraded[sel.audit]) grade(sel.audit, e.key === "a" ? "approve" : "reject"); }
+      if (e.key === "j" || e.key === "k") { const ids = S.audit.sample.map((t) => t.id); const i = ids.indexOf(sel.audit); sel.audit = ids[Math.max(0, Math.min(ids.length - 1, i + (e.key === "j" ? 1 : -1)))]; renderAudit(); }
+    }
+  });
+
+  show(view);
+  refresh();
+  setInterval(() => { if (!document.hidden) refresh(); }, 5000);
+})();
+</script>
+</body>
+</html>

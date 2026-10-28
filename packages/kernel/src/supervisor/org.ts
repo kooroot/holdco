@@ -14,8 +14,9 @@ export class OrgError extends Error {}
 const git = (cwd: string, args: ReadonlyArray<string>) => spawnSync("git", [...args], { cwd, encoding: "utf8" })
 
 export const latestReleaseTag = (companyRoot: string): string => {
+  // releases are r<n>; candidates (rc-<n>) are never the organization sessions run on by default
   const r = git(companyRoot, ["tag", "--list", "r*", "--sort=-creatordate"])
-  const tag = r.stdout.split("\n").map((s) => s.trim()).find((s) => s.length > 0)
+  const tag = r.stdout.split("\n").map((s) => s.trim()).find((s) => /^r\d+$/.test(s))
   if (r.status !== 0 || tag === undefined) throw new OrgError("no release tag (r0 or later); run `holdco release`")
   return tag
 }

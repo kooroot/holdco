@@ -6,6 +6,7 @@
  *                                        Create a company repository (see also: bunx create-holdco)
  *   holdco doctor [--dir d]                Preflight; launchers must refuse to start agents unless it passes
  *   holdco smoke [--cap usd] [--minutes n] One real ticket end to end with a hard per-session cap
+ *   holdco dashboard [--port n] [--open]  The Operator's console (inbox, tickets, audit, quality, releases, spend, controls)
  *   holdco build-hook [--dir d]            Compile the enforcement hook into <dir>/.claude/hooks/
  *   holdco config check <company.yaml>     Validate a configuration, including composition rules
  *   holdco engines [--dir d]               What each configured engine guarantees, and what the kernel compensates
@@ -396,7 +397,7 @@ switch (cmd) {
     const { runOperator, OperatorError } = await import("./cli/operator.ts")
     try {
       const handled = cmd === undefined ? false : await runOperator(cmd, { positional, flag, has }, instanceDir())
-      if (!handled) fail("usage: holdco init | doctor | build-hook | smoke | supervise | service [install] | status | models (= roles) | ticket | inbox | interrupt | resume | audit | digest | release | promote | rollback | project | engines | config check | validate | presets | schemas | examples")
+      if (!handled) fail("usage: holdco init | doctor | build-hook | smoke | supervise | dashboard | service [install] | status | models (= roles) | ticket | inbox | interrupt | resume | audit | digest | release | promote | rollback | project | engines | config check | validate | presets | schemas | examples")
     } catch (e) {
       if (e instanceof OperatorError) fail(e.message)
       throw e

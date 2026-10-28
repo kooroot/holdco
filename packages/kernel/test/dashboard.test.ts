@@ -1,0 +1,136 @@
+/** The Operator's dashboard: snapshot, ticket detail with diff, blind audit, and actions over HTTP. */
+import { afterAll, beforeAll, describe, expect, test } from "bun:test"
+import { spawnSync } from "node:child_process"
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import * as NodePath from "node:path"
+import { Schema } from "effect"
+import { CompanyConfig } from "../src/config/company.ts"
+import { renderCompanyYaml, scaffold } from "../src/scaffold/scaffold.ts"
+import { Store } from "../src/store/store.ts"
+import { dashboardToken, startDashboard, type DashboardServer } from "../src/dashboard/server.ts"
+import { readControl } from "../src/supervisor/control.ts"
+
+const base = mkdtempSync(NodePath.join(tmpdir(), "holdco-dash-"))
+afterAll(() => rmSync(base, { recursive: true, force: true }))
+const git = (cwd: string, ...args: Array<string>) => {
+  const r = spawnSync("git", args, { cwd, encoding: "utf8" })
+  if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr}`)
+  return r.stdout.trim()
+}
+
+const dir = NodePath.join(base, "co")
+const app = NodePath.join(base, "app")
+let store: Store
+let dash: DashboardServer
+let token: string
+const now = Date.UTC(2026, 9, 28, 9)
+const call = async (path: string, init: RequestInit = {}) => {
+  const r = await fetch(`http://127.0.0.1:${dash.port}${path}`, { ...init, headers: { authorization: `Bearer ${token}`, "content-type": "application/json", ...(init.headers ?? {}) } })
+  return { status: r.status, body: (await r.json()) as Record<string, any> }
+}
+const act = (a: Record<string, unknown>) => call("/api/act", { method: "POST", body: JSON.stringify(a) })
+
+beforeAll(() => {
+  mkdirSync(app)
+  git(app, "init", "-q", "-b", "main")
+  git(app, "config", "user.email", "t@t")
+  git(app, "config", "user.name", "t")
+  writeFileSync(NodePath.join(app, "README.md"), "# app\n")
+  git(app, "add", "-A")
+  git(app, "commit", "-qm", "init")
+  git(app, "checkout", "-q", "-b", "t/ENG-1")
+  writeFileSync(NodePath.join(app, "feature.md"), "the feature\nline two\n")
+  git(app, "add", "-A")
+  git(app, "commit", "-qm", "feature")
+  git(app, "checkout", "-q", "main")
+  scaffold({ dir, preset: "solo-dev", github: "tester", kernelVersion: "0.0.0-test" })
+  const raw = Bun.YAML.parse(readFileSync(NodePath.join(dir, "company.yaml"), "utf8")) as Record<string, unknown>
+  ;(raw["projects"] as Array<Record<string, unknown>>)[0] = { id: "app", path: "../app", class: "core", share: 1, locked: [] }
+  const config = Schema.decodeUnknownSync(CompanyConfig)(raw)
+  writeFileSync(NodePath.join(dir, "company.yaml"), renderCompanyYaml(config, "solo-dev"))
+  git(dir, "config", "user.email", "t@t")
+  git(dir, "config", "user.name", "t")
+  git(dir, "commit", "-qam", "register project")
+  store = Store.open(dir)
+  const t = store.createTicket({ department: "engineering", title: "Add the feature", goal: "feature.md on main", why: "asked", done_criteria: ["feature.md exists"], opened_by: "operator", project: "app", state: "awaiting_approval", action: "code.merge.app", now })
+  store.db.run("UPDATE tickets SET branch = 't/ENG-1', approval_stage = 'inbox' WHERE id = ?", [t.id])
+  store.addVerdict({ ticket_id: t.id, session_id: "s1", at: now, verdict: "approve", overall: 3.5, confidence: "low", payload: { ticket: t.id, verdict: "approve", summary: "looks right", failures: [], gates: [] } })
+  store.inboxAdd("t3", t.id, { title: "Merge ENG-1", tier: "T3" }, now)
+  const b = store.createTicket({ department: "engineering", title: "Stuck one", goal: "g", why: "w", done_criteria: ["d"], opened_by: "operator", project: "app", state: "blocked", action: "code.merge.app", now })
+  store.inboxAdd("blocked", b.id, { title: `${b.id} is blocked` }, now, "urgent")
+  store.startSession({ id: "s1", ticket_id: t.id, parent_session: null, role: "engineering-senior", kind: "senior", department: "engineering", engine: "claude", model: "opus", worktree: null, started_at: now - 1000, boot_id: "b", release: "r0" })
+  store.endSession("s1", { ended_at: now, status: "success", turns: 4, cost_usd: 0.42, cost_source: "engine", report: { summary: "ok" } })
+  store.charge({ at: now, role: "engineering-senior", department: "engineering", project: "app", session_id: "s1", usd: 0.42, source: "engine" })
+  token = dashboardToken(dir)
+  dash = startDashboard({ root: dir, config: () => Schema.decodeUnknownSync(CompanyConfig)(Bun.YAML.parse(readFileSync(NodePath.join(dir, "company.yaml"), "utf8"))), store, now: () => now, saveConfig: (c) => writeFileSync(NodePath.join(dir, "company.yaml"), renderCompanyYaml(c, "solo-dev")) }, 0)
+})
+afterAll(() => { dash.close(); store.close() })
+
+describe("dashboard", () => {
+  test("serves the page without a token and refuses the API without one", async () => {
+    const page = await fetch(`http://127.0.0.1:${dash.port}/`)
+    expect(page.status).toBe(200)
+    expect(await page.text()).toContain("<title>Holdco</title>")
+    const r = await fetch(`http://127.0.0.1:${dash.port}/api/state`)
+    expect(r.status).toBe(401)
+    expect(dash.url).toContain(`?t=${token}`)
+    expect(readFileSync(NodePath.join(dir, ".holdco", "dashboard.token"), "utf8").trim()).toBe(token)
+  })
+  test("snapshot carries the inbox with urgency and deadlines, tickets, spend, audit sample and quality", async () => {
+    const { status, body } = await call("/api/state")
+    expect(status).toBe(200)
+    expect(body.supervisor.release).toBe("r0")
+    expect(body.inbox.map((i: any) => i.urgency).sort()).toEqual(["routine", "urgent"])
+    const t3 = body.inbox.find((i: any) => i.kind === "t3")
+    expect(t3.expires_at).toBe(now + 72 * 3_600_000)
+    expect(t3.ticket.title).toBe("Add the feature")
+    expect(t3.verdict.summary).toBe("looks right")
+    expect(body.tickets.length).toBe(2)
+    expect(body.budget.spent_month).toBeCloseTo(0.42)
+    expect(body.audit.sample.map((t: any) => t.id)).toEqual(["ENG-1"])
+    expect(body.audit.due).toBe(true)
+    expect(body.quality.find((q: any) => q.id === "code.merge.app").tier).toBe("T2")
+  })
+  test("ticket detail has the diff; blind mode hides the verdict until graded", async () => {
+    const blind = await call("/api/ticket/ENG-1?blind=1")
+    expect(blind.body.verdict).toBeNull()
+    expect(blind.body.verdict_hidden).toBe(true)
+    expect(blind.body.diff.patch).toContain("+the feature")
+    expect(blind.body.diff.stat).toContain("feature.md")
+    const grade = await act({ kind: "grade", id: "ENG-1", verdict: "reject", note: "line two is wrong" })
+    expect(grade.body).toMatchObject({ ok: true, judge: "approve", agreement: false })
+    const after = await call("/api/ticket/ENG-1?blind=1")
+    expect(after.body.verdict.verdict).toBe("approve")
+    expect(after.body.label.operator_verdict).toBe("reject")
+    expect((await act({ kind: "grade", id: "ENG-1", verdict: "approve" })).status).toBe(400) // once
+    expect((await act({ kind: "audit_done" })).body.ok).toBe(true)
+    expect((await call("/api/state")).body.audit.due).toBe(false)
+  })
+  test("inbox decisions apply like the CLI: a blocked ticket is released or declined", async () => {
+    const state = (await call("/api/state")).body
+    const blocked = state.inbox.find((i: any) => i.kind === "blocked")
+    expect((await act({ kind: "inbox", id: blocked.id, decision: "approved", note: "go with option A" })).body.ok).toBe(true)
+    expect(store.ticket(blocked.ticket_id)?.state).toBe("triaged")
+    expect(store.inboxItem(blocked.id)?.status).toBe("approved")
+    const t3 = state.inbox.find((i: any) => i.kind === "t3")
+    expect((await act({ kind: "inbox", id: t3.id, decision: "rejected" })).body.ok).toBe(true)
+    expect((await act({ kind: "inbox", id: t3.id, decision: "rejected" })).status).toBe(400)
+  })
+  test("interrupts are raised and cleared through the control file", async () => {
+    expect((await act({ kind: "interrupt", level: "L2", target: "engineering", reason: "pause" })).body.ok).toBe(true)
+    expect(readControl(dir)).toMatchObject([{ level: "L2", target: "engineering", reason: "pause" }])
+    expect((await call("/api/state")).body.interrupts.length).toBe(1)
+    expect((await act({ kind: "resume", level: "L2", target: "engineering" })).body.ok).toBe(true)
+    expect(readControl(dir)).toEqual([])
+  })
+  test("release tags r1 and promote changes the tier", async () => {
+    const r = await act({ kind: "release", note: "from the dashboard" })
+    expect(r.body.tag).toBe("r1")
+    expect(git(dir, "tag", "--list", "r1")).toBe("r1")
+    const p = await act({ kind: "promote", action: "code.merge.app" })
+    expect(p.body).toMatchObject({ from: "T2", to: "T1" })
+    expect(readFileSync(NodePath.join(dir, "company.yaml"), "utf8")).toMatch(/id: code\.merge\.app\n\s+department: engineering\n\s+tier: T1/)
+    expect((await act({ kind: "promote", action: "code.merge.contracts" })).status).toBe(400)
+  })
+})
