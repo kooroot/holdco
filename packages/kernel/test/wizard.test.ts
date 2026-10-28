@@ -1,6 +1,6 @@
 /** The wizard's file edits: the first objective row and the voice placeholders doctor checks. */
 import { afterAll, describe, expect, test } from "bun:test"
-import { mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as NodePath from "node:path"
 import { KERNEL_VERSION } from "../src/index.ts"
@@ -35,4 +35,18 @@ test("expandPath: ~ is the home directory, the rest is resolved", () => {
   expect(expandPath("~/x")).toBe(NodePath.join(homedir(), "x"))
   expect(expandPath("~")).toBe(homedir())
   expect(expandPath("rel")).toBe(NodePath.resolve("rel"))
+})
+
+import { mkdirSync, writeFileSync } from "node:fs"
+import { createFromAnswers, WizardFailed } from "../src/cli/wizard.ts"
+test("a failed run removes what it created and reports in one error", async () => {
+  const parent = NodePath.join(base, "fail")
+  mkdirSync(NodePath.join(parent, "co"), { recursive: true })
+  writeFileSync(NodePath.join(parent, "co", "stray.txt"), "") // the company directory is not empty → scaffold refuses
+  const repo = NodePath.join(parent, "newrepo")
+  const run = createFromAnswers({ dir: NodePath.join(parent, "co"), github: "t", project: repo, newRepo: repo, preset: "solo-dev", models: "claude", mission: "m", timezone: "UTC", objective: undefined, voice: undefined, telegramToken: undefined }, undefined)
+  await expect(run).rejects.toBeInstanceOf(WizardFailed)
+  await run.catch((e: WizardFailed) => { expect(e.message).toContain("is not empty"); expect(e.removed).toEqual([repo]) })
+  expect(existsSync(repo)).toBe(false)
+  expect(existsSync(NodePath.join(parent, "co", "stray.txt"))).toBe(true) // not ours; untouched
 })

@@ -11,7 +11,7 @@
 import { spawnSync } from "node:child_process"
 import { existsSync } from "node:fs"
 import { resolve } from "node:path"
-import { createFromAnswers, KERNEL_VERSION, presetNames, runWizard, scaffold, TemplateError } from "@holdco/kernel"
+import { createFromAnswers, KERNEL_VERSION, presetNames, runWizard, scaffold, TemplateError, WizardFailed } from "@holdco/kernel"
 
 const argv = process.argv.slice(2)
 const VALUE = new Set(["preset", "github", "name", "project", "project-id", "mission", "timezone"])
@@ -37,7 +37,8 @@ if (!dir || argv.includes("--interactive")) {
     await createFromAnswers(answers, fromCheckout ? checkoutPackages : undefined)
     process.exit(0)
   } catch (e) {
-    console.error(e instanceof TemplateError ? e.message : String(e))
+    if (e instanceof WizardFailed) console.error(`\n✖ ${e.message}\n${e.removed.length ? `Removed ${e.removed.join(", ")}; nothing is left behind.` : "Nothing was created."} Run create-holdco again.`)
+    else console.error(e instanceof TemplateError ? e.message : String(e))
     process.exit(1)
   }
 }

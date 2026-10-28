@@ -5,7 +5,7 @@
  */
 import * as p from "@clack/prompts"
 import { spawnSync } from "node:child_process"
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { basename, dirname, join, relative, resolve } from "node:path"
 import { loadPreset } from "../scaffold/templates.ts"
@@ -33,7 +33,7 @@ export interface WizardAnswers {
 export const expandPath = (v: string): string => resolve(v === "~" ? homedir() : v.startsWith("~/") ? join(homedir(), v.slice(2)) : v)
 
 const sh = (cmd: string, args: Array<string>, cwd = process.cwd()) => {
-  const r = spawnSync(cmd, args, { cwd, stdio: "pipe", encoding: "utf8" })
+  const r = spawnSync(cmd, args, { cwd, stdio: "pipe", encoding: "utf8", timeout: 5000 })
   return r.status === 0 ? r.stdout.trim() : undefined
 }
 const has = (cmd: string) => sh("which", [cmd]) !== undefined
@@ -50,12 +50,23 @@ const nearbyRepos = (checkout: string): Array<string> => {
     try { entries = readdirSync(base) } catch { continue }
     for (const name of entries) {
       const path = join(base, name)
-      if (seen.has(path) || name.startsWith(".") || path === checkout) continue
+      if (seen.has(path) || name.startsWith(".") || path === checkout || (checkout && (path + "/").startsWith(checkout + "/"))) continue
       seen.add(path)
       try { if (statSync(join(path, ".git")).isDirectory()) out.push({ path, at: statSync(path).mtimeMs }) } catch { /* not a repo */ }
     }
   }
   return out.sort((a, b) => b.at - a.at).map((r) => r.path)
+}
+
+/** Is `dir` (or a parent) a git working tree? */
+const insideGitRepo = (dir: string): boolean => {
+  let d = dir
+  while (true) {
+    if (existsSync(join(d, ".git"))) return true
+    const up = dirname(d)
+    if (up === d) return false
+    d = up
+  }
 }
 
 const codexLoggedIn = () => existsSync(join(process.env["CODEX_HOME"] ?? join(homedir(), ".codex"), "auth.json"))
@@ -70,8 +81,18 @@ export const runWizard = async (checkoutPackages: string | undefined): Promise<W
   const claude = claudeInstalled(), codex = codexLoggedIn()
   let newRepo: string | undefined
 
-  const dirInput = await ask(p.text({ message: "Company directory", placeholder: "my-co", defaultValue: "my-co", validate: (v) => (existsSync(expandPath(v || "my-co")) && readdirSync(expandPath(v || "my-co")).length ? `${expandPath(v || "my-co")} is not empty` : undefined) }))
-  const dir = expandPath(dirInput || "my-co")
+  // Default: next to the checkout (a company inside the Holdco repository would nest two git repositories).
+  const insideCheckout = checkoutPackages !== undefined && (process.cwd() + "/").startsWith(dirname(checkoutPackages) + "/")
+  const dirDefault = insideCheckout ? join(dirname(dirname(checkoutPackages as string)), "my-co") : "my-co"
+  const dirProblem = (v: string): string | undefined => {
+    const d = expandPath(v)
+    if (existsSync(d) && readdirSync(d).length) return `${d} is not empty`
+    if (checkoutPackages && (d + "/").startsWith(dirname(checkoutPackages) + "/")) return "that is inside the Holdco checkout; put the company next to it"
+    if (insideGitRepo(dirname(d))) return `${dirname(d)} is inside a git repository; the company is its own repository`
+    return undefined
+  }
+  const dirInput = await ask(p.text({ message: "Company directory", placeholder: dirDefault, defaultValue: dirDefault, validate: (v) => dirProblem(v || dirDefault) }))
+  const dir = expandPath(dirInput || dirDefault)
   const githubGuess = guessGithub()
   const github = await ask(p.text({ message: "Your GitHub handle (CODEOWNERS and the approval path are built on it)", ...(githubGuess ? { defaultValue: githubGuess, placeholder: githubGuess } : { placeholder: "octocat" }), validate: (v) => (!(v || githubGuess) ? "needed" : undefined) }))
 
@@ -83,7 +104,10 @@ export const runWizard = async (checkoutPackages: string | undefined): Promise<W
   let project: string
   if (projectChoice === "__path") project = expandPath(await ask(p.text({ message: "Path to the repository", validate: (v) => (!v || !existsSync(join(expandPath(v), ".git")) ? "not a git repository" : undefined) })))
   else if (projectChoice === "__new") {
-    const name = await ask(p.text({ message: "Repository name", placeholder: "my-product", validate: (v) => (!/^[a-z0-9][a-z0-9._-]*$/i.test(v ?? "") ? "letters, digits, . _ -" : existsSync(join(dirname(dir), v)) ? "already exists" : undefined) }))
+    const name = await ask(p.text({
+      message: `Repository name (created in ${dirname(dir)})`, placeholder: "my-product",
+      validate: (v) => (!/^[a-z0-9][a-z0-9._-]*$/i.test(v ?? "") ? "letters, digits, . _ -" : join(dirname(dir), v) === dir ? "that is the company's own directory; pick another name" : existsSync(join(dirname(dir), v)) ? "already exists" : undefined),
+    }))
     project = join(dirname(dir), name)
     newRepo = project
   } else project = projectChoice
@@ -147,8 +171,24 @@ export const setVoice = (dir: string, voice: { tone: string; languages: string }
 
 export const createFromAnswers = async (a: WizardAnswers, checkoutPackages: string | undefined) => {
   const target = resolve(a.dir)
+  const created: Array<string> = []
+  try {
+    return await build(a, checkoutPackages, target, created)
+  } catch (e) {
+    for (const d of created) rmSync(d, { recursive: true, force: true })
+    throw new WizardFailed(e instanceof Error ? e.message : String(e), created)
+  }
+}
+
+/** A step failed; everything this run created is already removed. The CLI prints it in two lines. */
+export class WizardFailed extends Error {
+  constructor(message: string, readonly removed: ReadonlyArray<string>) { super(message) }
+}
+
+const build = async (a: WizardAnswers, checkoutPackages: string | undefined, target: string, created: Array<string>) => {
   const s = p.spinner()
   if (a.newRepo) {
+    created.push(a.newRepo)
     mkdirSync(a.newRepo, { recursive: true })
     writeFileSync(join(a.newRepo, "README.md"), `# ${basename(a.newRepo)}\n\nStarted by Holdco; the company's first project.\n`)
     spawnSync("git", ["init", "-q"], { cwd: a.newRepo })
@@ -157,9 +197,10 @@ export const createFromAnswers = async (a: WizardAnswers, checkoutPackages: stri
     p.log.success(`Repository created: ${a.newRepo}`)
   }
   s.start("Scaffolding the company")
+  if (!existsSync(target)) created.push(target)
   const r = scaffold({
     dir: target, preset: a.preset, kernelVersion: KERNEL_VERSION, git: true, github: a.github, mission: a.mission, timezone: a.timezone,
-    companyName: basename(target).toLowerCase().replace(/[^a-z0-9-]/g, "-"),
+    companyName: basename(target).toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "my-co", // a non-ASCII directory name still yields a usable id
     host: process.platform === "darwin" ? "macos-launchd" : "linux-systemd",
     ...(checkoutPackages ? { packagesDir: checkoutPackages } : {}),
     projectPath: resolve(a.project),
@@ -169,7 +210,7 @@ export const createFromAnswers = async (a: WizardAnswers, checkoutPackages: stri
   const step = (label: string, cmd: string, args: Array<string>, extraEnv: Record<string, string> = {}) => {
     s.start(label)
     const res = spawnSync(cmd, args, { cwd: target, stdio: "pipe", encoding: "utf8", env: { ...process.env, ...extraEnv } })
-    if (res.status !== 0) { s.stop(`${label}: failed`); p.log.error(res.stderr || res.stdout); throw new Error(`${cmd} ${args.join(" ")} failed`) }
+    if (res.status !== 0) { s.stop(`${label}: failed`); throw new Error(`${cmd} ${args.join(" ")} failed:\n${(res.stderr || res.stdout).trim()}`) }
     s.stop(label)
     return res.stdout
   }

@@ -26,7 +26,7 @@ import * as NodePath from "node:path"
 import { Cause, Effect, Exit, Schema } from "effect"
 import { assignments, authMode, CompanyConfig, ENGINE_IDS, type EngineId, Preset } from "./config/company.ts"
 import { loadOperatorEnv } from "./cli/env.ts"
-import { createFromAnswers, runWizard } from "./cli/wizard.ts"
+import { createFromAnswers, runWizard, WizardFailed } from "./cli/wizard.ts"
 import { compensations } from "./engine/compensation.ts"
 import type { Engine } from "./engine/types.ts"
 import { Brief } from "./protocol/brief.ts"
@@ -289,7 +289,13 @@ switch (cmd) {
       // No directory: the wizard (a terminal is needed; scripts pass the flags).
       if (!process.stdin.isTTY) fail("usage: holdco init            (interactive)\n       holdco init <dir> [--preset p] [--github handle] [--project repo] [--name n] [--mission m] [--timezone tz] [--no-git]")
       const answers = await runWizard(checkoutDir)
-      await createFromAnswers(answers, checkoutDir)
+      try {
+        await createFromAnswers(answers, checkoutDir)
+      } catch (e) {
+        if (!(e instanceof WizardFailed)) throw e
+        console.error(`\n✖ ${e.message}\n${e.removed.length ? `Removed ${e.removed.join(", ")}; nothing is left behind.` : "Nothing was created."} Run holdco init again.`)
+        process.exit(1)
+      }
       break
     }
     const dir = sub
