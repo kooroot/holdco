@@ -29,13 +29,13 @@
         "effect": "4.0.6",
         "react": "19.1.1",
         "react-dom": "19.1.1",
-        "zyzz": "latest",
+        "zyzz": "0.0.43",
       },
       "devDependencies": {
         "@types/react": "19.1.12",
         "@types/react-dom": "19.1.9",
         "@vitejs/plugin-react": "5.0.4",
-        "typescript": "5.9.2",
+        "typescript": "5.9.3",
         "vite": "7.1.7",
       },
     },
@@ -738,8 +738,6 @@
     "zod-to-json-schema": ["zod-to-json-schema@3.25.2", "", { "peerDependencies": { "zod": "^3.25.28 || ^4" } }, "sha512-O/PgfnpT1xKSDeQYSCfRI5Gy3hPf91mKVDuYLUHZJMiDFptvP41MSnWofm8dnCm0256ZNfZIM7DSzuSMAFnjHA=="],
 
     "zyzz": ["zyzz@0.0.43", "", { "dependencies": { "@emnapi/core": "2.0.0-alpha.6", "@emnapi/runtime": "2.0.0-alpha.6", "@jridgewell/gen-mapping": "^0.3.13", "@jridgewell/trace-mapping": "^0.3.31", "@napi-rs/wasm-runtime": "^1.2.5", "@oxc-project/types": "0.148.0", "@oxlint/plugins": "1.68.0", "css-tree": "3.2.1", "incur": "^0.5.1", "lightningcss": "^1.33.0", "magic-string": "^1.2.3", "oxc-parser": "0.148.0", "oxc-resolver": "11.24.2", "oxc-walker": "1.1.1", "unplugin": "^3.4.0" }, "peerDependencies": { "@babel/core": "^7.29.7", "@base-ui/react": "1.8.0", "next": "^16.3.5", "react": "^19.0.0", "react-native": ">=0.86.0 <1.0.0", "react-native-reanimated": ">=4.5.3 <5.0.0", "vite": "^8.0.0" }, "optionalPeers": ["@babel/core", "@base-ui/react", "next", "react", "react-native", "react-native-reanimated", "vite"], "bin": { "zyzz": "./dist/cli/index.js", "zyzz.src": "./src/cli/index.ts" } }, "sha512-pWEZBTAUJ3/XJea/GaYbvK0nL98ArFl06JJS6q8g9wwBLx0Z3h95JeGGmgJghAUOslEE/akaLDxOlxSiR/J/VA=="],
-
-    "@holdco/dashboard/typescript": ["typescript@5.9.2", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-CWBzXQrc/qOkhidw1OzBTQuYRbfyxDXJMVJ1XNwUHGROVmuaeiEm3OslpZ1RV96d7SKKjZKrSJu3+t/xlw3R9A=="],
 
     "@napi-rs/wasm-runtime/@emnapi/core": ["@emnapi/core@1.11.2", "", { "dependencies": { "@emnapi/wasi-threads": "1.2.2", "tslib": "^2.4.0" } }, "sha512-TC8MkTuZUtcTSiFeuC0ksCh9QIJ5+F21MvZ4Wn4ORfYaFJ/0dsiudv5tVkejgwZlwQ39jL9WWDe2lz8x0WglOA=="],
 
