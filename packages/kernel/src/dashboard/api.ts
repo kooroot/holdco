@@ -17,7 +17,7 @@ import { Store, type Ticket } from "../store/store.ts"
 import { clear as clearInterrupt, raise as raiseInterrupt, readControl } from "../supervisor/control.ts"
 import { undoAction } from "../supervisor/executors.ts"
 import { latestReleaseTag } from "../supervisor/org.ts"
-import { Supervisor } from "../supervisor/supervisor.ts"
+import { Supervisor, WORK_WAKE_MS } from "../supervisor/supervisor.ts"
 import { defaultBranch } from "../supervisor/worktrees.ts"
 
 const DAY = 86_400_000
@@ -108,6 +108,33 @@ export const snapshot = (ctx: DashboardContext) => {
   })
   const labels = store.labels()
   const sample = auditSample(ctx)
+  // What every open ticket waits on, and when that is expected to move — the answer to "what is it doing?"
+  const lastCeo = Number(store.getMeta("job:ceo") ?? 0)
+  const ceoCycleMs = durationMs(config.policy.executive.ceo_cycle)
+  const nextCeo = (changedAt: number): number | null => {
+    if (config.modules.executive === "none") return null
+    if (changedAt > lastCeo) return Math.max(now, lastCeo + WORK_WAKE_MS) // the wake-on-work rule
+    return lastCeo + ceoCycleMs
+  }
+  const waiting = store.ticketsIn(["new", "triaged", "in_progress", "ready_for_verification", "verified", "awaiting_approval", "rejected", "blocked"]).map((t) => {
+    const live = running.find((r) => r.ticket_id === t.id)
+    const w = (on: string, eta: number | null = null, detail: string | null = null) => ({ ticket_id: t.id, title: t.title, state: t.state, on, eta, detail })
+    if (live) return w("session", null, live.role)
+    switch (t.state) {
+      case "new": return w("ceo_triage", nextCeo(t.updated_at))
+      case "triaged": case "rejected": return w("senior_slot")
+      case "in_progress": return w("lease", t.lease_expires, t.lease_holder)
+      case "ready_for_verification": return w("verification_slot")
+      case "verified": return w("kernel")
+      case "awaiting_approval":
+        if (t.approval_stage === "needs_proposal") return w("ceo_proposal", nextCeo(t.updated_at))
+        if (t.approval_stage === "needs_review") return w("coo_review")
+        return w("operator", inboxExpiry(t.id))
+      case "blocked": return w("operator", inboxExpiry(t.id))
+      default: return w("kernel")
+    }
+  })
+  function inboxExpiry(ticketId: string): number | null { const item = store.inboxOpen().find((i) => i.ticket_id === ticketId); return item ? item.created_at + timeout : null }
   const lastAudit = store.lastAuditAt() ?? null
   const quality = config.actions.map((a) => {
     const ls = store.labels(a.id)
@@ -180,6 +207,8 @@ export const snapshot = (ctx: DashboardContext) => {
     actions,
     activity,
     done_24h: done24h.map((t) => ({ id: t.id, title: t.title, department: t.department, cost: t.cost })),
+    waiting,
+    next_ceo_at: config.modules.executive === "none" ? null : lastCeo + ceoCycleMs,
     org,
     settings,
   }

@@ -4,6 +4,7 @@ import { style, vars } from "../../zyzz.config.ts"
 import { ago, usd } from "../format.ts"
 import { useSnapshot } from "../hooks.ts"
 import { useOpenTicket } from "../nav.ts"
+import { etaText, waitingText } from "../ticket/Waiting.tsx"
 import { cn, Empty, Head, ui } from "../ui.tsx"
 import { t, useLang } from "../i18n.ts"
 
@@ -17,6 +18,7 @@ const st = {
   idText: style({ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: "0 !custom" }),
   t: style({ fontSize: "13px !custom", lineHeight: 1.35, overflowWrap: "anywhere" }),
   flag: style({ fontSize: "11.5px !custom", color: "signal" }),
+  wait: style({ fontSize: "11.5px !custom", color: "muted" }),
 }
 
 const COLS: Array<[string, Array<string>]> = [["Triaged", ["new", "triaged"]], ["In progress", ["in_progress", "rejected"]], ["Verifying", ["ready_for_verification", "verified"]], ["Approval", ["awaiting_approval"]], ["Blocked", ["blocked"]], ["Done", ["done", "declined", "rolled_back"]]]
@@ -30,6 +32,7 @@ export const Board = () => {
   const S = q.data
   if (!S) return <Empty>Loading…</Empty>
   const depts = [...new Set(S.tickets.map((x) => x.department))].sort()
+  const waits = Object.fromEntries(S.waiting.map((w) => [w.ticket_id, w]))
   const tickets = S.tickets.filter((x) => !dept || x.department === dept)
   return (
     <>
@@ -45,7 +48,7 @@ export const Board = () => {
                   <div {...st.id()}><span>{tk.id}</span><span>{tk.cost ? usd(tk.cost) : ""}</span></div>
                   <div {...st.t()}>{tk.title}</div>
                   <div {...st.id()}><span {...st.idText()}>{tk.department}{tk.action ? ` · ${tk.action}` : ""}</span><span>{ago(S.now - tk.updated_at)}</span></div>
-                  {tk.state === "blocked" ? <div {...st.flag()}>{t("needs a decision")}</div> : tk.interrupt_flag ? <div {...st.flag()}>{t("paused: {f}", { f: tk.interrupt_flag })}</div> : tk.state === "rejected" ? <div {...cn(st.flag(), ui.muted())}>{t("rejected, retrying ({n})", { n: tk.attempts })}</div> : null}
+                  {tk.state === "blocked" ? <div {...st.flag()}>{t("needs a decision")}</div> : tk.interrupt_flag ? <div {...st.flag()}>{t("paused: {f}", { f: tk.interrupt_flag })}</div> : tk.state === "rejected" ? <div {...cn(st.flag(), ui.muted())}>{t("rejected, retrying ({n})", { n: tk.attempts })}</div> : waits[tk.id] ? <div {...st.wait()}>{waitingText(waits[tk.id]!)}{etaText(waits[tk.id]!, S.now) ? ` · ${etaText(waits[tk.id]!, S.now)}` : ""}</div> : null}
                 </div>)) : <div {...cn(ui.small(), ui.muted())} style={{ padding: "6px 2px" }}>—</div>}</div>
             </div>
           )

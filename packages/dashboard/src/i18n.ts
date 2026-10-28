@@ -106,6 +106,10 @@ const KO: Record<string, string> = {
   "You graded it {v} on {t}": "{t}에 {v}로 채점함", "Verdict withheld until you grade this ticket in the audit.": "감사에서 이 티켓을 채점할 때까지 판정은 가려집니다.", "Notes to the next session": "다음 세션에 줄 메모", "Tell the senior or the judge something; the next session on this ticket reads it": "시니어나 심판에게 할 말; 이 티켓의 다음 세션이 읽습니다", "Note saved; it reaches {r}": "메모 저장됨; {r}에 전달", "Loading…!": "불러오는 중…",
   "No files changed{b}.": "변경된 파일 없음{b}.", " vs {b}": " ({b} 대비)", "Binary file.": "바이너리 파일.", "Truncated at 300 KB.": "300 KB에서 잘림.", "No changes against {b}.": "{b} 대비 변경 없음.", "Diff truncated at 400 KB; open the branch in your editor for the rest.": "diff가 400 KB에서 잘림; 나머지는 에디터에서 브랜치를 여세요.",
   "The next session re-reads goal and criteria.": "다음 세션이 목표와 기준을 다시 읽습니다.",
+  // waiting on
+  "Waiting on": "대기 중", "nothing runs until one of these moves": "이 중 하나가 움직여야 세션이 돕니다",
+  "w.session": "{d} 세션 실행 중", "w.ceo_triage": "CEO 분류", "w.ceo_proposal": "CEO 제안서 (T2/T3 승인 경로)", "w.coo_review": "COO 검토 (다음 틱)", "w.operator": "당신의 결정 (인박스)", "w.senior_slot": "시니어 세션 (다음 틱, 빈 슬롯)", "w.verification_slot": "검증 세션 (다음 틱)", "w.lease": "리스 (만료되면 회수)", "w.kernel": "커널 (다음 틱)",
+  "in {t}": "{t} 후", "now": "지금", "CEO runs in {t}": "CEO {t} 후 실행", "CEO is due now": "CEO 곧 실행",
   // misc
   "Dashboard unreachable": "대시보드에 연결할 수 없음", "Could not load": "불러올 수 없음", "Loading {id}…": "{id} 불러오는 중…",
 }

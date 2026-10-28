@@ -7,3 +7,6 @@ export const clock = (t: number) => new Date(t).toLocaleString(locale(), { month
 export const STATE_LABEL: Record<string, string> = { new: "New", triaged: "Triaged", in_progress: "In progress", ready_for_verification: "Verifying", verified: "Verified", awaiting_approval: "Approval", done: "Done", rejected: "Rejected", blocked: "Blocked", declined: "Declined", rolled_back: "Rolled back" }
 export const KIND_LABEL: Record<string, string> = { t3: "Approval needed", t2_objection: "COO objected", coo_timeout: "COO did not answer", triage: "Triage", blocked: "Blocked ticket", graduation: "Graduation proposal", issue: "Issue from an agent", manual_action: "Run by hand", candidate_withdrawn: "Candidate withdrawn" }
 export const END_STATES = new Set(["done", "declined", "rolled_back"])
+
+/** English wording of what a ticket waits on (`Snapshot.waiting[].on`); i18n keys `w.<on>` carry the Korean. */
+export const WAITING_EN: Record<string, string> = { session: "{d} session running", ceo_triage: "CEO triage", ceo_proposal: "CEO proposal (T2/T3 approval path)", coo_review: "COO review (next tick)", operator: "your decision (inbox)", senior_slot: "a senior session (next tick, free slot)", verification_slot: "a Verification session (next tick)", lease: "a lease (reclaimed when it expires)", kernel: "the kernel (next tick)" }

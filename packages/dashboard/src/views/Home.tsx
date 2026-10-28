@@ -4,6 +4,7 @@ import { style, vars } from "../../zyzz.config.ts"
 import { ago, locale, STATE_LABEL, usd } from "../format.ts"
 import { useSnapshot } from "../hooks.ts"
 import { useNewTicket, useOpenTicket } from "../nav.ts"
+import { etaText, waitingText } from "../ticket/Waiting.tsx"
 import { cn, Button, Card, Code, Empty, Head, Pill, Td, ui } from "../ui.tsx"
 import { t, useLang } from "../i18n.ts"
 
@@ -51,6 +52,8 @@ export const Home = () => {
           <div {...ui.stack()}>
             <Card><div {...st.sect()}><h3 {...ui.h3()}>{t("Running now")}</h3></div>
               {S.running.length ? <table {...ui.table()}><tbody>{S.running.map((r) => <tr key={r.id}><Td><Code>{r.role}</Code><div {...cn(ui.small(), ui.muted())}>{r.engine}:{r.model}</div></Td><Td><TicketLink id={r.ticket_id} live /></Td><Td className={cn(ui.small(), ui.muted(), ui.num()).className}>{ago(S.now - r.started_at)} <span {...ui.muted()}>· {t("watch")}</span></Td></tr>)}</tbody></table> : <Empty>{t(S.supervisor.alive ? "Idle. Sessions start as tickets become ready." : "Supervisor not running — start it with holdco supervise.")}</Empty>}
+              {!S.running.length && S.waiting.length ? <div {...st.sect()} style={{ paddingTop: 0 }}><h3 {...ui.h3()}>{t("Waiting on")}</h3><div {...cn(ui.small(), ui.muted())}>{t("nothing runs until one of these moves")}</div></div> : null}
+              {!S.running.length && S.waiting.length ? <table {...ui.table()}><tbody>{S.waiting.map((w) => <tr key={w.ticket_id}><Td><TicketLink id={w.ticket_id} /><div {...cn(ui.small(), ui.muted())}>{w.title}</div></Td><Td className={ui.small().className}>{waitingText(w)}</Td><Td className={cn(ui.small(), ui.muted(), ui.num()).className}>{etaText(w, S.now)}</Td></tr>)}</tbody></table> : null}
             </Card>
             <Card><div {...st.sect()}><h3 {...ui.h3()}>{t("Finished in the last 24h")}</h3></div>
               {S.done_24h.length ? <table {...ui.table()}><tbody>{S.done_24h.map((tk) => <tr key={tk.id}><Td><TicketLink id={tk.id} /></Td><Td>{tk.title}</Td><Td className={cn(ui.small(), ui.muted()).className}>{tk.department}</Td><Td className={cn(ui.num(), ui.small()).className}>{usd(tk.cost)}</Td></tr>)}</tbody></table> : <Empty>{t("Nothing finished in the last day.")}</Empty>}

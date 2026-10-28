@@ -8,6 +8,7 @@ import { cn, Button, Card, Code, Kv, Pill, Tabs, Td, VerdictPill, ui } from "../
 import { Diff } from "./Diff.tsx"
 import { Files } from "./Files.tsx"
 import { Live } from "./Live.tsx"
+import { etaText, waitingText } from "./Waiting.tsx"
 import { t as tr, useLang } from "../i18n.ts"
 
 const st = {
@@ -34,6 +35,7 @@ export const Drawer = ({ id, onClose }: { id: string; onClose: () => void }) => 
   useLang()
   const d = q.data
   const t = d?.ticket
+  const wait = snap.data?.waiting.find((w) => w.ticket_id === id)
   const canEdit = t ? !["done", "declined", "rolled_back"].includes(t.state) : false
   const v = d?.verdict as { verdict: string; overall: number; confidence: string; payload: { summary?: string; failures?: Array<{ criterion: string; evidence: string }>; gates?: Array<{ gate: string; passed: boolean }> } } | null | undefined
   return (
@@ -53,7 +55,7 @@ export const Drawer = ({ id, onClose }: { id: string; onClose: () => void }) => 
               <Tabs tabs={[["overview", tr("Overview")], ["live", tr(d.sessions.some((x) => x.ended_at === null) ? "Live ●" : "Log")], ["files", tr("Files")], ["diff", tr("Diff")]]} value={tab} onChange={setTab} right={canEdit ? <Button sm onClick={() => { snap.data; setNew(true); sessionStorage.setItem("holdco.edit", id) }}>{tr("Edit")}</Button> : null} />
               {tab === "overview" ? (
                 <div {...ui.stack()}>
-                  <Kv rows={[[tr("Goal"), t.goal], [tr("Why"), t.why], [tr("Done when"), <ul {...ui.criteria()}>{t.done_criteria.map((c) => <li key={c}>{c}</li>)}</ul>], ...(t.branch ? [[tr("Branch"), <Code>{t.branch}</Code>] as [string, React.ReactNode]] : []), [tr("Cost"), tr("{c} across {n} sessions", { c: usd(d.cost), n: d.sessions.length })], [tr("Attempts"), String(t.attempts)]]} />
+                  <Kv rows={[[tr("Goal"), t.goal], [tr("Why"), t.why], [tr("Done when"), <ul {...ui.criteria()}>{t.done_criteria.map((c) => <li key={c}>{c}</li>)}</ul>], ...(t.branch ? [[tr("Branch"), <Code>{t.branch}</Code>] as [string, React.ReactNode]] : []), [tr("Cost"), tr("{c} across {n} sessions", { c: usd(d.cost), n: d.sessions.length })], [tr("Attempts"), String(t.attempts)], ...(wait ? [[tr("Waiting on"), `${waitingText(wait)}${etaText(wait, snap.data?.now ?? Date.now()) ? ` · ${etaText(wait, snap.data?.now ?? Date.now())}` : ""}`] as [string, React.ReactNode]] : [])]} />
                   {t.state === "blocked" ? (
                     <Card pad><div {...ui.stack()}><b>{tr("Decision needed")}</b><p {...ui.small()} style={{ whiteSpace: "pre-wrap", margin: 0 }}>{t.note}</p>
                       <input {...ui.input()} value={decision} onChange={(e) => setDecision(e.target.value)} placeholder={tr("your decision, in one line (the senior reads it)")} />

@@ -63,6 +63,9 @@ export const Settings = Schema.Struct({
   runtime: Schema.Struct({ tick: Str, max_concurrent_sessions: Num, max_attempts: Num }), actions: Schema.Array(Schema.Struct({ id: Str, department: Str, tier: Tier })),
 })
 
+/** What an open ticket waits on: `on` is a key the UI words (session, ceo_triage, ceo_proposal, coo_review, operator, senior_slot, verification_slot, lease, kernel); `eta` when that is expected to move. */
+export const Waiting = Schema.Struct({ ticket_id: Str, title: Str, state: TicketState, on: Str, eta: NullNum, detail: NullStr })
+
 export const Snapshot = Schema.Struct({
   now: Num,
   company: Schema.Struct({ name: Str, mission: Str, timezone: Str }),
@@ -86,6 +89,8 @@ export const Snapshot = Schema.Struct({
   actions: Schema.Array(ActionLogRow),
   activity: Schema.Array(Activity),
   done_24h: Schema.Array(Schema.Struct({ id: Str, title: Str, department: Str, cost: Num })),
+  waiting: Schema.Array(Waiting),
+  next_ceo_at: NullNum,
   org: Org,
   settings: Settings,
 })

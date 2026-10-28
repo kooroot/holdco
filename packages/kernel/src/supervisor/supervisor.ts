@@ -68,7 +68,13 @@ interface Running {
 /** Below this much remaining budget a share counts as exhausted: no session could do anything with it. */
 const MIN_SESSION_USD = 0.05
 /** With no work left, the CEO is woken at most this often to open the next tickets from the strategy. */
-const IDLE_WAKE_MS = 3_600_000
+/** Tickets only the CEO can move (triage, a proposal to write) that changed after `since`. */
+export const ceoWorkSince = (store: Store, since: number): boolean =>
+  store.ticketsIn(["new"]).some((t) => t.updated_at > since) || store.ticketsIn(["awaiting_approval"]).some((t) => t.approval_stage === "needs_proposal" && t.updated_at > since)
+
+export const IDLE_WAKE_MS = 3_600_000
+/** The CEO is woken for new work (tickets to triage, proposals to write) this soon after its last run, so a T2 ticket never waits for the daily cycle. */
+export const WORK_WAKE_MS = 120_000
 /** How a judge handles gates and the sandbox; the first live runs rejected sound work over missing network and dependencies. */
 const VERIFICATION_RULES = (gates: ReadonlyArray<string>, ticketId: string): Array<string> => [
   gates.length
@@ -732,8 +738,12 @@ export class Supervisor {
     // The CEO runs on its cycle, and early when the company has run out of work (the backlog is
     // empty) so one finished ticket never leaves the company idle until the next cycle.
     const backlogEmpty = this.store.ticketsIn(["new", "triaged", "in_progress", "ready_for_verification", "verified", "awaiting_approval", "rejected"]).length === 0 && this.running.size === 0
-    const idleWake = backlogEmpty && now - (this.lastJob.get("ceo") ?? 0) >= IDLE_WAKE_MS
-    if (this.config.modules.executive !== "none" && (this.due("ceo", durationMs(this.config.policy.executive.ceo_cycle), now) || (idleWake && this.due("ceo", IDLE_WAKE_MS, now)))) this.ceoCycle(now)
+    const lastCeo = this.lastJob.get("ceo") ?? 0
+    const idleWake = backlogEmpty && now - lastCeo >= IDLE_WAKE_MS
+    // Work that only the CEO can move, and that appeared after its last run: wake it (debounced), instead of
+    // letting a verified T2 ticket sit until the daily cycle. Work the CEO already saw waits for the cycle.
+    const ceoWork = ceoWorkSince(this.store, lastCeo)
+    if (this.config.modules.executive !== "none" && (this.due("ceo", durationMs(this.config.policy.executive.ceo_cycle), now) || (idleWake && this.due("ceo", IDLE_WAKE_MS, now)) || (ceoWork && this.due("ceo", WORK_WAKE_MS, now)))) this.ceoCycle(now)
     if (this.config.modules.executive === "ceo+coo") this.cooReviews(now)
     if (this.due("tripwires", durationMs(this.config.runtime.tick), now)) this.tripwires(now)
     if (this.due("audit", DAY, now)) this.auditWatch(now)

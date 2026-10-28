@@ -295,6 +295,25 @@ describe("the company does not stop", () => {
     expect(store.ticketsIn(["triaged", "new"]).length).toBe(1)
     await sup.stop()
   })
+  test("work only the CEO can move wakes it within minutes, once per batch, not every tick", async () => {
+    const c = company("wake", (raw) => { ((raw["policy"] as Record<string, Record<string, unknown>>)["executive"] as Record<string, unknown>)["ceo_cycle"] = "24h" })
+    const clock = { now: Date.UTC(2026, 9, 28, 9) }
+    let cycles = 0
+    const engine = new FakeEngine({ ceo: async ({ spec }) => { if (spec.prompt.startsWith("# CEO cycle")) cycles++; return {} } })
+    const { sup, store } = makeSupervisor(c, engine, clock)
+    await sup.boot()
+    await cycle(sup, clock, 1)
+    expect(cycles).toBe(1)
+    // the Operator opens a ticket in state `new` (as `holdco ticket new --raw` or an agent's ticket_create would): CEO work
+    store.createTicket({ department: "engineering", title: "Needs triage", goal: "g", why: "w", done_criteria: ["d"], opened_by: "operator", project: "app", state: "new", now: clock.now + 60_000 })
+    await cycle(sup, clock, 1) // one minute later: not yet (debounce)
+    expect(cycles).toBe(1)
+    await cycle(sup, clock, 2) // two more minutes: woken
+    expect(cycles).toBe(2)
+    await cycle(sup, clock, 5) // the ticket is still `new` (the fake CEO did nothing) but the CEO already saw it: no re-run until the cycle
+    expect(cycles).toBe(2)
+    await sup.stop()
+  })
 })
 
 describe("Operator notes (D55)", () => {
