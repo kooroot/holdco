@@ -5,6 +5,7 @@
     "": {
       "name": "holdco-monorepo",
       "devDependencies": {
+        "@holdco/kernel": "workspace:*",
         "@types/bun": "1.4.4",
         "typescript": "5.9.3",
       },
@@ -16,7 +17,6 @@
         "create-holdco": "./src/index.ts",
       },
       "dependencies": {
-        "@clack/prompts": "0.11.0",
         "@holdco/kernel": "workspace:*",
       },
     },
@@ -69,6 +69,7 @@
         "holdco": "./src/cli.ts",
       },
       "dependencies": {
+        "@clack/prompts": "0.11.0",
         "@modelcontextprotocol/sdk": "1.32.2",
         "effect": "4.0.6",
         "zod": "4.6.7",

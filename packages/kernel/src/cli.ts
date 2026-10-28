@@ -2,7 +2,8 @@
 /**
  * holdco — the Holdco kernel CLI.
  *
- *   holdco init <dir> [--preset p] [--github h] [--name n] [--no-git]
+ *   holdco init                            Interactive: a company that passes doctor
+ *   holdco init <dir> [--preset p] [--github h] [--project repo] [--name n] [--no-git]
  *                                        Create a company repository (see also: bunx create-holdco)
  *   holdco doctor [--dir d]                Preflight; launchers must refuse to start agents unless it passes
  *   holdco smoke [--cap usd] [--minutes n] One real ticket end to end with a hard per-session cap
@@ -25,6 +26,7 @@ import * as NodePath from "node:path"
 import { Cause, Effect, Exit, Schema } from "effect"
 import { assignments, authMode, CompanyConfig, ENGINE_IDS, type EngineId, Preset } from "./config/company.ts"
 import { loadOperatorEnv } from "./cli/env.ts"
+import { createFromAnswers, runWizard } from "./cli/wizard.ts"
 import { compensations } from "./engine/compensation.ts"
 import type { Engine } from "./engine/types.ts"
 import { Brief } from "./protocol/brief.ts"
@@ -282,12 +284,20 @@ loadOperatorEnv(instanceDir())
 
 switch (cmd) {
   case "init": {
-    const dir = sub ?? fail("usage: holdco init <dir> [--preset p] [--github handle] [--name n] [--no-git]")
+    const checkoutDir = existsSync(NodePath.join(import.meta.dir, "..", "..", "create-holdco", "package.json")) ? NodePath.resolve(import.meta.dir, "..", "..") : undefined
+    if (sub === undefined) {
+      // No directory: the wizard (a terminal is needed; scripts pass the flags).
+      if (!process.stdin.isTTY) fail("usage: holdco init            (interactive)\n       holdco init <dir> [--preset p] [--github handle] [--project repo] [--name n] [--mission m] [--timezone tz] [--no-git]")
+      const answers = await runWizard(checkoutDir)
+      await createFromAnswers(answers, checkoutDir)
+      break
+    }
+    const dir = sub
     const preset = flag("preset") ?? "solo-dev"
     const github = flag("github")
     const name = flag("name")
     const project = flag("project")
-    const checkout = existsSync(NodePath.join(import.meta.dir, "..", "..", "create-holdco", "package.json")) ? NodePath.resolve(import.meta.dir, "..", "..") : undefined
+    const checkout = checkoutDir
     if (checkout) for (const pkg of ["kernel", "engine-claude", "engine-codex"]) spawnSync("bun", ["link"], { cwd: NodePath.join(checkout, pkg), stdio: "pipe" })
     const result = scaffold({
       dir: NodePath.resolve(dir),

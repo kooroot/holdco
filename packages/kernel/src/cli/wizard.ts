@@ -1,5 +1,5 @@
 /**
- * The interactive path of create-holdco: seven questions, then everything the flags path does plus
+ * The interactive path of `holdco init` and `create-holdco`: seven questions, then everything the flags path does plus
  * the follow-ups the Operator used to do by hand (models preset, first objective, env file,
  * Telegram pairing). Ends with a company that passes doctor and the one command to run next.
  */
@@ -8,7 +8,10 @@ import { spawnSync } from "node:child_process"
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { basename, dirname, join, relative, resolve } from "node:path"
-import { KERNEL_VERSION, loadPreset, scaffold, TemplateError, writeOperatorEnv } from "@holdco/kernel"
+import { loadPreset } from "../scaffold/templates.ts"
+import { scaffold } from "../scaffold/scaffold.ts"
+import { KERNEL_VERSION } from "../version.ts"
+import { writeOperatorEnv } from "./env.ts"
 
 export interface WizardAnswers {
   readonly dir: string

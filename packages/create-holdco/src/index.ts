@@ -11,8 +11,7 @@
 import { spawnSync } from "node:child_process"
 import { existsSync } from "node:fs"
 import { resolve } from "node:path"
-import { KERNEL_VERSION, presetNames, scaffold, TemplateError } from "@holdco/kernel"
-import { createFromAnswers, runWizard } from "./wizard.ts"
+import { createFromAnswers, KERNEL_VERSION, presetNames, runWizard, scaffold, TemplateError } from "@holdco/kernel"
 
 const argv = process.argv.slice(2)
 const VALUE = new Set(["preset", "github", "name", "project", "project-id", "mission", "timezone"])

@@ -3,8 +3,9 @@ import { afterAll, describe, expect, test } from "bun:test"
 import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as NodePath from "node:path"
-import { KERNEL_VERSION, scaffold } from "@holdco/kernel"
-import { setFirstObjective, setVoice } from "../src/wizard.ts"
+import { KERNEL_VERSION } from "../src/index.ts"
+import { scaffold } from "../src/scaffold/scaffold.ts"
+import { setFirstObjective, setVoice } from "../src/cli/wizard.ts"
 
 const base = mkdtempSync(NodePath.join(tmpdir(), "holdco-wizard-"))
 afterAll(() => rmSync(base, { recursive: true, force: true }))

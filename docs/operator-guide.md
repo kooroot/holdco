@@ -10,14 +10,14 @@
 ### 1. Create (once)
 
 ```bash
-bunx create-holdco            # interactive: answers become the company
+bunx holdco init              # interactive: answers become the company (bunx create-holdco is the same)
 ```
 
-Until `@holdco/*` is on npm, run it from a checkout: `git clone https://github.com/kooroot/holdco && cd holdco && bun install && bun run create`; the company is linked to the checkout's packages, so `git pull` in the checkout updates it.
+Until `@holdco/*` is on npm, run it from a checkout: `git clone https://github.com/kooroot/holdco && cd holdco && bun install && bunx holdco init`; the company is linked to the checkout's packages, so `git pull` in the checkout updates it.
 
 The wizard asks for the directory, your GitHub handle (guessed from `gh`), the first project (git repositories near you are listed), the organization (full company or solo), the models (Claude + Codex when both logins are found), a mission, the first objective, the voice of public posts (full preset), and optionally a Telegram bot token. Then it scaffolds the company, registers the project, installs dependencies, compiles the guard, applies the models, writes the objective and the voice, saves the token to `~/.config/holdco/<company>.env` (mode 600; every `holdco` command loads it), pairs the bot with your chat, and runs `holdco doctor`. A company that passes doctor is one `bunx holdco smoke --cap 1` away from its first real ticket.
 
-Scripted: `bunx create-holdco <dir> --github <you> --project ../your-repo [--preset solo-dev|solo-codex|full] [--name n] [--mission "…"] [--timezone tz]` does the scaffold, install, guard and doctor, and prints what is left:
+Scripted: `bunx holdco init <dir> --github <you> --project ../your-repo [--preset solo-dev|solo-codex|full] [--name n] [--mission "…"] [--timezone tz]` (or `create-holdco` with the same flags) does the scaffold, install, guard and doctor, and prints what is left:
 
 | Left for you | Where |
 |---|---|
@@ -101,14 +101,14 @@ An action with no entry reaches your inbox as a "manual action" item with the br
 ### 1. 만들기 (한 번)
 
 ```bash
-bunx create-holdco            # 대화형: 답한 대로 회사가 만들어짐
+bunx holdco init              # 대화형: 답한 대로 회사가 만들어짐 (bunx create-holdco도 같음)
 ```
 
-`@holdco/*`가 npm에 올라가기 전에는 체크아웃에서: `git clone https://github.com/kooroot/holdco && cd holdco && bun install && bun run create`. 회사는 체크아웃의 패키지에 링크되므로 체크아웃에서 `git pull`하면 갱신됩니다.
+`@holdco/*`가 npm에 올라가기 전에는 체크아웃에서: `git clone https://github.com/kooroot/holdco && cd holdco && bun install && bunx holdco init`. 회사는 체크아웃의 패키지에 링크되므로 체크아웃에서 `git pull`하면 갱신됩니다.
 
 마법사가 묻는 것: 디렉토리, GitHub 핸들(`gh`에서 추측), 첫 프로젝트(근처 git 저장소를 골라줌), 조직(풀 컴퍼니 / 솔로), 모델(두 로그인이 다 있으면 Claude + Codex), 미션, 첫 목표, 공개 글의 목소리(풀 프리셋), 선택으로 Telegram 봇 토큰. 그다음 스캐폴드 → 프로젝트 등록 → 의존성 설치 → 가드 빌드 → 모델 적용 → 목표·목소리 기록 → 토큰을 `~/.config/holdco/<회사>.env`(mode 600, 모든 `holdco` 명령이 읽음)에 저장 → 봇과 채팅 짝 맺기 → `holdco doctor`까지 한 번에 합니다. doctor를 통과한 회사는 `bunx holdco smoke --cap 1` 한 줄이면 첫 실제 티켓을 돕니다.
 
-스크립트용: `bunx create-holdco <dir> --github <you> --project ../your-repo [--preset …]`는 스캐폴드·설치·가드·doctor만 하고 남은 일을 출력합니다.
+스크립트용: `bunx holdco init <dir> --github <you> --project ../your-repo [--preset …]`(또는 같은 플래그의 `create-holdco`)는 스캐폴드·설치·가드·doctor만 하고 남은 일을 출력합니다.
 
 ### 2. 첫 실행: 스모크 테스트
 
