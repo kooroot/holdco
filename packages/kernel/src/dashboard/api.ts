@@ -277,7 +277,7 @@ export const ticketDetail = (ctx: DashboardContext, id: string, opts: { blind?: 
     sessions: ctx.store.sessionsForTicket(id).map((s) => ({ ...s, report: s.report ? (JSON.parse(s.report) as unknown) : null })),
     verdict: v && reveal ? { ...v, payload: JSON.parse(v.payload) as unknown } : null,
     verdict_hidden: Boolean(v) && !reveal,
-    proposal: ctx.store.proposal(id) ?? null,
+    proposal: (() => { const p = ctx.store.proposal(id); return p ? { ...p, review: p.review ?? null } : null })(), // JSON has no undefined: a proposal without a review yet carries null
     label: ctx.store.labelRows().find((l) => l.ticket_id === id) ?? null,
     comments: ctx.store.comments(id),
     diff: diffOf(ctx, t),

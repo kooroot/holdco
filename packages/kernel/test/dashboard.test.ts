@@ -172,6 +172,13 @@ describe("dashboard", () => {
     expect((await call("/api/session/nope/events")).status).toBe(400)
     expect((await call("/api/session/..%2Fx/events")).status).toBe(400)
   })
+  test("a proposal the COO has not reviewed yet is served (review: null), not dropped from the JSON", async () => {
+    store.setProposal("ENG-1", { decision: "merge", why_now: "w", expected_cost: "c", rollback_plan: "r", risk: "low", alternatives_rejected: [] }, false, now)
+    const d = await call("/api/ticket/ENG-1")
+    expect(d.status).toBe(200)
+    expect(d.body.proposal.review).toBeNull()
+    expect(d.body.proposal.canary).toBe(false)
+  })
   test("files of a branch are listed and read; markdown is served as text", async () => {
     const f = await call("/api/ticket/ENG-1/files")
     expect(f.body.files).toEqual([{ status: "A", path: "feature.md" }])
