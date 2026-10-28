@@ -70,45 +70,45 @@ The kernel builds one session spec; an engine adapter runs it. Where an engine l
 
 ### Quick start
 
-The packages are not on npm yet (M4). From this repository, until then:
+Until `@holdco/*` is on npm, start from this repository:
 
 ```bash
-bun install && bun test                              # 300+ tests: guard, config, scaffold, engines, supervisor simulations, CLI
-for p in kernel engine-claude engine-codex; do (cd packages/$p && bun link); done   # make @holdco/* resolvable locally
-
-bun packages/create-holdco/src/index.ts ../my-co --github <you> --project ../your-repo --preset solo-dev
-cd ../my-co && bun link @holdco/kernel @holdco/engine-claude && bunx holdco build-hook && bunx holdco doctor
+git clone https://github.com/kooroot/holdco && cd holdco && bun install
+bunx holdco init                                     # the wizard: nine answers, then a company that passes doctor
 ```
 
-Then, logged in with `claude login` (or with your API key exported) and an objective written into `governance/strategy.md`:
+The wizard asks for the directory, your GitHub handle, the first project (a repository near you, or a new one it creates), the organization, the models (Claude + Codex when both logins are found — no API keys needed), a mission, the first objective, the voice of public posts, the language, and optionally a Telegram bot token. It scaffolds, installs, compiles the guard, applies the models, pairs the bot and runs `holdco doctor`. Then:
 
 ```bash
-bunx holdco supervise                                # the company runs; Ctrl-C stops it cleanly
-bunx holdco ticket new --title "…" --criteria "a; b" --action code.merge.app
-bunx holdco status · inbox · audit                   # your weekly ten minutes (docs/operator-guide.md)
+cd ../my-co
+bunx holdco smoke --cap 1        # one real ticket end to end, ≤ $1 per session
+bunx holdco service install      # 24/7 in the background (launchd / systemd --user); prints the dashboard link
 ```
 
-After publishing, the first block becomes `bunx create-holdco my-co --github <you> --project ../your-repo`.
+From there the company runs itself: the CEO opens tickets from `governance/strategy.md`, seniors work in worktrees, Verification judges on the other engine, T2/T3 actions go through the COO's second key, and the Operator gets a **dashboard** (ten views, a live feed of what each session is doing, blind weekly audit, Korean or English) and a **Telegram bot** (every decision with Approve / Reject buttons, `/status`, `/new`, `/note`, `/pause`, `/halt`). Ten minutes a week: `docs/operator-guide.md`.
 
 ### Repository
 
 ```
 packages/
   kernel/          @holdco/kernel: config schema, policy, guard + compiled hook, protocols, engine contract,
-                   scaffold, CLI `holdco`; templates/ (base, modules, presets) live here
+                   scaffold + wizard, supervisor, Telegram bridge, dashboard API (Effect HttpApi), CLI `holdco`
+  dashboard/       @holdco/dashboard: the Operator's dashboard — React 19, TanStack Router/Query, zyzz,
+                   typed client derived from the kernel's HttpApi
   engine-claude/   @holdco/engine-claude: Claude Agent SDK adapter
   engine-codex/    @holdco/engine-codex: Codex SDK adapter, generated CODEX_HOME, host probe
-  create-holdco/     create-holdco: entry point
+  create-holdco/   create-holdco: entry point (same wizard as `holdco init`)
 examples/          company.<preset>.yaml, generated from the presets
-docs/design/       components, config, supervisor, packaging, security, roadmap, engines
+docs/design/       components, config, supervisor, packaging, security, roadmap, engines, execution & release,
+                   and the decision log (D1–D61)
 docs/engines/      claude-code.md, codex.md
 ```
 
-A company created by `init` holds the constitution, governance, evals and `company.yaml` (Operator only, enforced at runtime and by CODEOWNERS), the organization in `org/` (departments, roles, skills; changed only by Improvement, through releases), `AGENTS.md` for every engine, and kernel state in `.holdco/` (unreadable to agents). Project code stays in its own repositories.
+A company created by the wizard holds the constitution, governance, evals and `company.yaml` (Operator only, enforced at runtime and by CODEOWNERS), the organization in `org/` (departments, roles, skills; changed only by Improvement, through releases), `AGENTS.md` for every engine, and kernel state in `.holdco/` (unreadable to agents: the ticket database, session journals, the dashboard token). Project code stays in its own repositories.
 
 ### Status
 
-Built and tested without a model: the kernel's enforcement and policy layers, configuration, templates and one-shot scaffolding, both engine adapters (typechecked against the real SDKs; Codex sandbox verified against the real CLI), the state store and ticket state machine, the company tool server (real MCP), the supervisor loop (dispatch, leases, interrupts, tripwires, approvals, declared executors and GitHub merges, urgent inbox, candidate releases with canary traffic and the replay gate, digest), the Operator CLI, and the Operator's dashboard (inbox, ticket board, blind audit with diffs, quality, releases, spend, controls). Not yet done: a live session on a real API key (M3's smoke test), the interactive wizard and service files (M4), npm publishing. See `docs/operator-guide.md` to run it and `docs/design/06-roadmap.md` for what is left.
+Running for real: a company created by the wizard on a Mac, Claude (Pro/Max login) producing and Codex (ChatGPT login) judging, passes doctor, completes `smoke`, and the CEO opens work from the strategy; the Operator approves from Telegram and watches sessions live on the dashboard. 360+ tests cover the guard, config, scaffold, engine adapters, supervisor simulations, dashboard API, Telegram bridge and CLI. Not yet done: npm publishing (so `bunx create-holdco` works outside a checkout), a week of dogfooding, and routines. `docs/design/06-roadmap.md` has the rest.
 
 ---
 
@@ -134,12 +134,27 @@ Holdco는 폴더 하나를 AI 에이전트가 직원인 회사로 만듭니다. 
 
 ### 빠른 시작
 
-패키지는 아직 npm에 없습니다(M4). 위 명령처럼 이 레포에서 설치와 테스트(Codex 샌드박스 실측 포함 275개)를 하고, `create-holdco`로 회사를 만들고, 로컬 패키지를 링크한 뒤, 가드를 빌드하고, `holdco engines`로 배정과 보완책을 확인하고, 키를 넣어 `holdco doctor`를 통과시킵니다. 배포 후에는 앞의 두 단계가 `bunx create-holdco my-co`가 됩니다.
+`@holdco/*`가 npm에 올라가기 전에는 이 레포에서 시작합니다:
+
+```bash
+git clone https://github.com/kooroot/holdco && cd holdco && bun install
+bunx holdco init                                     # 마법사: 아홉 가지 답하면 doctor를 통과하는 회사가 생김
+```
+
+마법사는 디렉토리, GitHub 핸들, 첫 프로젝트(근처 저장소 또는 새로 만들 저장소), 조직, 모델(Claude·Codex 로그인이 둘 다 있으면 자동으로 둘 다 — API 키 불필요), 미션, 첫 목표, 공개 글의 목소리, 언어, 선택으로 Telegram 봇 토큰을 묻고, 스캐폴드·설치·가드 빌드·모델 적용·봇 짝 맺기·`holdco doctor`까지 합니다. 그다음:
+
+```bash
+cd ../my-co
+bunx holdco smoke --cap 1        # 실제 티켓 하나를 끝까지, 세션당 ≤ $1
+bunx holdco service install      # 24/7 백그라운드 (launchd / systemd --user); 대시보드 링크 출력
+```
+
+이후 회사는 스스로 돌아갑니다. CEO가 `governance/strategy.md`에서 티켓을 열고, 시니어가 워크트리에서 일하고, 검증이 다른 엔진에서 판정하고, T2/T3 행동은 COO의 두 번째 열쇠를 거칩니다. 운영자에게는 **대시보드**(화면 열 개, 세션이 지금 뭘 하는지 보는 라이브 피드, 주간 블라인드 감사, 한국어·영어)와 **Telegram 봇**(모든 결정이 승인/거절 버튼과 함께, `/status`, `/new`, `/note`, `/pause`, `/halt`)이 있습니다. 매주 10분: `docs/operator-guide.md`.
 
 ### 레포 구조
 
-위 트리와 같습니다. 커널(`@holdco/kernel`, 명령어 `holdco`, 템플릿 포함), Claude 어댑터, Codex 어댑터(세션별 `CODEX_HOME` 생성과 호스트 실측), 진입점 `create-holdco`로 나뉩니다. `init`으로 만든 회사에는 헌법·거버넌스·평가·`company.yaml`(운영자만, 실행 시점과 CODEOWNERS로 강제), 조직(`org/`: 부서·역할·스킬, 개선팀만 릴리스로 변경), 모든 엔진이 읽는 `AGENTS.md`, 커널 상태(`.holdco/`, 에이전트 읽기 불가)가 들어갑니다. 프로젝트 코드는 각자의 레포에 그대로 둡니다.
+위 트리와 같습니다. 커널(`@holdco/kernel`: 설정·정책·가드·스캐폴드와 마법사·슈퍼바이저·Telegram 브리지·대시보드 API, 명령어 `holdco`), 대시보드(`@holdco/dashboard`: React + TanStack + zyzz, 커널의 HttpApi에서 파생된 타입 클라이언트), Claude 어댑터, Codex 어댑터, 진입점 `create-holdco`(`holdco init`과 같은 마법사)로 나뉩니다. 마법사로 만든 회사에는 헌법·거버넌스·평가·`company.yaml`(운영자만, 실행 시점과 CODEOWNERS로 강제), 조직(`org/`), 모든 엔진이 읽는 `AGENTS.md`, 커널 상태(`.holdco/`: 티켓 DB, 세션 저널, 대시보드 토큰 — 에이전트 읽기 불가)가 들어갑니다. 프로젝트 코드는 각자의 레포에 그대로 둡니다.
 
 ### 상태
 
-모델 없이 만들고 테스트한 것: 커널의 집행·정책 레이어, 설정, 템플릿과 한 번에 끝나는 스캐폴드, 두 엔진 어댑터(실제 SDK 타입으로 검사, Codex 샌드박스는 실제 CLI로 확인), 상태 저장소와 티켓 상태 머신, 회사 도구 서버(실제 MCP), 슈퍼바이저 루프(배분, 임대, 인터럽트, 트립와이어, 승인, 실행기, 다이제스트, 릴리스), 운영자 CLI. 아직 안 된 것: 실제 API 키로 세션 돌리기(M3 실사용 테스트), 대화형 마법사와 서비스 파일(M4), npm 배포, 리플레이 스위트. 돌리는 법은 `docs/operator-guide.md`, 남은 일은 `docs/design/06-roadmap.md`.
+실제로 돌아갑니다: 맥에서 마법사로 만든 회사가 Claude(Pro/Max 로그인)로 생산하고 Codex(ChatGPT 로그인)로 판정하며, doctor 통과, `smoke` 완료, CEO가 전략에서 일을 열고, 운영자는 Telegram에서 승인하고 대시보드에서 세션을 실시간으로 봅니다. 360개 넘는 테스트가 가드·설정·스캐폴드·엔진 어댑터·슈퍼바이저 시뮬레이션·대시보드 API·Telegram 브리지·CLI를 덮습니다. 아직 안 된 것: npm 배포(체크아웃 밖에서 `bunx create-holdco`), 일주일 실사용, 루틴. 나머지는 `docs/design/06-roadmap.md`.
