@@ -501,7 +501,11 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
             if (a.engine === "codex" && codex.prices[a.model] === undefined && a.model in EXAMPLE_PRICES) codex.prices[a.model] = EXAMPLE_PRICES[a.model as keyof typeof EXAMPLE_PRICES]
           }
         }
-        const exit = Schema.decodeUnknownExit(CompanyConfig, { errors: "all" })({ ...config, roles, engines: { ...config.engines, ...(codex ? { codex } : {}) } })
+        // An engine no role uses is dropped: doctor would otherwise demand its key for nothing.
+        const engines: Record<string, unknown> = { ...config.engines, ...(codex ? { codex } : {}) }
+        const usedEngines = new Set(Object.entries(roles).flatMap(([k, a]) => (k === "by_department" ? Object.values(a as Record<string, { engine: string }>) : [a as { engine: string }])).map((a) => a.engine))
+        for (const id of Object.keys(engines)) if (!usedEngines.has(id)) { delete engines[id]; console.log(`engines.${id} removed: no role uses it`) }
+        const exit = Schema.decodeUnknownExit(CompanyConfig, { errors: "all" })({ ...config, roles, engines })
         if (Exit.isFailure(exit)) throw new OperatorError(`the ${mode} defaults do not fit this company (is the engine configured under engines?):\n${String(exit.cause)}`)
         saveConfig(dir, exit.value, `roles: ${mode} defaults`)
         ensureEngineDeps(dir, exit.value)

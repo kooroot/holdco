@@ -1,15 +1,18 @@
 #!/usr/bin/env bun
 /**
+ * bunx create-holdco                       interactive: seven questions, then a company that passes doctor
  * bunx create-holdco <dir> --github <handle> --project <path-to-repo> [--preset solo-dev|solo-codex|full]
  *                          [--name n] [--mission m] [--timezone tz] [--no-install] [--no-git]
  *
- * One command, one company: scaffold → install → build the guard → doctor. Prints exactly what
- * is left for the Operator (keys, strategy objectives) and how to start.
+ * One command, one company: scaffold → install → build the guard → doctor. The flags path prints
+ * what is left for the Operator; the wizard does those steps too (models, first objective, env
+ * file, Telegram pairing).
  */
 import { spawnSync } from "node:child_process"
 import { existsSync } from "node:fs"
 import { resolve } from "node:path"
 import { KERNEL_VERSION, presetNames, scaffold, TemplateError } from "@holdco/kernel"
+import { createFromAnswers, runWizard } from "./wizard.ts"
 
 const argv = process.argv.slice(2)
 const VALUE = new Set(["preset", "github", "name", "project", "project-id", "mission", "timezone"])
@@ -19,11 +22,25 @@ const flag = (n: string) => {
 }
 const dir = argv.find((a, i) => !a.startsWith("--") && !(argv[i - 1]?.startsWith("--") && VALUE.has((argv[i - 1] as string).slice(2))))
 const preset = flag("preset") ?? "solo-dev"
-const usage = `usage: bunx create-holdco <dir> --github <handle> --project <repo> [--preset ${presetNames().join("|")}] [--name n] [--mission m] [--timezone tz] [--no-install] [--no-git]`
+const usage = `usage: bunx create-holdco                      (interactive)\n       bunx create-holdco <dir> --github <handle> --project <repo> [--preset ${presetNames().join("|")}] [--name n] [--mission m] [--timezone tz] [--no-install] [--no-git]`
 
-if (!dir) {
-  console.error(usage)
-  process.exit(1)
+/** Running from a Holdco checkout (not an npm install): link the company to these packages. */
+const checkoutPackages = resolve(import.meta.dir, "..", "..")
+const fromCheckout = existsSync(resolve(checkoutPackages, "kernel", "package.json")) && existsSync(resolve(checkoutPackages, "create-holdco", "package.json"))
+
+if (!dir || argv.includes("--interactive")) {
+  if (!process.stdin.isTTY || argv.includes("--help")) {
+    console.error(usage)
+    process.exit(dir ? 0 : 1)
+  }
+  try {
+    const answers = await runWizard(fromCheckout ? checkoutPackages : undefined)
+    await createFromAnswers(answers, fromCheckout ? checkoutPackages : undefined)
+    process.exit(0)
+  } catch (e) {
+    console.error(e instanceof TemplateError ? e.message : String(e))
+    process.exit(1)
+  }
 }
 const github = flag("github")
 const project = flag("project")
@@ -38,10 +55,6 @@ if (project && !existsSync(resolve(project, ".git"))) {
 
 const run = (cmd: string, args: Array<string>, cwd: string) => spawnSync(cmd, args, { cwd, stdio: "inherit" }).status === 0
 
-/** Running from a Holdco checkout (not an npm install): link the company to these packages. */
-const checkoutPackages = resolve(import.meta.dir, "..", "..")
-const fromCheckout = existsSync(resolve(checkoutPackages, "kernel", "package.json")) && existsSync(resolve(checkoutPackages, "create-holdco", "package.json"))
-
 try {
   const target = resolve(dir)
   const r = scaffold({
@@ -51,6 +64,7 @@ try {
     ...(fromCheckout ? { packagesDir: checkoutPackages } : {}),
     git: !argv.includes("--no-git"),
     github,
+    host: process.platform === "darwin" ? "macos-launchd" : "linux-systemd",
     ...(flag("name") ? { companyName: flag("name") as string } : {}),
     ...(flag("mission") ? { mission: flag("mission") as string } : {}),
     ...(flag("timezone") ? { timezone: flag("timezone") as string } : {}),

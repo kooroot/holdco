@@ -10,13 +10,14 @@
 ### 1. Create (once)
 
 ```bash
-bunx create-holdco my-co --github <you> --project ../your-repo \
-  [--preset solo-dev|solo-codex|full] [--name n] [--mission "…"] [--timezone Asia/Seoul]
+bunx create-holdco            # interactive: answers become the company
 ```
 
-Until `@holdco/*` is on npm, run it from a checkout: `git clone https://github.com/kooroot/holdco && cd holdco && bun install`, then `bun packages/create-holdco/src/index.ts <dir> …` with the same flags; the company is linked to the checkout's packages, so `git pull` in the checkout updates it.
+Until `@holdco/*` is on npm, run it from a checkout: `git clone https://github.com/kooroot/holdco && cd holdco && bun install && bun run create`; the company is linked to the checkout's packages, so `git pull` in the checkout updates it.
 
-This scaffolds the company, registers your repository as the first project, renders `governance/strategy.md`, installs dependencies, compiles the guard binary and runs `holdco doctor`. What it cannot do for you is printed at the end:
+The wizard asks for the directory, your GitHub handle (guessed from `gh`), the first project (git repositories near you are listed), the organization (full company or solo), the models (Claude + Codex when both logins are found), a mission, the first objective, the voice of public posts (full preset), and optionally a Telegram bot token. Then it scaffolds the company, registers the project, installs dependencies, compiles the guard, applies the models, writes the objective and the voice, saves the token to `~/.config/holdco/<company>.env` (mode 600; every `holdco` command loads it), pairs the bot with your chat, and runs `holdco doctor`. A company that passes doctor is one `bunx holdco smoke --cap 1` away from its first real ticket.
+
+Scripted: `bunx create-holdco <dir> --github <you> --project ../your-repo [--preset solo-dev|solo-codex|full] [--name n] [--mission "…"] [--timezone tz]` does the scaffold, install, guard and doctor, and prints what is left:
 
 | Left for you | Where |
 |---|---|
@@ -99,11 +100,15 @@ An action with no entry reaches your inbox as a "manual action" item with the br
 
 ### 1. 만들기 (한 번)
 
-`@holdco/*`가 npm에 올라가기 전까지는 체크아웃에서 실행합니다: `git clone https://github.com/kooroot/holdco && cd holdco && bun install` 뒤 `bun packages/create-holdco/src/index.ts <dir> …`(플래그는 같음). 회사는 체크아웃의 패키지에 링크되므로 체크아웃에서 `git pull`하면 같이 갱신됩니다.
+```bash
+bunx create-holdco            # 대화형: 답한 대로 회사가 만들어짐
+```
 
-위 명령 하나로 회사를 만들고, 내 레포를 첫 프로젝트로 등록하고, `governance/strategy.md`를 생성하고, 의존성 설치·가드 컴파일·`holdco doctor`까지 끝냅니다. 대신 해줄 수 없는 것은 끝에 출력됩니다. 엔진 접근(Claude는 Pro/Max 로그인 `claude login` 한 번, 사용량은 플랜에서 차감. doctor가 세션이 보는 환경 그대로 로그인을 검사하며, 키체인이 없는 서버에서는 `claude setup-token`과 env 파일의 `CLAUDE_CODE_OAUTH_TOKEN`이 대안. Codex는 API 키. ChatGPT 로그인도 `auth: subscription`으로 되지만 OpenAI는 스크립트 용도엔 키를 권장), 알림 토큰(레포 밖 env 파일), 전략의 목표(예시 줄 교체, CEO는 여기 적힌 목표를 위해서만 티켓을 염), Codex 가격, 제공사 측 지출 상한.
+`@holdco/*`가 npm에 올라가기 전에는 체크아웃에서: `git clone https://github.com/kooroot/holdco && cd holdco && bun install && bun run create`. 회사는 체크아웃의 패키지에 링크되므로 체크아웃에서 `git pull`하면 갱신됩니다.
 
-`holdco doctor`가 통과해야만 돌아갑니다. 설정, 가드(두 엔진의 실제 차단·허용 호출), 이 호스트의 Codex 샌드박스, 키, 프로젝트, 전략, 카나리, 상태 DB를 확인합니다.
+마법사가 묻는 것: 디렉토리, GitHub 핸들(`gh`에서 추측), 첫 프로젝트(근처 git 저장소를 골라줌), 조직(풀 컴퍼니 / 솔로), 모델(두 로그인이 다 있으면 Claude + Codex), 미션, 첫 목표, 공개 글의 목소리(풀 프리셋), 선택으로 Telegram 봇 토큰. 그다음 스캐폴드 → 프로젝트 등록 → 의존성 설치 → 가드 빌드 → 모델 적용 → 목표·목소리 기록 → 토큰을 `~/.config/holdco/<회사>.env`(mode 600, 모든 `holdco` 명령이 읽음)에 저장 → 봇과 채팅 짝 맺기 → `holdco doctor`까지 한 번에 합니다. doctor를 통과한 회사는 `bunx holdco smoke --cap 1` 한 줄이면 첫 실제 티켓을 돕니다.
+
+스크립트용: `bunx create-holdco <dir> --github <you> --project ../your-repo [--preset …]`는 스캐폴드·설치·가드·doctor만 하고 남은 일을 출력합니다.
 
 ### 2. 첫 실행: 스모크 테스트
 

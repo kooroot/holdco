@@ -21,6 +21,8 @@ export interface ScaffoldOptions {
   /** First project: path to its git repository (absolute or relative to `dir`). */
   readonly projectPath?: string
   readonly projectId?: string
+  /** Where the service will run; the wizard picks it from the platform. */
+  readonly host?: "linux-systemd" | "macos-launchd"
   /** `false` skips git init / commit / tag (tests without git). */
   readonly git?: boolean
   readonly kernelVersion: string
@@ -127,6 +129,7 @@ export const scaffold = (opts: ScaffoldOptions): ScaffoldResult => {
     ...preset,
     company: { ...preset.company, name: opts.companyName ?? preset.company.name, mission: opts.mission ?? preset.company.mission, timezone: opts.timezone ?? preset.company.timezone },
     operator: { ...preset.operator, github: opts.github ?? preset.operator.github },
+    ...(opts.host ? { runtime: { ...preset.runtime, host: opts.host } } : {}),
     ...(projectRel !== undefined && projectId !== undefined
       ? { projects: [{ id: projectId, path: projectRel, class: "core" as const, share: 1, locked: ["AGENTS.md", "CLAUDE.md", ".github/**"] }] }
       : {}),

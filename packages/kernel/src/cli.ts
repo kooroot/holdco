@@ -24,6 +24,7 @@ import { tmpdir } from "node:os"
 import * as NodePath from "node:path"
 import { Cause, Effect, Exit, Schema } from "effect"
 import { assignments, authMode, CompanyConfig, ENGINE_IDS, type EngineId, Preset } from "./config/company.ts"
+import { loadOperatorEnv } from "./cli/env.ts"
 import { compensations } from "./engine/compensation.ts"
 import type { Engine } from "./engine/types.ts"
 import { Brief } from "./protocol/brief.ts"
@@ -275,6 +276,9 @@ const runEffect = async <A, E>(eff: Effect.Effect<A, E>, okMsg: string) => {
 }
 
 const [cmd, sub] = positional
+
+// Every command sees the Operator's env file (~/.config/holdco/<company>.env), like the service does.
+loadOperatorEnv(instanceDir())
 
 switch (cmd) {
   case "init": {
