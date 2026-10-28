@@ -3,6 +3,7 @@ import { useMemo } from "react"
 import { cx } from "zyzz"
 import { style, vars } from "../../zyzz.config.ts"
 import { cn, Empty, ui } from "../ui.tsx"
+import { t, useLang } from "../i18n.ts"
 
 const st = {
   diff: style({ fontFamily: "mono", fontSize: "12px !custom", lineHeight: 1.5 }),
@@ -41,8 +42,9 @@ export const parseDiff = (patch: string): Array<File> => {
 }
 
 export const Diff = ({ diff }: { diff: { base: string; patch: string; truncated: boolean } }) => {
+  useLang()
   const files = useMemo(() => parseDiff(diff.patch), [diff.patch])
-  if (!diff.patch.trim()) return <Empty>No changes against {diff.base}.</Empty>
+  if (!diff.patch.trim()) return <Empty>{t("No changes against {b}.", { b: diff.base })}</Empty>
   return (
     <div {...st.diff()}>
       {files.map((f, i) => (
@@ -55,7 +57,7 @@ export const Diff = ({ diff }: { diff: { base: string; patch: string; truncated:
           </div>
         </details>
       ))}
-      {diff.truncated ? <p {...cn(ui.small(), ui.muted())}>Diff truncated at 400 KB; open the branch in your editor for the rest.</p> : null}
+      {diff.truncated ? <p {...cn(ui.small(), ui.muted())}>{t("Diff truncated at 400 KB; open the branch in your editor for the rest.")}</p> : null}
     </div>
   )
 }

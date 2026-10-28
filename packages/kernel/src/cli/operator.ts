@@ -4,7 +4,7 @@
  * (D29): an agent's shell has none, and the sandbox already denies it the state database.
  */
 import { spawnSync } from "node:child_process"
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs"
 import * as NodePath from "node:path"
 import { Exit, Schema } from "effect"
 import { assignmentFor, CompanyConfig, type EngineId, ENGINE_IDS, ROLE_KINDS, type RoleKind, type Tier } from "../config/company.ts"
@@ -18,8 +18,9 @@ import { undoAction } from "../supervisor/executors.ts"
 import { liveNotifier } from "../supervisor/notify.ts"
 import { latestReleaseTag } from "../supervisor/org.ts"
 import { Supervisor } from "../supervisor/supervisor.ts"
-import { startDashboard } from "../dashboard/server.ts"
+import { dashboardToken, startDashboard } from "../dashboard/server.ts"
 import { discoverChatId, TelegramBridge, telegramConfig } from "../supervisor/telegram.ts"
+import { envFilePath } from "./env.ts"
 import type { Level } from "../schema/interrupts.ts"
 
 export class OperatorError extends Error {}
@@ -518,42 +519,78 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
       return true
     }
     case "service": {
+      // install | start | stop | restart | status | logs | uninstall | show — the company as a background
+      // service (launchd on macOS, a systemd user unit on Linux), so no terminal has to stay open.
       const config = loadConfig(dir)
       const bin = NodePath.join(dir, "node_modules", ".bin", "holdco")
-      const envFile = NodePath.join(process.env["HOME"] ?? "~", ".config", "holdco", `${config.company.name}.env`)
+      const envFile = envFilePath(config.company.name)
+      const logFile = NodePath.join(dir, ".holdco", "supervisor.log")
+      const home = process.env["HOME"] ?? dir
+      const path = process.env["PATH"] ?? "/usr/local/bin:/usr/bin:/bin" // the Operator's PATH: bun, claude, codex, gh live there
+      const pidAlive = () => { const lock = NodePath.join(dir, ".holdco", "supervisor.pid"); const pid = existsSync(lock) ? Number(readFileSync(lock, "utf8")) : 0; return pid > 0 && spawnSync("kill", ["-0", String(pid)]).status === 0 ? pid : 0 }
+      const dashboardUrl = `http://127.0.0.1:${process.env["HOLDCO_DASHBOARD_PORT"] ?? 7117}/?t=${dashboardToken(dir)}`
+      const status = () => { const pid = pidAlive(); console.log(`${config.company.name}: supervisor ${pid ? `running (pid ${pid})` : "not running"}\ndashboard: ${dashboardUrl}\nlog: ${logFile}`); return pid }
+      const waitUp = async () => { for (let i = 0; i < 20; i++) { if (pidAlive()) return true; await Bun.sleep(500) } return false }
+      const run = (cmd: string, args: Array<string>) => spawnSync(cmd, args, { stdio: "pipe", encoding: "utf8" })
+      const action = sub ?? "show"
+      if (action === "logs") { spawnSync("tail", ["-n", "100", "-f", logFile], { stdio: "inherit" }); return true }
+      if (action === "status") { status(); return true }
       if (config.runtime.host === "linux-systemd") {
+        const name = `holdco-${config.company.name}`
         const unit = [
           "[Unit]", `Description=Holdco company: ${config.company.name}`, "After=network-online.target", "",
-          "[Service]", `WorkingDirectory=${dir}`, `EnvironmentFile=${envFile}`, `ExecStartPre=${bin} doctor`, `ExecStart=${bin} supervise`, "Restart=always", "RestartSec=10", "",
+          "[Service]", `WorkingDirectory=${dir}`, `Environment=PATH=${path}`, `EnvironmentFile=-${envFile}`, `ExecStartPre=${bin} doctor`, `ExecStart=${bin} supervise`, "Restart=always", "RestartSec=10", "",
           "[Install]", "WantedBy=default.target", "",
         ].join("\n")
-        const out = NodePath.join(process.env["HOME"] ?? dir, ".config", "systemd", "user", `holdco-${config.company.name}.service`)
-        if (sub === "install") {
-          spawnSync("mkdir", ["-p", NodePath.dirname(out)])
+        const out = NodePath.join(home, ".config", "systemd", "user", `${name}.service`)
+        if (action === "show") { console.log(unit); return true }
+        if (action === "install" || action === "start" || action === "restart") {
+          mkdirSync(NodePath.dirname(out), { recursive: true })
           writeFileSync(out, unit)
-          console.log(`wrote ${out}\nnext: systemctl --user daemon-reload && systemctl --user enable --now holdco-${config.company.name} && loginctl enable-linger $USER`)
-        } else console.log(unit)
+          run("systemctl", ["--user", "daemon-reload"])
+          const r = run("systemctl", ["--user", action === "restart" ? "restart" : "enable", ...(action === "restart" ? [name] : ["--now", name])])
+          if (r.status !== 0) throw new OperatorError(`systemctl failed: ${r.stderr.trim()}`)
+          run("loginctl", ["enable-linger"]) // keeps the user's services alive after logout
+          console.log(`${action === "restart" ? "restarted" : "installed and started"} ${name} (${out})`)
+          if (!(await waitUp())) console.log("the supervisor has not written its pid yet; check holdco service logs")
+          status()
+          return true
+        }
+        if (action === "stop") { run("systemctl", ["--user", "stop", name]); console.log(`stopped ${name}`); return true }
+        if (action === "uninstall") { run("systemctl", ["--user", "disable", "--now", name]); rmSync(out, { force: true }); run("systemctl", ["--user", "daemon-reload"]); console.log(`removed ${out}`); return true }
       } else if (config.runtime.host === "macos-launchd") {
         const label = `dev.holdco.${config.company.name}`
         const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>Label</key><string>${label}</string>
-  <key>ProgramArguments</key><array><string>/bin/sh</string><string>-c</string><string>set -a; . ${envFile}; set +a; exec caffeinate -s ${bin} supervise</string></array>
+  <key>ProgramArguments</key><array><string>/bin/sh</string><string>-c</string><string>exec caffeinate -s ${bin} supervise</string></array>
   <key>WorkingDirectory</key><string>${dir}</string>
+  <key>EnvironmentVariables</key><dict><key>PATH</key><string>${path}</string><key>HOME</key><string>${home}</string></dict>
   <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>${dir}/.holdco/supervisor.log</string>
-  <key>StandardErrorPath</key><string>${dir}/.holdco/supervisor.log</string>
+  <key>StandardOutPath</key><string>${logFile}</string>
+  <key>StandardErrorPath</key><string>${logFile}</string>
 </dict></plist>
 `
-        const out = NodePath.join(process.env["HOME"] ?? dir, "Library", "LaunchAgents", `${label}.plist`)
-        if (sub === "install") {
-          spawnSync("mkdir", ["-p", NodePath.dirname(out)])
+        const out = NodePath.join(home, "Library", "LaunchAgents", `${label}.plist`)
+        const domain = `gui/${process.getuid?.() ?? 501}`
+        if (action === "show") { console.log(plist); return true }
+        if (action === "install" || action === "start" || action === "restart") {
+          mkdirSync(NodePath.dirname(out), { recursive: true })
           writeFileSync(out, plist)
-          console.log(`wrote ${out}\nnext: launchctl load -w ${out}\nnote: a laptop sleeps; doctor warns that this is not a 24/7 host`)
-        } else console.log(plist)
+          run("launchctl", ["bootout", `${domain}/${label}`]) // a previous copy, if any
+          const r = run("launchctl", ["bootstrap", domain, out])
+          if (r.status !== 0) throw new OperatorError(`launchctl bootstrap failed: ${(r.stderr || r.stdout).trim()}`)
+          console.log(`${action === "restart" ? "restarted" : "installed and started"} ${label} (${out}); it starts again at login and after crashes`)
+          if (!(await waitUp())) console.log("the supervisor has not written its pid yet; check holdco service logs")
+          status()
+          console.log("note: a closed laptop sleeps; caffeinate keeps it awake only while open and on power")
+          return true
+        }
+        if (action === "stop") { run("launchctl", ["bootout", `${domain}/${label}`]); console.log(`stopped ${label}`); return true }
+        if (action === "uninstall") { run("launchctl", ["bootout", `${domain}/${label}`]); rmSync(out, { force: true }); console.log(`removed ${out}`); return true }
       } else throw new OperatorError("runtime.host is manual: run `holdco supervise` yourself (doctor warns that this is not 24/7)")
-      return true
+      throw new OperatorError("usage: holdco service install|start|stop|restart|status|logs|uninstall|show")
     }
     default:
       return false

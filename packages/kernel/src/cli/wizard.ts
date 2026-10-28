@@ -242,7 +242,7 @@ const build = async (a: WizardAnswers, checkoutPackages: string | undefined, tar
   if (doc.status !== 0) p.log.warn((doc.stdout + doc.stderr).split("\n").filter((l) => l.startsWith("FAIL")).join("\n"))
 
   const where = relative(process.cwd(), target).startsWith("..") ? target : relative(process.cwd(), target)
-  p.note([`cd ${where}`, "bunx holdco smoke --cap 1     # one real ticket, ≤ $1 per session", "bunx holdco supervise         # 24/7; prints the dashboard link"].join("\n"), "Next")
+  p.note([`cd ${where}`, "bunx holdco smoke --cap 1       # one real ticket, ≤ $1 per session", "bunx holdco service install     # 24/7 in the background; prints the dashboard link", "bunx holdco supervise           # …or in this terminal"].join("\n"), "Next")
   p.outro(doc.status === 0 ? "Ready." : "Fix what doctor lists, then run the commands above.")
   return r
 }

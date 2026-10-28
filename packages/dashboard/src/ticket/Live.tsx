@@ -4,6 +4,7 @@ import { style, vars } from "../../zyzz.config.ts"
 import { ago, clock, usd } from "../format.ts"
 import { useLiveFeed } from "../hooks.ts"
 import { cn, Code, Pill, ui } from "../ui.tsx"
+import { t, useLang } from "../i18n.ts"
 
 const st = {
   feed: style({ fontFamily: "mono", fontSize: "12px !custom", lineHeight: 1.5, backgroundColor: "surface2", borderRadius: "md", padding: "10px 12px !custom", maxHeight: "60vh !custom", overflow: "auto", display: "grid", gap: "2px !custom" }),
@@ -25,6 +26,7 @@ const GLYPH: Record<string, string> = { started: "▶", message: "💬", tool: "
 type S = { id: string; role: string; engine: string; model: string; started_at: number; ended_at: number | null; status: string | null; cost_usd: number }
 
 export const Live = ({ sessions, now }: { sessions: ReadonlyArray<S>; now: number }) => {
+  useLang()
   const ordered = [...sessions].sort((a, b) => b.started_at - a.started_at)
   const running = ordered.find((s) => s.ended_at === null)
   const [picked, setPicked] = useState<string | null>(null)
@@ -33,25 +35,25 @@ export const Live = ({ sessions, now }: { sessions: ReadonlyArray<S>; now: numbe
   const box = useRef<HTMLDivElement>(null)
   const [stick, setStick] = useState(true)
   useEffect(() => { if (stick && box.current) box.current.scrollTop = box.current.scrollHeight }, [feed.events.length, stick])
-  if (!current) return <div {...cn(ui.muted(), ui.small())}>No session has run on this ticket yet.</div>
+  if (!current) return <div {...cn(ui.muted(), ui.small())}>{t("No session has run on this ticket yet.")}</div>
   return (
     <div {...ui.stack()}>
       <div {...st.pick()}>
-        {ordered.slice(0, 8).map((s) => <button key={s.id} {...cn(st.chip(), s.id === current.id && st.chipOn())} onClick={() => setPicked(s.id)}>{s.role}{s.ended_at === null ? " · live" : ""}</button>)}
+        {ordered.slice(0, 8).map((s) => <button key={s.id} {...cn(st.chip(), s.id === current.id && st.chipOn())} onClick={() => setPicked(s.id)}>{s.role}{s.ended_at === null ? ` · ${t("live")}` : ""}</button>)}
       </div>
       <div {...ui.row()} style={{ gap: 8 }}>
         <Code>{current.engine}:{current.model}</Code>
-        {feed.running || current.ended_at === null ? <Pill tone="kernel">running · {ago(now - current.started_at)}</Pill> : <Pill tone={current.status === "success" ? "ok" : "bad"}>{current.status ?? "ended"}</Pill>}
-        <span {...cn(ui.muted(), ui.small())}>{feed.events.length} events{feed.cost || current.cost_usd ? ` · ${usd(feed.cost || current.cost_usd)}` : ""}</span>
-        <label {...cn(ui.small(), ui.muted())} style={{ marginLeft: "auto" }}><input type="checkbox" checked={stick} onChange={(e) => setStick(e.target.checked)} /> follow</label>
+        {feed.running || current.ended_at === null ? <Pill tone="kernel">{t("running · {t}", { t: ago(now - current.started_at) })}</Pill> : <Pill tone={current.status === "success" ? "ok" : "bad"}>{current.status ?? t("ended")}</Pill>}
+        <span {...cn(ui.muted(), ui.small())}>{t("{n} events", { n: feed.events.length })}{feed.cost || current.cost_usd ? ` · ${usd(feed.cost || current.cost_usd)}` : ""}</span>
+        <label {...cn(ui.small(), ui.muted())} style={{ marginLeft: "auto" }}><input type="checkbox" checked={stick} onChange={(e) => setStick(e.target.checked)} /> {t("follow")}</label>
       </div>
       <div ref={box} {...st.feed()} onScroll={(e) => { const el = e.currentTarget; setStick(el.scrollHeight - el.scrollTop - el.clientHeight < 24) }}>
-        {feed.events.length === 0 ? <span {...st.dim()}>{feed.running || current.ended_at === null ? "waiting for the first event…" : "no journal for this session (it ran on an older kernel)"}</span> : null}
+        {feed.events.length === 0 ? <span {...st.dim()}>{t(feed.running || current.ended_at === null ? "waiting for the first event…" : "no journal for this session (it ran on an older kernel)")}</span> : null}
         {feed.events.map((e) => (
           <div key={e.i} {...st.line()} title={clock(e.at)}>
             <span {...st.at()}>{new Date(e.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }).slice(0, 8)}</span>
             <span {...cn(st.glyph(), e.ok === false && st.bad())}>{GLYPH[e.kind] ?? "·"}</span>
-            <span {...cn(st.text(), e.kind === "message" && st.msg(), e.ok === false && st.bad(), (e.kind === "started" || e.kind === "file_change") && st.dim())}>{e.kind === "file_change" ? `edit ${e.text}` : e.text}</span>
+            <span {...cn(st.text(), e.kind === "message" && st.msg(), e.ok === false && st.bad(), (e.kind === "started" || e.kind === "file_change") && st.dim())}>{e.kind === "file_change" ? t("edit {p}", { p: e.text }) : e.text}</span>
           </div>
         ))}
         {feed.running ? <span><i {...st.cursor()} /></span> : null}

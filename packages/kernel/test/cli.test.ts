@@ -95,10 +95,15 @@ describe("operator commands", () => {
     expect(readFileSync(NodePath.join(co, "company.yaml"), "utf8")).toContain("id: other")
     expect(holdco("config", "check", "company.yaml").status).toBe(0)
   })
-  test("service prints a unit for the configured host", () => {
+  test("service prints a unit for the configured host; status names the dashboard link and log", () => {
     const r = holdco("service")
     expect(r.status).toBe(0)
     expect(r.stdout).toMatch(/launchd|systemd|Label|ExecStart/)
+    expect(r.stdout).toContain("PATH") // the Operator's PATH travels into the service: bun, claude, codex live there
+    const st = holdco("service", "status")
+    expect(st.stdout).toContain("supervisor not running")
+    expect(st.stdout).toMatch(/dashboard: http:\/\/127\.0\.0\.1:7117\/\?t=/)
+    expect(st.stdout).toContain("supervisor.log")
   })
   test("roles: show, set with validation, preset", () => {
     expect(holdco("roles").stdout).toContain("verification    claude:fable")

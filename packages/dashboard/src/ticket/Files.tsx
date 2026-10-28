@@ -5,6 +5,7 @@ import { style } from "../../zyzz.config.ts"
 import { useFile, useFiles } from "../hooks.ts"
 import { Markdown } from "./markdown.tsx"
 import { cn, ui } from "../ui.tsx"
+import { t, useLang } from "../i18n.ts"
 
 const st = {
   wrap: style({ display: "grid", gridTemplateColumns: "220px 1fr", gap: "md", minHeight: "200px !custom", "@media (max-width: 900px)": { gridTemplateColumns: "1fr" } }),
@@ -18,6 +19,7 @@ const st = {
 }
 
 export const Files = ({ id, stacked }: { id: string; stacked?: boolean }) => {
+  useLang()
   const files = useFiles(id)
   const [path, setPath] = useState<string | null>(null)
   useEffect(() => {
@@ -26,17 +28,17 @@ export const Files = ({ id, stacked }: { id: string; stacked?: boolean }) => {
     setPath((docs[0] ?? files.data.files[0])?.path ?? null)
   }, [files.data, path])
   const file = useFile(id, path)
-  if (files.isLoading) return <div {...cn(ui.muted(), ui.small())}>Loading…</div>
-  if (!files.data?.files.length) return <div {...cn(ui.muted(), ui.small())}>No files changed{files.data ? ` vs ${files.data.base}` : ""}.</div>
+  if (files.isLoading) return <div {...cn(ui.muted(), ui.small())}>{t("Loading…")}</div>
+  if (!files.data?.files.length) return <div {...cn(ui.muted(), ui.small())}>{t("No files changed{b}.", { b: files.data ? t(" vs {b}", { b: files.data.base }) : "" })}</div>
   return (
     <div {...cx(st.wrap(), stacked && st.stacked())}>
       <div {...cx(st.list(), stacked && st.listRow())}>
         {files.data.files.map((f) => <button key={f.path} title={f.path} {...cx(st.item(), f.path === path && st.active())} onClick={() => setPath(f.path)}><span {...st.status()}>{f.status[0]}</span>{f.path}</button>)}
       </div>
       <div>
-        {file.isLoading ? <div {...cn(ui.muted(), ui.small())}>Loading…</div>
-          : file.data ? (file.data.binary ? <div {...cn(ui.muted(), ui.small())}>Binary file.</div> : /\.(md|markdown)$/i.test(file.data.path) ? <Markdown source={file.data.content} /> : <pre {...st.pre()}>{file.data.content}</pre>) : null}
-        {file.data?.truncated ? <p {...cn(ui.small(), ui.muted())}>Truncated at 300 KB.</p> : null}
+        {file.isLoading ? <div {...cn(ui.muted(), ui.small())}>{t("Loading…")}</div>
+          : file.data ? (file.data.binary ? <div {...cn(ui.muted(), ui.small())}>{t("Binary file.")}</div> : /\.(md|markdown)$/i.test(file.data.path) ? <Markdown source={file.data.content} /> : <pre {...st.pre()}>{file.data.content}</pre>) : null}
+        {file.data?.truncated ? <p {...cn(ui.small(), ui.muted())}>{t("Truncated at 300 KB.")}</p> : null}
       </div>
     </div>
   )

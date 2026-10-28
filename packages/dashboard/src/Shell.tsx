@@ -8,6 +8,7 @@ import { useNewTicket, useOpenTicket, useSearchState, VIEWS } from "./nav.ts"
 import { NewTicket } from "./ticket/NewTicket.tsx"
 import { Drawer } from "./ticket/Drawer.tsx"
 import { Button, cn, Meter, ui } from "./ui.tsx"
+import { t, useLang } from "./i18n.ts"
 
 const st = {
   app: style({ display: "grid", gridTemplateColumns: "232px 1fr", minHeight: "100vh !custom", backgroundColor: "bg", color: "ink", fontFamily: "ui", fontSize: "md", lineHeight: 1.5, "@media (max-width: 900px)": { gridTemplateColumns: "1fr" } }),
@@ -35,6 +36,7 @@ const Count = ({ n, hot }: { n: number; hot?: boolean }) => (n === 0 ? null : <s
 export const Shell = ({ children }: { children: ReactNode }) => {
   const q = useSnapshot()
   const S = q.data
+  useLang()
   const alive = Boolean(S?.supervisor.alive)
   const held = Boolean(S?.interrupts.length)
   const toast = useToastState()
@@ -75,13 +77,13 @@ export const Shell = ({ children }: { children: ReactNode }) => {
         <nav style={{ display: "grid", gap: 2 }}>
           {VIEWS.map(([to, label]) => {
             const [n, hot] = counts[to] ?? [0, false]
-            return <Link key={to} to={to} search={(prev: Record<string, unknown>) => prev} {...cx(st.navLink(), pathname === to && st.navActive())}>{label}<Count n={n} hot={hot} /></Link>
+            return <Link key={to} to={to} search={(prev: Record<string, unknown>) => prev} {...cx(st.navLink(), pathname === to && st.navActive())}>{t(label)}<Count n={n} hot={hot} /></Link>
           })}
         </nav>
-        <Button tone="primary" kbd="n" onClick={() => setNew(true)} style={{ margin: "8px 10px 0" }}>New ticket</Button>
+        <Button tone="primary" kbd="n" onClick={() => setNew(true)} style={{ margin: "8px 10px 0" }}>{t("New ticket")}</Button>
         <div {...st.foot()}>
-          <div {...st.status()}><i {...cx(st.dot(), !alive && st.dotOff(), alive && held && st.dotHold(), alive && !held && st.dotOn())} /><span>{q.isError ? `unreachable: ${q.error.message}` : !S ? "connecting…" : !S.supervisor.alive ? "supervisor not running" : halted ? "halted (L5)" : S.interrupts.length ? `running · ${S.interrupts.length} interrupt${S.interrupts.length > 1 ? "s" : ""}` : `running · ${S.running.length} session${S.running.length === 1 ? "" : "s"}`}</span></div>
-          <div {...cn(st.status(), ui.num())}>{S ? `${usd(S.budget.spent_month)} of ${usd(S.budget.monthly)} this month` : "—"}</div>
+          <div {...st.status()}><i {...cx(st.dot(), !alive && st.dotOff(), alive && held && st.dotHold(), alive && !held && st.dotOn())} /><span>{q.isError ? t("unreachable: {m}", { m: q.error.message }) : !S ? t("connecting…") : !S.supervisor.alive ? t("supervisor not running") : halted ? t("halted (L5)") : S.interrupts.length ? t("running · {n} interrupts", { n: S.interrupts.length }) : t("running · {n} sessions", { n: S.running.length })}</span></div>
+          <div {...cn(st.status(), ui.num())}>{S ? t("{a} of {b} this month", { a: usd(S.budget.spent_month), b: usd(S.budget.monthly) }) : "—"}</div>
           <Meter ratio={ratio} />
         </div>
       </aside>
@@ -89,7 +91,7 @@ export const Shell = ({ children }: { children: ReactNode }) => {
       {search.ticket ? <Drawer id={search.ticket} onClose={() => openTicket(null)} /> : null}
       {search.new ? <NewTicket onClose={() => setNew(false)} /> : null}
       {toast ? <div {...cn(ui.toast(), toast.error && ui.toastErr())}>{toast.text}</div> : null}
-      <div {...st.help()}><span><kbd {...st.helpKbd()}>n</kbd> new ticket</span><span><kbd {...st.helpKbd()}>a</kbd> approve</span><span><kbd {...st.helpKbd()}>r</kbd> reject</span><span><kbd {...st.helpKbd()}>1</kbd>–<kbd {...st.helpKbd()}>9</kbd> views</span><span><kbd {...st.helpKbd()}>esc</kbd> close</span></div>
+      <div {...st.help()}><span><kbd {...st.helpKbd()}>n</kbd> {t("new ticket")}</span><span><kbd {...st.helpKbd()}>a</kbd> {t("approve")}</span><span><kbd {...st.helpKbd()}>r</kbd> {t("reject")}</span><span><kbd {...st.helpKbd()}>1</kbd>–<kbd {...st.helpKbd()}>9</kbd> {t("views")}</span><span><kbd {...st.helpKbd()}>esc</kbd> {t("close")}</span></div>
     </div>
   )
 }
