@@ -277,6 +277,26 @@ describe("dual control (full preset: COO and judge on a second engine)", () => {
   })
 })
 
+describe("the company does not stop", () => {
+  test("when the backlog empties, the CEO is woken early and opens the next ticket from the strategy", async () => {
+    const c = company("idle", (raw) => { ((raw["policy"] as Record<string, Record<string, unknown>>)["executive"] as Record<string, unknown>)["ceo_cycle"] = "24h" })
+    const clock = { now: Date.UTC(2026, 9, 28, 9) }
+    let cycles = 0
+    const engine = new FakeEngine({ ceo: async ({ spec, call }) => { if (!spec.prompt.startsWith("# CEO cycle")) return {}; cycles++; if (cycles >= 2) await call("ticket_create", { department: "engineering", title: "Next objective step", goal: "g", why: "strategy objective 1", done_criteria: ["d"], project: "app", priority: 3 }); return {} } })
+    const { sup, store } = makeSupervisor(c, engine, clock)
+    await sup.boot()
+    await cycle(sup, clock, 1) // first CEO cycle (due at boot): opens nothing
+    expect(cycles).toBe(1)
+    await cycle(sup, clock, 2) // within the hour: no second cycle yet
+    expect(cycles).toBe(1)
+    clock.now += 3_600_000
+    await cycle(sup, clock, 1) // idle wake after an hour with nothing open
+    expect(cycles).toBe(2)
+    expect(store.ticketsIn(["triaged", "new"]).length).toBe(1)
+    await sup.stop()
+  })
+})
+
 describe("Operator notes (D55)", () => {
   test("a note on a ticket is in the next senior's and judge's prompt, newest last", async () => {
     const c = company("notes")

@@ -66,6 +66,8 @@ interface Running {
 
 /** Below this much remaining budget a share counts as exhausted: no session could do anything with it. */
 const MIN_SESSION_USD = 0.05
+/** With no work left, the CEO is woken at most this often to open the next tickets from the strategy. */
+const IDLE_WAKE_MS = 3_600_000
 /** How a judge handles gates and the sandbox; the first live runs rejected sound work over missing network and dependencies. */
 const VERIFICATION_RULES = (gates: ReadonlyArray<string>, ticketId: string): Array<string> => [
   gates.length
@@ -726,7 +728,11 @@ export class Supervisor {
 
   private async jobs(now: number, active: ReadonlyArray<Interrupt>) {
     const frozen = active.some((i) => i.level === "L3")
-    if (this.config.modules.executive !== "none" && this.due("ceo", durationMs(this.config.policy.executive.ceo_cycle), now)) this.ceoCycle(now)
+    // The CEO runs on its cycle, and early when the company has run out of work (the backlog is
+    // empty) so one finished ticket never leaves the company idle until the next cycle.
+    const backlogEmpty = this.store.ticketsIn(["new", "triaged", "in_progress", "ready_for_verification", "verified", "awaiting_approval", "rejected"]).length === 0 && this.running.size === 0
+    const idleWake = backlogEmpty && now - (this.lastJob.get("ceo") ?? 0) >= IDLE_WAKE_MS
+    if (this.config.modules.executive !== "none" && (this.due("ceo", durationMs(this.config.policy.executive.ceo_cycle), now) || (idleWake && this.due("ceo", IDLE_WAKE_MS, now)))) this.ceoCycle(now)
     if (this.config.modules.executive === "ceo+coo") this.cooReviews(now)
     if (this.due("tripwires", durationMs(this.config.runtime.tick), now)) this.tripwires(now)
     if (this.due("audit", DAY, now)) this.auditWatch(now)
@@ -758,8 +764,8 @@ export class Supervisor {
       `## Blocked tickets (${blocked.length}) — use ticket_unblock with a decision, or leave for the Operator`,
       ...blocked.map((t) => `- ${t.id} [${t.department}] ${t.title}: ${t.note}`),
       "",
-      "## Then",
-      "If the strategy names goals that no open ticket serves, open tickets with ticket_create (they start triaged). Keep the inbox small: escalate only what the policy requires.",
+      "## Then: keep the company fed",
+      `Open tickets: ${this.store.ticketsIn(["new", "triaged", "in_progress", "ready_for_verification", "verified", "awaiting_approval", "rejected", "blocked"]).length}. The company stops when nothing is open, so the strategy must always have work in flight: for each objective in governance/strategy.md that no open ticket serves, open the next concrete ticket with ticket_create (they start triaged) — small, one deliverable, with testable done criteria. Keep roughly 2–3 open tickets per department; more wastes budget on context, fewer leaves the company idle. Do not open tickets for anything the strategy does not name. Keep the inbox small: escalate only what the policy requires.`,
       "End with the structured cycle report.",
     ].join("\n")
     void this.startSession({ ticketId: "CEO-CYCLE", role, cwd: this.root, prompt, outputSchema: jsonSchema(CeoCycleReport), onOutcome: (o) => {

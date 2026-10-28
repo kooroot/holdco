@@ -247,7 +247,7 @@ The binary hook used by unsupervised sessions blocks and logs, but cannot raise 
 | reaper | every tick | §7 |
 | tripwires | every tick | §10 |
 | challenge-window | every tick | finalize T2 actions past `windows.t2_internal` / `t2_external` |
-| ceo-cycle | every `executive.ceo_cycle` | one CEO session: triage `new`, write proposals for `needs_proposal`, handle `blocked`, allocate. Skipped without a CEO |
+| ceo-cycle | every `executive.ceo_cycle`, and within an hour whenever the backlog is empty and nothing runs | one CEO session: triage `new`, write proposals for `needs_proposal`, handle `blocked`, allocate, and open the next tickets from the strategy so the company never idles on a finished ticket (2–3 open per department). Skipped without a CEO |
 | inbox-batch | daily at `inbox.batch_at` (company time zone) | summarize open routine items; urgent items alerted at once when filed (D52); items past `timeout` reject every tick |
 | digest | weekly at `policy.digest` | the kernel renders every deterministic section from the database (goals data, anomalies, sample list, org changes, executive health, pending T3, unresolved assumptions); the CEO adds narrative if present. A failed CEO session never skips the digest (Constitution 6.3) |
 | improvement-cycle | weekly, Monday | Improvement session to diagnose and open tickets; dormant until enough labeled replay tickets (D20) |
