@@ -179,7 +179,7 @@ export interface RunExecutorOptions {
 interface Ran { readonly status: number | null; readonly stdout: string; readonly stderr: string; readonly error?: string }
 
 /** Run argv without blocking the supervisor's event loop; a timeout kills the process. */
-const runAsync = (argv: ReadonlyArray<string>, cwd: string, env: Record<string, string>, timeoutMs: number): Promise<Ran> =>
+export const runAsync = (argv: ReadonlyArray<string>, cwd: string, env: Record<string, string>, timeoutMs: number): Promise<Ran> =>
   new Promise((resolve) => {
     const [cmd, ...args] = argv as [string, ...Array<string>]
     let stdout = ""

@@ -286,6 +286,34 @@ describe("dual control (full preset: COO and judge on a second engine)", () => {
   })
 })
 
+describe("the project's verify command (D65)", () => {
+  test("a failing verify command rejects by the kernel, with the output, before any judge session; a passing one is handed to the judge", async () => {
+    const c = company("verify", (raw) => { (raw["projects"] as Array<Record<string, unknown>>)[0]!["verify"] = ["sh", "-c", "echo checking; test -f passes.txt"] })
+    const clock = { now: Date.UTC(2026, 9, 26, 9) }
+    const engine = new FakeEngine({ ceo: async () => ({}) })
+    const { sup, store } = makeSupervisor(c, engine, clock)
+    await sup.boot()
+    const id = store.createTicket({ department: "engineering", title: "Add the feature", goal: "g", why: "w", done_criteria: ["feature.md exists"], opened_by: "operator", project: "app", state: "triaged", action: "code.merge.app", now: clock.now }).id
+    await cycle(sup, clock, 4)
+    const t1 = store.ticket(id)!
+    expect(["rejected", "triaged", "in_progress"]).toContain(t1.state)
+    const rejectedByKernel = store.events(id).find((e) => e.to_state === "rejected" && e.actor === "kernel")
+    expect(rejectedByKernel?.note).toContain("verify failed")
+    expect(rejectedByKernel?.note).toContain("checking")
+    expect(engine.runs.some((r) => r.role.kind === "verification")).toBe(false) // no judge was paid for a red build
+    const senior = engine.runs.find((r) => r.role.kind === "senior")!
+    expect(senior.prompt).toContain("verify command is `sh -c echo checking; test -f passes.txt`")
+    // now the branch satisfies the check: the judge runs and sees the kernel's evidence
+    writeFileSync(NodePath.join(c.app, "passes.txt"), "")
+    git(c.app, "add", "-A"); git(c.app, "commit", "-qm", "passes")
+    const id2 = store.createTicket({ department: "engineering", title: "Second", goal: "g", why: "w", done_criteria: ["feature.md exists"], opened_by: "operator", project: "app", state: "triaged", action: "code.merge.app", now: clock.now }).id
+    await cycle(sup, clock, 6)
+    const judge = engine.runs.filter((r) => r.role.kind === "verification").find((r) => r.prompt.includes(id2))
+    expect(judge?.prompt).toContain("verify command `sh -c echo checking; test -f passes.txt` in this worktree: exit 0")
+    await sup.stop()
+  })
+})
+
 describe("the company does not stop", () => {
   test("when the backlog empties, the CEO is woken early and opens the next ticket from the strategy", async () => {
     const c = company("idle", (raw) => { ((raw["policy"] as Record<string, Record<string, unknown>>)["executive"] as Record<string, unknown>)["ceo_cycle"] = "24h" })

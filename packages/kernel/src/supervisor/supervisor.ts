@@ -30,7 +30,7 @@ import { CeoCycleReport, Proposal } from "../protocol/approval.ts"
 import { Verdict } from "../protocol/verdict.ts"
 import { END_STATES, Store, type Ticket } from "../store/store.ts"
 import { clear as clearInterrupt, raise as raiseInterrupt, readControl } from "./control.ts"
-import { type ExecResult, executorKind, mergeBranch, mergeViaGithub, runExecutor } from "./executors.ts"
+import { type ExecResult, executorEnv, executorKind, mergeBranch, mergeViaGithub, runAsync, runExecutor } from "./executors.ts"
 import { consoleNotifier, type Notifier } from "./notify.ts"
 import { Org, projectInstructions } from "./org.ts"
 import { renderDigest } from "./digest.ts"
@@ -1040,6 +1040,7 @@ export class Supervisor {
       t.action ? `Registry action the result needs: ${t.action}` : "Registry action: choose the right one from governance/policy.md and pass it to ticket_update.",
       `Attempt ${t.attempts + 1} of ${this.config.runtime.max_attempts}. Your worktree is ${cwd} on branch ${branch}; commit there. Inspect the branch first: earlier attempts may have left work.${deps ? ` ${deps}.` : ""}`,
       t.state === "in_progress" && t.note ? `Last note on this ticket: ${t.note}` : "",
+      project?.verify ? `The project's verify command is \`${project.verify.join(" ")}\`: run it in your worktree before returning; Verification runs the same command and the kernel rejects the ticket if it fails.` : project ? "This project has no verify command yet. If your change adds tests or a check script, say in the report what command proves the project works, so the Operator can register it (projects[].verify)." : "",
       this.operatorNotes(t.id),
       prior.length ? `Earlier session reports:\n${prior.map((s) => s.report).join("\n")}` : "",
       "",
@@ -1087,12 +1088,39 @@ export class Supervisor {
     const rubricRef = action?.evaluator ?? "engineering.md#app"
     const deps = provisionDependencies(cwd, repo, this.log)
     const gates = action?.gates ?? []
+    // D65: the project's verify command runs first, in the worktree, by the kernel. A failure rejects without
+    // spending a judge; a pass is handed to the judge as the ci-green evidence.
+    if (project?.verify && t.branch) {
+      const argv = project.verify
+      void runAsync(argv, cwd, executorEnv([], this.env), durationMs(project.verify_timeout ?? "10m")).then((r) => {
+        const cur = this.store.ticket(t.id)
+        if (cur?.state !== "ready_for_verification" || cur.lease_holder !== sessionId) return
+        const tail = (r.stdout + (r.stderr ? `\n${r.stderr}` : "")).trim().split("\n").slice(-40).join("\n").slice(-4000)
+        if (r.status !== 0 || r.error) {
+          const end = this.now()
+          this.log(`${t.id}: verify command failed (exit ${r.status ?? "none"}); rejected by the kernel`)
+          this.store.transition(t.id, "rejected", "kernel", `verify failed: \`${argv.join(" ")}\` exited ${r.status ?? "with an error"}${r.error ? ` (${r.error})` : ""}\n${tail}`, end)
+          this.store.bumpAttempts(t.id, this.config.runtime.max_attempts, "kernel", "verify command failed", end)
+          this.store.releaseLease(t.id, sessionId)
+          this.running.delete(sessionId)
+          return
+        }
+        this.launchJudge(t, sessionId, cap, cwd, repo, base, paths, rubricRef, deps, gates, project, `The kernel ran the project's verify command \`${argv.join(" ")}\` in this worktree: exit 0. Count it as the ci-green gate with this evidence; do not re-run it unless a changed file could not have been covered.\nOutput tail:\n${tail || "(none)"}`)
+      })
+      return
+    }
+    this.launchJudge(t, sessionId, cap, cwd, repo, base, paths, rubricRef, deps, gates, project, "")
+  }
+
+  private launchJudge(t: Ticket, sessionId: string, cap: number, cwd: string, repo: string, base: string, paths: ReadonlyArray<string>, rubricRef: string, deps: string | undefined, gates: ReadonlyArray<string>, project: CompanyConfig["projects"][number] | undefined, verified: string) {
+    const role = this.org.role("verification")
     const prompt = [
       `# Verify ticket ${t.id}: ${t.title}`,
       `Department: ${t.department}. Action: ${t.action ?? "unknown"}. Rubric: ${rubricRef}. Mechanical gates required by this action: ${gates.join(", ") || "none"}.`,
       `Goal: ${t.goal}`, `Done criteria:`, ...t.done_criteria.map((c) => `- ${c}`),
       `The branch ${t.branch ?? "(none)"} is checked out read-only at ${cwd}. Files changed versus ${base}: ${paths.length ? paths.join(", ") : "(none)"}.${deps ? ` ${deps}.` : ""}`,
       this.operatorNotes(t.id),
+      verified,
       ...VERIFICATION_RULES(gates, t.id),
       "",
       "## Rubric", this.org.rubric(rubricRef) || "(rubric file missing: return cannot-score)",

@@ -432,7 +432,17 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
     }
     case "project": {
       const config = loadConfig(dir)
-      if (sub !== "add") throw new OperatorError("usage: holdco project add <path> --id id [--class core|experiment|maintenance|brand] [--share 0.5]")
+      if (sub === "verify") {
+        // holdco project verify <id> [cmd args…]   — the command that proves the project works (D65); none clears it
+        const id = args.positional[2] ?? (() => { throw new OperatorError("usage: holdco project verify <id> [command…]   (no command clears it)") })()
+        const argv = args.positional.slice(3)
+        if (!config.projects.some((p) => p.id === id)) throw new OperatorError(`no project '${id}' (${config.projects.map((p) => p.id).join(", ")})`)
+        const projects = config.projects.map((p) => (p.id === id ? (argv.length ? { ...p, verify: argv } : (({ verify: _v, verify_timeout: _t, ...rest }) => rest)(p)) : p))
+        saveConfig(dir, Schema.decodeUnknownSync(CompanyConfig)({ ...config, projects }), `project ${id}: verify ${argv.length ? argv.join(" ") : "cleared"}`)
+        console.log(argv.length ? `${id}: Verification runs \`${argv.join(" ")}\` before every judge; a failure rejects the ticket` : `${id}: verify command cleared`)
+        return true
+      }
+      if (sub !== "add") throw new OperatorError("usage: holdco project add <path> --id id [--class core|experiment|maintenance|brand] [--share 0.5]   |   holdco project verify <id> [command…]")
       const path = args.positional[2] ?? (() => { throw new OperatorError("path is required") })()
       const abs = NodePath.resolve(dir, path)
       if (!existsSync(NodePath.join(abs, ".git"))) throw new OperatorError(`${abs} is not a git repository`)

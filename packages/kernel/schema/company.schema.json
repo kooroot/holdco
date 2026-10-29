@@ -682,6 +682,18 @@
           "merge_wait": {
             "type": "string",
             "pattern": "^[1-9][0-9]*(s|m|h|d)$"
+          },
+          "verify": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 1
+          },
+          "verify_timeout": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]*(s|m|h|d)$"
           }
         },
         "required": [

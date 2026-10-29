@@ -9,7 +9,9 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, wri
 import { homedir } from "node:os"
 import { basename, dirname, join, relative, resolve } from "node:path"
 import { loadPreset } from "../scaffold/templates.ts"
-import { scaffold } from "../scaffold/scaffold.ts"
+import { renderCompanyYaml, scaffold } from "../scaffold/scaffold.ts"
+import { CompanyConfig } from "../config/company.ts"
+import { Schema } from "effect"
 import { KERNEL_VERSION } from "../version.ts"
 import { writeOperatorEnv } from "./env.ts"
 
@@ -19,6 +21,8 @@ export interface WizardAnswers {
   readonly project: string
   /** Set when the wizard is to `git init` the project itself. */
   readonly newRepo: string | undefined
+  /** D65: the command that proves the project works, run by the kernel before every judge. */
+  readonly verify: Array<string> | undefined
   readonly preset: string
   readonly models: "claude" | "codex" | "dual"
   readonly mission: string
@@ -116,6 +120,16 @@ export const runWizard = async (checkoutPackages: string | undefined): Promise<W
     newRepo = project
   } else project = projectChoice
 
+  const verifyGuess = (() => {
+    try {
+      const pkg = JSON.parse(readFileSync(join(project, "package.json"), "utf8")) as { scripts?: Record<string, string> }
+      if (pkg.scripts?.["test"]) return existsSync(join(project, "bun.lock")) || existsSync(join(project, "bun.lockb")) ? "bun test" : "npm test"
+    } catch { /* no package.json */ }
+    return existsSync(join(project, "Cargo.toml")) ? "cargo test" : existsSync(join(project, "go.mod")) ? "go test ./..." : existsSync(join(project, "pyproject.toml")) ? "pytest" : ""
+  })()
+  const verifyInput = await ask(p.text({ message: "Command that proves the project works (Verification runs it; a failure rejects the ticket). Leave blank for none", ...(verifyGuess ? { defaultValue: verifyGuess, placeholder: verifyGuess } : { placeholder: "bun test" }) }))
+  const verify = (verifyInput || verifyGuess).trim() ? (verifyInput || verifyGuess).trim().split(/\s+/) : undefined
+
   const preset = await ask(p.select({
     message: "Organization",
     initialValue: "full",
@@ -160,7 +174,7 @@ export const runWizard = async (checkoutPackages: string | undefined): Promise<W
     ? await ask(p.password({ message: "Bot token from @BotFather (kept in ~/.config/holdco/, never in the repo)", validate: (v) => (!/^\d+:[\w-]{30,}$/.test(v ?? "") ? "does not look like a bot token (123456:ABC…)" : undefined) }))
     : undefined
 
-  return { dir, github: github || (githubGuess as string), project, newRepo, preset, models, mission: mission || loadPreset(preset).company.mission, timezone, language, autonomy, objective: objective || undefined, voice, telegramToken }
+  return { dir, github: github || (githubGuess as string), project, newRepo, verify, preset, models, mission: mission || loadPreset(preset).company.mission, timezone, language, autonomy, objective: objective || undefined, voice, telegramToken }
 }
 
 /** Replace the example objective row in governance/strategy.md. */
@@ -220,6 +234,15 @@ const build = async (a: WizardAnswers, checkoutPackages: string | undefined, tar
     projectPath: resolve(a.project),
   })
   s.stop(`Company ${r.config.company.name} in ${target} (${r.modules.length} modules)`)
+  if (a.verify && r.config.projects[0]) {
+    const yaml = join(target, "company.yaml")
+    const verify: ReadonlyArray<string> = a.verify
+    const cfg = Schema.decodeUnknownSync(CompanyConfig)(Bun.YAML.parse(readFileSync(yaml, "utf8")))
+    const projects = cfg.projects.map((pr, i) => (i === 0 ? { ...pr, verify } : pr))
+    writeFileSync(yaml, renderCompanyYaml({ ...cfg, projects }, a.preset))
+    spawnSync("git", ["commit", "-qam", `project ${r.config.projects[0].id}: verify ${a.verify.join(" ")}`], { cwd: target })
+    p.log.success(`Verification runs \`${a.verify.join(" ")}\` before every judge`)
+  }
 
   const step = (label: string, cmd: string, args: Array<string>, extraEnv: Record<string, string> = {}) => {
     s.start(label)

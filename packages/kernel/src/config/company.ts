@@ -208,6 +208,13 @@ const Project = Schema.Struct({
   merge: Schema.optionalKey(Schema.Literals(["local", "github"])),
   /** With `merge: github`, how long to wait for checks before rejecting (default 20m). */
   merge_wait: Schema.optionalKey(Duration),
+  /**
+   * D65: the command that proves the project works (argv, no shell; e.g. ["bun", "test"]). The kernel runs it
+   * in the verification worktree before spending a judge session: a non-zero exit rejects the ticket with
+   * the output; a pass is the `ci-green` evidence the judge sees. Seniors are told to run it before returning.
+   */
+  verify: Schema.optionalKey(Schema.Array(Text).check(Schema.isMinLength(1))),
+  verify_timeout: Schema.optionalKey(Duration),
 })
 
 /**
