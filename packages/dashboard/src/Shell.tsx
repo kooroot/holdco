@@ -65,7 +65,7 @@ export const Shell = ({ children }: { children: ReactNode }) => {
   const counts: Record<string, [number, boolean]> = {
     "/inbox": [S?.inbox.length ?? 0, urgent > 0],
     "/tickets": [S?.tickets.filter((t) => !["done", "declined", "rolled_back"].includes(t.state)).length ?? 0, blocked > 0],
-    "/audit": [S?.audit.sample.length ?? 0, (S?.audit.due ?? false) && (S?.audit.sample.length ?? 0) > 0],
+    "/audit": [S?.audit.due ? (S.audit.sample.length ?? 0) : 0, (S?.audit.due ?? false) && (S?.audit.sample.length ?? 0) > 0], // a count only when the weekly audit is due: grading is calibration, not a queue
     "/releases": [S?.candidate ? 1 : 0, false],
     "/org": [S?.running.length ?? 0, false],
     "/controls": [S?.interrupts.length ?? 0, (S?.interrupts.length ?? 0) > 0],
