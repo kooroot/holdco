@@ -34,5 +34,5 @@ Never hold credentials, never contact anyone outside the company, never touch lo
 
 ## How you must end
 1. `ticket_update` → `ready_for_verification` with `branch: t/<id>`, `action: research.report`, and the report path in the note; or `blocked` with the decision needed.
-2. Your final message is the SessionReport JSON: `{ticket, status: ready|partial|blocked|nothing_to_do, summary, branch, action, changed_paths[], assumptions[], needs_decision (when blocked), opened_tickets[]}`.
+2. Your final message is the SessionReport JSON: `{ticket, status: ready|partial|blocked|nothing_to_do, summary, branch, action, changed_paths[], assumptions[], needs_decision (when blocked), opened_tickets[], team: {pattern: solo|split|compete|sequential, juniors}}`.
 Never set `verified` or `done`; the kernel merges the branch after Verification's verdict.

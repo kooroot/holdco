@@ -19,6 +19,8 @@ export interface Signals {
   readonly guard_refusals: Array<{ reason: string; count: number }>
   readonly attempts_exhausted: Array<string>
   readonly cost_by_action: Array<{ action: string; tickets: number; usd: number }>
+  /** How seniors sized their teams (SessionReport.team), with wall-clock and cost per pattern. */
+  readonly teams: Array<{ pattern: string; sessions: number; avg_minutes: number; avg_usd: number }>
 }
 
 const top = <T>(xs: ReadonlyArray<T>, n: number) => xs.slice(0, n)
@@ -70,6 +72,16 @@ export const collectSignals = (root: string, store: Store, since: number, now: n
     }
   }
 
+  const teams = new Map<string, { n: number; minutes: number; usd: number }>()
+  for (const s of sessions) {
+    if (s.kind !== "senior" || !s.report || !s.ended_at) continue
+    const team = (JSON.parse(s.report) as { team?: { pattern?: string } }).team
+    const pattern = team?.pattern ?? "unrecorded"
+    const cur = teams.get(pattern) ?? { n: 0, minutes: 0, usd: 0 }
+    const kids = sessions.filter((j) => j.parent_session === s.id)
+    teams.set(pattern, { n: cur.n + 1, minutes: cur.minutes + (s.ended_at - s.started_at) / 60_000, usd: cur.usd + s.cost_usd + kids.reduce((a, j) => a + j.cost_usd, 0) })
+  }
+
   const byAction = new Map<string, { tickets: number; usd: number }>()
   for (const t of done) { const k = t.action ?? "(none)"; const c = byAction.get(k) ?? { tickets: 0, usd: 0 }; byAction.set(k, { tickets: c.tickets + 1, usd: c.usd + cost(t.id) }) }
 
@@ -85,6 +97,7 @@ export const collectSignals = (root: string, store: Store, since: number, now: n
     guard_refusals: [...refusals.entries()].map(([reason, count]) => ({ reason, count })).sort((a, b) => b.count - a.count).slice(0, 10),
     attempts_exhausted: [...new Set(exhausted)],
     cost_by_action: [...byAction.entries()].map(([action, v]) => ({ action, ...v })).sort((a, b) => b.usd - a.usd),
+    teams: [...teams.entries()].map(([pattern, v]) => ({ pattern, sessions: v.n, avg_minutes: v.minutes / v.n, avg_usd: v.usd / v.n })).sort((a, b) => b.sessions - a.sessions),
   }
 }
 
@@ -92,6 +105,7 @@ export const collectSignals = (root: string, store: Store, since: number, now: n
 export const renderSignals = (s: Signals): string => [
   `## Evidence from the last ${s.period_days} days`,
   `Tickets done: ${s.tickets_done} · failed (declined/rolled back): ${s.tickets_failed} · cost per done ticket: ${s.cost_per_done_usd === null ? "n/a" : `$${s.cost_per_done_usd.toFixed(2)}`}`,
+  s.teams.length ? `Team sizing by seniors: ${s.teams.map((t) => `${t.pattern} ×${t.sessions} (avg ${t.avg_minutes.toFixed(0)}m, $${t.avg_usd.toFixed(2)} incl. juniors)`).join(", ")} — solo everywhere while tickets split into parts means wall-clock left on the table; many juniors on small tickets means cost.` : "",
   s.cost_by_action.length ? `Cost by action: ${s.cost_by_action.map((a) => `${a.action} ${a.tickets}× $${a.usd.toFixed(2)}`).join(", ")}` : "",
   s.rejections.length ? `### Rejected by Verification (${s.rejections.length})\n${s.rejections.map((r) => `- ${r.ticket_id} [${r.action ?? "?"}]: ${r.summary}${r.failures.length ? `\n  failures: ${r.failures.join(" | ")}` : ""}`).join("\n")}` : "No rejections.",
   s.verify_failures.length ? `### Rejected by the kernel's verify command (${s.verify_failures.length})\n${s.verify_failures.map((v) => `- ${v.ticket_id}: ${v.note}`).join("\n")}` : "",

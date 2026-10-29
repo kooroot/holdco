@@ -23,6 +23,8 @@ export const SessionReport = Schema.Struct({
   needs_decision: Schema.optionalKey(Text(1)),
   /** Tickets this session opened for other departments, by id. */
   opened_tickets: Schema.Array(Schema.String),
+  /** How the senior sized the team (delegation.md §2); Improvement reads it against time and cost. */
+  team: Schema.optionalKey(Schema.Struct({ pattern: Schema.Literals(["solo", "split", "compete", "sequential"]), juniors: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)), reason: Schema.optionalKey(Schema.String) })),
 }).check(
   Schema.makeFilter((r) => (r.status === "blocked" && r.needs_decision === undefined ? "status 'blocked' requires needs_decision" : undefined)),
   Schema.makeFilter((r) => (r.status === "ready" && r.branch === undefined && r.changed_paths.length > 0 ? "status 'ready' with changes requires branch" : undefined)),

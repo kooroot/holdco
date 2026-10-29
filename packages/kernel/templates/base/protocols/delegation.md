@@ -18,18 +18,21 @@ The senior plans, delegates, integrates, and reviews. The senior does not do jun
 
 ### 2. Sizing the team (0..N)
 
-The senior decides team size per task. The default is zero.
+The senior decides team size per task. The question to ask first is "which parts of this are independent?" — and independent parts run **in parallel**, each on its own junior, started together and collected with one `delegate_wait`. Solo is for work that is small or that cannot be split, not the default for everything.
 
 ```
 size(task):
-  if task is small, single-area, and fits comfortably in one context  → 0 juniors (senior does it)
-  if task splits into independent parts                               → SPLIT: 1 junior per part
-  if task is ambiguous or high-stakes and one answer must be chosen   → COMPETE: 2 juniors, same brief, varied approach
+  list the parts; mark each pair as independent (different files, no shared state) or coupled
+  if ≥ 2 independent parts                                            → SPLIT: 1 junior per part, all started before any wait
+  if task is ambiguous or high-stakes and one answer must be chosen   → COMPETE: 2 juniors, same brief, varied approach, in parallel
   if parts are tightly coupled (shared files, shared state)           → SEQUENTIAL: 1 junior at a time, or senior alone
+  if the whole task is small, single-area, fits in one context        → SOLO (senior does it)
   cap: company.yaml:modules.juniors.max_per_task (default 5); exceeding it requires a CEO ticket split
 ```
 
-Each spawn decision is logged with the reason (`split`, `compete`, `sequential`, `solo`) so Improvement can later evaluate over- and under-spawning.
+Parallel means parallel: start every junior of a SPLIT or COMPETE with consecutive `delegate_start` calls, then one `delegate_wait` with all brief ids. Waiting after each start serializes the work and wastes the wall-clock the juniors exist to save. A junior's worktree is its own, so independent parts never conflict until the senior integrates them.
+
+Each spawn decision is recorded in the SessionReport (`team`: pattern and junior count) so Improvement can evaluate over- and under-spawning against time and cost.
 
 | Pattern | Use when | Senior's integration step |
 |---|---|---|
@@ -102,15 +105,18 @@ The senior's review is the first line of defense. It never replaces Verification
 
 ### 2. 팀 규모 정하기 (0~N)
 
-시니어가 작업마다 팀 규모를 정합니다. 기본값은 0입니다.
+시니어가 작업마다 팀 규모를 정합니다. 먼저 물을 것은 "이 일의 어느 부분이 서로 독립적인가"이고, 독립된 부분은 **병렬로** — 부분마다 주니어 하나씩, 한꺼번에 시작하고 `delegate_wait` 한 번으로 거둡니다. 단독은 작거나 쪼갤 수 없는 일에 쓰는 것이지 모든 일의 기본값이 아닙니다.
 
-- 작고, 한 영역이고, 한 컨텍스트에 여유 있게 들어가면 → 주니어 0명 (시니어가 직접)
-- 독립된 부분으로 쪼개지면 → **분할**: 부분당 주니어 1명
-- 모호하거나 중요하고 하나의 답을 골라야 하면 → **경쟁**: 주니어 2명, 같은 지시서, 다른 접근
+- 부분을 나열하고 쌍마다 독립(다른 파일, 공유 상태 없음)인지 얽힘인지 표시
+- 독립된 부분이 2개 이상 → **분할**: 부분당 주니어 1명, 기다리기 전에 전부 시작
+- 모호하거나 중요하고 하나의 답을 골라야 하면 → **경쟁**: 주니어 2명, 같은 지시서, 다른 접근, 병렬
 - 부분이 강하게 얽혀 있으면(공유 파일, 공유 상태) → **순차**: 한 번에 주니어 1명, 또는 시니어 단독
+- 전체가 작고 한 영역이고 한 컨텍스트에 들어가면 → **단독**
 - 상한: `company.yaml:modules.juniors.max_per_task`(기본 5). 넘기려면 CEO가 티켓을 쪼개야 함
 
-모든 스폰 결정은 이유(`split`, `compete`, `sequential`, `solo`)와 함께 기록되어, 개선팀이 나중에 과잉·과소 스폰을 평가할 수 있게 합니다.
+병렬은 정말 병렬이어야 합니다: 분할·경쟁의 주니어는 `delegate_start`를 연달아 호출해 전부 띄운 뒤 brief id를 모두 넣어 `delegate_wait` 한 번. 하나 띄우고 기다리고 또 띄우면 직렬이 되어 주니어를 쓰는 이유(시간)가 사라집니다. 주니어의 워크트리는 각자의 것이라 독립된 부분은 시니어가 통합하기 전까지 충돌하지 않습니다.
+
+모든 스폰 결정은 SessionReport의 `team`(패턴과 주니어 수)에 기록되어, 개선팀이 시간·비용 대비 과잉·과소 스폰을 평가합니다.
 
 ### 3. 격리
 

@@ -1052,6 +1052,7 @@ export class Supervisor {
       this.operatorNotes(t.id),
       prior.length ? `Earlier session reports:\n${prior.map((s) => s.report).join("\n")}` : "",
       "",
+      this.config.modules.juniors.enabled ? `Team: list the ticket's independent parts first; two or more → one junior each, started together (consecutive delegate_start, one delegate_wait), up to ${this.config.modules.juniors.max_per_task}. Solo only when the work is small or cannot be split. Record the choice in the report's \`team\`.` : "",
       "Finish by calling ticket_update (ready_for_verification with branch and action, or blocked with the decision needed), then return the structured session report.",
     ].filter((l) => l !== "").join("\n")
     const extra: Array<[string, string]> = []
