@@ -30,10 +30,14 @@ export const assemble = (preset: Preset): Assembled => {
   }
   if (errors.length > 0) return { ok: false, errors }
 
+  // D62: an autonomous company starts code merges at T1 (Verification only); everything the modules
+  // mark T3 or `graduation: never` keeps its tier.
+  const autonomous = (preset.policy as { autonomy?: string } | undefined)?.autonomy === "autonomous"
+  const actions = modules.flatMap((m) => m.actions).map((a) => (autonomous && a.tier === "T2" && a.graduation === "auto" && /^code\.merge\./.test(a.id) ? { ...a, tier: "T1" as const } : a))
   const draft = {
     ...preset,
     envelopes: modules.flatMap((m) => m.envelopes),
-    actions: modules.flatMap((m) => m.actions),
+    actions,
   }
   const exit = Schema.decodeUnknownExit(CompanyConfig, { errors: "all", onExcessProperty: "error" })(draft)
   if (exit._tag === "Failure") return { ok: false, errors: [String(exit.cause)] }

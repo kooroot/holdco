@@ -64,7 +64,7 @@ export const Settings = Schema.Struct({
 })
 
 /** What an open ticket waits on: `on` is a key the UI words (session, ceo_triage, ceo_proposal, coo_review, operator, senior_slot, verification_slot, lease, kernel); `eta` when that is expected to move. */
-export const Waiting = Schema.Struct({ ticket_id: Str, title: Str, state: TicketState, on: Str, eta: NullNum, detail: NullStr })
+export const Waiting = Schema.Struct({ ticket_id: Str, title: Str, state: TicketState, on: Str, eta: NullNum, detail: NullStr, stall: Schema.NullOr(Schema.Struct({ since: Num, reason: Str })) })
 
 export const Snapshot = Schema.Struct({
   now: Num,

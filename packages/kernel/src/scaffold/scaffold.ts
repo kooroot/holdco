@@ -19,6 +19,8 @@ export interface ScaffoldOptions {
   readonly mission?: string
   readonly timezone?: string
   readonly language?: "en" | "ko"
+  /** D62: `autonomous` lowers code merges to T1 and the graduation/audit thresholds; default `supervised`. */
+  readonly autonomy?: "supervised" | "autonomous"
   /** First project: path to its git repository (absolute or relative to `dir`). */
   readonly projectPath?: string
   readonly projectId?: string
@@ -41,6 +43,18 @@ export interface ScaffoldResult {
   readonly config: CompanyConfig
   readonly tagged: boolean
 }
+
+/** The autonomous start (D62) applied to a preset before assembly. */
+const autonomous = <P extends { policy: Record<string, unknown>; modules: Record<string, unknown> }>(preset: P): P => ({
+  ...preset,
+  policy: {
+    ...preset.policy,
+    autonomy: "autonomous",
+    graduation: { ...(preset.policy["graduation"] as Record<string, unknown>), samples: 5, agreement: 0.8, demotion_agreement: 0.6, demotion_window: 5 },
+    audit: { ...(preset.policy["audit"] as Record<string, unknown>), weekly_sample: 3 },
+  },
+  modules: { ...preset.modules, improvement: { ...(preset.modules["improvement"] as Record<string, unknown> | undefined ?? { enabled: false }), replay_min_tickets: 0 } },
+})
 
 const KERNEL_PACKAGE = "@holdco/kernel"
 const ENGINE_PACKAGE = { claude: "@holdco/engine-claude", codex: "@holdco/engine-codex" } as const
@@ -135,7 +149,7 @@ export const scaffold = (opts: ScaffoldOptions): ScaffoldResult => {
       ? { projects: [{ id: projectId, path: projectRel, class: "core" as const, share: 1, locked: ["AGENTS.md", "CLAUDE.md", ".github/**"] }] }
       : {}),
   }
-  const assembled = assemble(named)
+  const assembled = assemble(opts.autonomy === "autonomous" ? autonomous(named) : named)
   if (!assembled.ok) throw new TemplateError(assembled.errors.join("\n"))
   const { config, modules } = assembled
 

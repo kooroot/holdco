@@ -341,6 +341,7 @@ switch (cmd) {
       ...(github ? { github } : {}),
       ...(name ? { companyName: name } : {}),
       ...(flag("mission") ? { mission: flag("mission") as string } : {}),
+      ...(flag("autonomy") === "autonomous" || flag("autonomy") === "supervised" ? { autonomy: flag("autonomy") as "autonomous" | "supervised" } : {}),
       ...(flag("timezone") ? { timezone: flag("timezone") as string } : {}),
       ...(project ? { projectPath: NodePath.resolve(project) } : {}),
     })

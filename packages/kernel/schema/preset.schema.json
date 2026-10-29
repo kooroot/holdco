@@ -166,6 +166,10 @@
           "type": "string",
           "pattern": "^[1-9][0-9]*(s|m|h|d)$"
         },
+        "stall_after": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*(s|m|h|d)$"
+        },
         "max_attempts": {
           "type": "integer",
           "minimum": 1,
@@ -210,7 +214,7 @@
             },
             "replay_min_tickets": {
               "type": "integer",
-              "minimum": 1,
+              "minimum": 0,
               "maximum": 10000
             }
           },
@@ -694,6 +698,13 @@
     "policy": {
       "type": "object",
       "properties": {
+        "autonomy": {
+          "type": "string",
+          "enum": [
+            "supervised",
+            "autonomous"
+          ]
+        },
         "windows": {
           "type": "object",
           "properties": {
@@ -828,7 +839,7 @@
           "properties": {
             "weekly_sample": {
               "type": "integer",
-              "minimum": 5,
+              "minimum": 3,
               "maximum": 9007199254740991
             },
             "gtm_multiplier": {
@@ -853,12 +864,12 @@
           "properties": {
             "samples": {
               "type": "integer",
-              "minimum": 20,
+              "minimum": 5,
               "maximum": 9007199254740991
             },
             "agreement": {
               "type": "number",
-              "minimum": 0.9,
+              "minimum": 0.8,
               "maximum": 1
             },
             "demotion_agreement": {

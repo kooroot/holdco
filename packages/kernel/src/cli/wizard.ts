@@ -25,6 +25,8 @@ export interface WizardAnswers {
   readonly timezone: string
   /** Language of Telegram messages and other text the kernel writes to the Operator. */
   readonly language: "en" | "ko"
+  /** D62: how much rope on day one. */
+  readonly autonomy: "supervised" | "autonomous"
   readonly objective: string | undefined
   /** GTM voice (full preset only): the two placeholders doctor checks in evals/rubrics/gtm-voice.md. */
   readonly voice: { tone: string; languages: string } | undefined
@@ -122,6 +124,14 @@ export const runWizard = async (checkoutPackages: string | undefined): Promise<W
       { value: "solo-dev", label: "Solo", hint: "one department, a CEO, no COO: every risky action comes to you; cheapest" },
     ],
   }))
+  const autonomy = await ask(p.select({
+    message: "How much should it do on its own?",
+    initialValue: "autonomous",
+    options: [
+      { value: "autonomous", label: "Autonomous from day one", hint: "code merges need only Verification; you decide deploys, spend and anything irreversible; rollback always available" },
+      { value: "supervised", label: "Supervised", hint: "every action starts at the strictest tier; autonomy is earned through your weekly grades (slow start)" },
+    ],
+  })) as "supervised" | "autonomous"
   const models = await ask(p.select({
     message: "Models",
     initialValue: codex && claude ? "dual" : codex ? "codex" : "claude",
@@ -150,7 +160,7 @@ export const runWizard = async (checkoutPackages: string | undefined): Promise<W
     ? await ask(p.password({ message: "Bot token from @BotFather (kept in ~/.config/holdco/, never in the repo)", validate: (v) => (!/^\d+:[\w-]{30,}$/.test(v ?? "") ? "does not look like a bot token (123456:ABC…)" : undefined) }))
     : undefined
 
-  return { dir, github: github || (githubGuess as string), project, newRepo, preset, models, mission: mission || loadPreset(preset).company.mission, timezone, language, objective: objective || undefined, voice, telegramToken }
+  return { dir, github: github || (githubGuess as string), project, newRepo, preset, models, mission: mission || loadPreset(preset).company.mission, timezone, language, autonomy, objective: objective || undefined, voice, telegramToken }
 }
 
 /** Replace the example objective row in governance/strategy.md. */
@@ -203,7 +213,7 @@ const build = async (a: WizardAnswers, checkoutPackages: string | undefined, tar
   s.start("Scaffolding the company")
   if (!existsSync(target)) created.push(target)
   const r = scaffold({
-    dir: target, preset: a.preset, kernelVersion: KERNEL_VERSION, git: true, github: a.github, mission: a.mission, timezone: a.timezone, language: a.language,
+    dir: target, preset: a.preset, kernelVersion: KERNEL_VERSION, git: true, github: a.github, mission: a.mission, timezone: a.timezone, language: a.language, autonomy: a.autonomy,
     companyName: basename(target).toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "my-co", // a non-ASCII directory name still yields a usable id
     host: process.platform === "darwin" ? "macos-launchd" : "linux-systemd",
     ...(checkoutPackages ? { packagesDir: checkoutPackages } : {}),

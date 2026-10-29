@@ -42,6 +42,29 @@ describe("init from every preset", () => {
   })
 })
 
+describe("autonomy (D62)", () => {
+  test("autonomous: code merges start at T1, graduation and audit thresholds drop, Improvement is not gated on labels; T3 and fixed actions keep their tier", () => {
+    const dir = NodePath.join(base, "auto-co")
+    const r = scaffold({ dir, preset: "full", github: "t", kernelVersion: "0.0.0-test", git: false, autonomy: "autonomous" })
+    const tier = (id: string) => r.config.actions.find((a) => a.id === id)?.tier
+    expect(tier("code.merge.app")).toBe("T1")
+    expect(tier("code.merge.docs")).toBe("T1")
+    expect(tier("code.merge.contracts")).toBe("T3")
+    expect(tier("deploy.production")).toBe("T2")
+    expect(tier("prod.irreversible.mainnet-deploy")).toBe("T3")
+    expect(r.config.policy.autonomy).toBe("autonomous")
+    expect(r.config.policy.graduation.samples).toBe(5)
+    expect(r.config.policy.audit.weekly_sample).toBe(3)
+    expect(r.config.modules.improvement.replay_min_tickets).toBe(0)
+    expect(readFileSync(NodePath.join(dir, "company.yaml"), "utf8")).toContain("autonomy: autonomous")
+  })
+  test("supervised (the default) keeps the preset's tiers", () => {
+    const r = scaffold({ dir: NodePath.join(base, "sup-co"), preset: "full", github: "t", kernelVersion: "0.0.0-test", git: false })
+    expect(r.config.actions.find((a) => a.id === "code.merge.app")?.tier).toBe("T2")
+    expect(r.config.policy.autonomy).toBeUndefined()
+  })
+})
+
 describe("role files", () => {
   const files = [
     ...readdirSync(NodePath.join(TEMPLATES_ROOT, "base", "org", "roles")).map((f) => NodePath.join(TEMPLATES_ROOT, "base", "org", "roles", f)),

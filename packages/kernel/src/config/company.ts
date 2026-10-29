@@ -51,11 +51,20 @@ export type Tier = typeof Tier.Type
 // ── kernel floors (required-adjustable minimums; not configurable) ─────────
 
 export const KERNEL_FLOORS = {
-  auditWeeklySample: 5,
-  graduationSamples: 20,
-  graduationAgreement: 0.9,
+  auditWeeklySample: 3,
+  graduationSamples: 5,
+  graduationAgreement: 0.8,
   canaryRate: 0.01,
 } as const
+
+/**
+ * How much rope the company starts with (D62). `supervised`: every action starts at the strictest tier its
+ * risk allows and graduates on the Operator's grades. `autonomous`: code merges start at T1 (Verification
+ * only), graduation needs 5 agreeing grades, the weekly audit samples 3; the Operator decides deploys,
+ * spend and anything under the reserved T3 namespaces, and can still roll back everything.
+ */
+export const Autonomy = Schema.Literals(["supervised", "autonomous"])
+export type Autonomy = typeof Autonomy.Type
 
 /** Names a custom department may not take: they belong to kernel or executive roles. */
 export const RESERVED_DEPARTMENTS = ["verification", "improvement", "executive", "operator", "kernel", "supervisor"] as const
@@ -105,6 +114,8 @@ const Runtime = Schema.Struct({
   max_concurrent_sessions: IntIn(1, 32),
   session_timeout: Duration,
   lease_grace: Duration,
+  /** A ticket that has not moved for this long with no session is diagnosed and reported (D63); default 15m. */
+  stall_after: Schema.optionalKey(Duration),
   max_attempts: IntIn(1, 10),
 })
 
@@ -112,7 +123,7 @@ const Modules = Schema.Struct({
   executive: Schema.Literals(["none", "ceo", "ceo+coo"]),
   /** Producing departments. Verification is kernel and never listed here. */
   departments: Schema.Array(Slug).check(Schema.isMinLength(1), Schema.isUnique()),
-  improvement: Schema.Struct({ enabled: Schema.Boolean, replay_min_tickets: IntIn(1, 10_000) }),
+  improvement: Schema.Struct({ enabled: Schema.Boolean, replay_min_tickets: IntIn(0, 10_000) }),
   auto_graduation: Schema.Boolean,
   juniors: Schema.Struct({ enabled: Schema.Boolean, max_per_task: IntIn(1, 10) }),
 })
@@ -213,6 +224,7 @@ export const Executor = Schema.Struct({
 export type Executor = typeof Executor.Type
 
 const Policy = Schema.Struct({
+  autonomy: Schema.optionalKey(Autonomy),
   windows: Schema.Struct({ t2_internal: Duration, t2_external: Duration }),
   t3: Schema.Struct({ spend_per_action_usd: Usd, spend_monthly_usd: Usd }),
   /** Unanswered inbox items are rejected at `timeout`. That default is fixed. */

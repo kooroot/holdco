@@ -228,6 +228,15 @@ describe("failure paths", () => {
     await cycle(sup, clock, 3)
     expect(sent.some((s) => s.includes("share exhausted"))).toBe(true)
     expect(readControl(c.dir).some((i) => i.level === "L2" && i.target === "engineering")).toBe(true)
+    // D63: a quarter of an hour later the tickets that cannot start are reported as stalls, once, with the reason
+    await cycle(sup, clock, 16)
+    const stallAlerts = sent.filter((x) => x.includes("has not moved for"))
+    expect(stallAlerts.length).toBeGreaterThanOrEqual(1)
+    expect(stallAlerts[0]).toMatch(/senior session cannot start: (interrupt|engineering has no budget left|L2)/)
+    const before = stallAlerts.length
+    await cycle(sup, clock, 5)
+    expect(sent.filter((x) => x.includes("has not moved for")).length).toBe(before) // not repeated every tick
+    expect(JSON.parse(store.getMeta("stall:" + store.ticketsIn(["triaged"])[0]!.id) ?? "{}")).toHaveProperty("reason")
     await sup.stop()
   })
 

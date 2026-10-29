@@ -21,6 +21,7 @@ import { evaluateGuard } from "../hooks/guard.ts"
 import { evaluateInterrupts } from "../hooks/interrupts.ts"
 import type { Engine, Outcome, RoleDefinition, SessionEvent, SessionSpec } from "../engine/types.ts"
 import { appendSessionEvent } from "./journal.ts"
+import { stallAfterMs, stalls } from "./stalls.ts"
 import type { Interrupt } from "../schema/interrupts.ts"
 import { Brief } from "../protocol/brief.ts"
 import { Return } from "../protocol/return.ts"
@@ -756,12 +757,38 @@ export class Supervisor {
     if (this.config.modules.executive !== "none" && (this.due("ceo", durationMs(this.config.policy.executive.ceo_cycle), now) || (idleWake && this.due("ceo", 0, now) && (this.store.setMeta("ceo_idle_streak", String(streak + 1)), true)) || (ceoWork && this.due("ceo", WORK_WAKE_MS, now)))) this.ceoCycle(now)
     if (this.config.modules.executive === "ceo+coo") this.cooReviews(now)
     if (this.due("tripwires", durationMs(this.config.runtime.tick), now)) this.tripwires(now)
+    this.stallWatch(now, active, lastCeo)
     if (this.due("audit", DAY, now)) this.auditWatch(now)
     if (this.due("graduation", DAY, now)) this.graduationProposals(now, frozen)
     if (this.config.modules.improvement.enabled && !frozen && this.due("improvement", WEEK, now)) this.improvementCycle(now)
     if (this.due("digest", WEEK, now)) this.digest(now)
     if (this.dueAt("inbox-batch", this.config.policy.inbox.batch_at, now)) this.inboxBatch(now)
     if (!frozen && this.candidate === undefined && this.store.getMeta("release_pending") === "1" && this.due("release", DAY, now)) this.createCandidate("pending organization changes", now)
+  }
+
+  /**
+   * D63: name every standstill. Kernel-owned stalls are alerted once per standstill (the Operator sees
+   * "why" without asking) and recorded in meta for the dashboard; Operator-owned ones are recorded only.
+   */
+  private stallWatch(now: number, active: ReadonlyArray<Interrupt>, lastCeo: number) {
+    const found = stalls({
+      config: this.config, store: this.store, now, lastCeoAt: lastCeo, after: stallAfterMs(this.config),
+      nextCeoAt: this.config.modules.executive === "none" ? null : Math.min(lastCeo + durationMs(this.config.policy.executive.ceo_cycle), lastCeo + WORK_WAKE_MS),
+      admitReason: (t) => { const g = this.admit(t.state === "ready_for_verification" ? "verification" : t.department === "improvement" ? "improvement" : "senior", t.department, active, now); return typeof g === "string" ? g : undefined },
+    })
+    const current = new Set(found.map((f) => f.ticket_id))
+    for (const f of found) {
+      const key = `stall:${f.ticket_id}`
+      const prev = this.store.getMeta(key)
+      const rec = JSON.stringify({ since: f.since, reason: f.reason, owner: f.owner })
+      if (prev === rec) continue
+      this.store.setMeta(key, rec)
+      if (f.owner === "kernel") {
+        this.log(`stall: ${f.ticket_id} — ${f.reason}`)
+        void this.notifier.send("warning", `${f.ticket_id} has not moved for ${Math.round((now - f.since) / 60_000)}m: ${f.reason}`)
+      }
+    }
+    for (const t of this.store.allTickets()) if (!current.has(t.id) && this.store.getMeta(`stall:${t.id}`)) this.store.setMeta(`stall:${t.id}`, "")
   }
 
   /** The CEO session: triage, proposals, blocked tickets, allocation. */

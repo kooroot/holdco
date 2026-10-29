@@ -118,7 +118,9 @@ export const snapshot = (ctx: DashboardContext) => {
   }
   const waiting = store.ticketsIn(["new", "triaged", "in_progress", "ready_for_verification", "verified", "awaiting_approval", "rejected", "blocked"]).map((t) => {
     const live = running.find((r) => r.ticket_id === t.id)
-    const w = (on: string, eta: number | null = null, detail: string | null = null) => ({ ticket_id: t.id, title: t.title, state: t.state, on, eta, detail })
+    const stallRaw = store.getMeta(`stall:${t.id}`)
+    const stall = stallRaw ? (JSON.parse(stallRaw) as { since: number; reason: string; owner: "operator" | "kernel" }) : null
+    const w = (on: string, eta: number | null = null, detail: string | null = null) => ({ ticket_id: t.id, title: t.title, state: t.state, on, eta, detail, stall: stall && stall.owner === "kernel" ? { since: stall.since, reason: stall.reason } : null })
     if (live) return w("session", null, live.role)
     switch (t.state) {
       case "new": return w("ceo_triage", nextCeo(t.updated_at))
