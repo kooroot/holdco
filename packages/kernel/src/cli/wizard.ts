@@ -159,11 +159,11 @@ export const runWizard = async (checkoutPackages: string | undefined): Promise<W
   const mission = await ask(p.text({ message: "Mission, one line (every ticket must serve it)", placeholder: loadPreset(preset).company.mission, defaultValue: loadPreset(preset).company.mission }))
   const objective = await ask(p.text({ message: "First objective for this period (the CEO opens tickets only for objectives)", placeholder: "Ship the first usable version — a user completes the main flow without help" }))
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"
-  const langGuess: "en" | "ko" = /^ko/i.test(process.env["LANG"] ?? "") || timezone === "Asia/Seoul" ? "ko" : "en"
+  const langGuess: "en" | "ko" = /^ko/i.test(process.env["LANG"] ?? process.env["LC_ALL"] ?? "") ? "ko" : "en"
   const language = await ask(p.select({ message: "Language for Telegram messages and digests (the agents still work in English)", initialValue: langGuess, options: [{ value: "ko", label: "한국어" }, { value: "en", label: "English" }] })) as "en" | "ko"
   let voice: WizardAnswers["voice"]
   if (preset === "full") {
-    const langDefault = timezone.startsWith("Asia/Seoul") ? "en primary, ko for community channels" : "en"
+    const langDefault = langGuess === "ko" ? "ko primary, en for docs" : "en"
     const tone = await ask(p.text({ message: "Voice of public posts (GTM): tone", placeholder: "plain, technical, dry humor allowed", defaultValue: "plain, technical" }))
     const languages = await ask(p.text({ message: "Voice: languages", placeholder: langDefault, defaultValue: langDefault }))
     voice = { tone: tone || "plain, technical", languages: languages || langDefault }

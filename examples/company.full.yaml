@@ -5,8 +5,8 @@
 version: 1
 company:
   name: example-co
-  mission: Ship and operate payment infrastructure that agents can use safely.
-  timezone: Asia/Seoul
+  mission: "Build and operate one product; the company runs it, the Operator audits it."
+  timezone: UTC
 operator:
   github: OPERATOR
 alerts:
@@ -177,8 +177,8 @@ envelopes:
     unit: count
     period: weekly
     on_exceed: queue_t2
-  - id: testnet-deploy
-    scope: deploys to non-production networks and staging
+  - id: staging-deploy
+    scope: deploys to staging and other non-production environments
     limit: 50
     unit: count
     period: daily
@@ -230,7 +230,7 @@ actions:
       - ci-green
       - verification-approved
     graduation: auto
-  - id: code.merge.contracts
+  - id: code.merge.critical
     department: engineering
     tier: T3
     evaluator: "verification.md#security"
@@ -272,7 +272,7 @@ actions:
     department: operations
     tier: T1
     evaluator: operations.md
-    envelope: testnet-deploy
+    envelope: staging-deploy
     gates:
       - ci-green
       - verification-approved
@@ -284,7 +284,7 @@ actions:
     gates:
       - rollback-tested
     graduation: auto
-  - id: prod.irreversible.mainnet-deploy
+  - id: prod.irreversible.deploy
     department: operations
     tier: T3
     gates: []

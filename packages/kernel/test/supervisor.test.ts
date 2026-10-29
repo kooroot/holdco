@@ -327,9 +327,9 @@ describe("the project's verify command (D65)", () => {
     const { sup, store } = makeSupervisor(c, engine, clock)
     await sup.boot()
     const id = store.createTicket({ department: "engineering", title: "Add the feature", goal: "g", why: "w", done_criteria: ["feature.md exists"], opened_by: "operator", project: "app", state: "triaged", action: "code.merge.app", now: clock.now }).id
-    await cycle(sup, clock, 4)
+    await cycle(sup, clock, 8)
     const t1 = store.ticket(id)!
-    expect(["rejected", "triaged", "in_progress"]).toContain(t1.state)
+    expect(["rejected", "triaged", "in_progress", "blocked"]).toContain(t1.state) // blocked once attempts run out
     const rejectedByKernel = store.events(id).find((e) => e.to_state === "rejected" && e.actor === "kernel")
     expect(rejectedByKernel?.note).toContain("verify failed")
     expect(rejectedByKernel?.note).toContain("checking")
@@ -340,7 +340,7 @@ describe("the project's verify command (D65)", () => {
     writeFileSync(NodePath.join(c.app, "passes.txt"), "")
     git(c.app, "add", "-A"); git(c.app, "commit", "-qm", "passes")
     const id2 = store.createTicket({ department: "engineering", title: "Second", goal: "g", why: "w", done_criteria: ["feature.md exists"], opened_by: "operator", project: "app", state: "triaged", action: "code.merge.app", now: clock.now }).id
-    await cycle(sup, clock, 6)
+    await cycle(sup, clock, 10)
     const judge = engine.runs.filter((r) => r.role.kind === "verification").find((r) => r.prompt.includes(id2))
     expect(judge?.prompt).toContain("verify command `sh -c echo checking; test -f passes.txt` in this worktree: exit 0")
     await sup.stop()

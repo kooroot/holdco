@@ -6,7 +6,7 @@ version: 1
 company:
   name: solo-co
   mission: Build and ship one product with as little of my time as possible.
-  timezone: Asia/Seoul
+  timezone: UTC
 operator:
   github: OPERATOR
 alerts:
@@ -145,7 +145,7 @@ actions:
       - ci-green
       - verification-approved
     graduation: auto
-  - id: code.merge.contracts
+  - id: code.merge.critical
     department: engineering
     tier: T3
     evaluator: "verification.md#security"

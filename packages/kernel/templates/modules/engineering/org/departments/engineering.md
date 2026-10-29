@@ -26,8 +26,8 @@ Rollback note (how to revert safely)
 | `code.branch` (code, tests, refactor left on a branch) | T0 |
 | `code.merge.docs` | T2, gates `ci-green` + `verification-approved`; graduates toward T0 |
 | `code.merge.app` | T2, gates `ci-green` + `verification-approved`; graduates toward T1 |
-| `code.merge.contracts` / security-critical paths | T3, never graduates |
-| staging / testnet deploy | not an engineering action: open an Operations ticket (`deploy.staging`, T1 in `testnet-deploy`) |
+| `code.merge.critical` — security-critical paths (payments, auth, contracts, migrations) | T3, never graduates |
+| staging deploy | not an engineering action: open an Operations ticket (`deploy.staging`, T1 in `staging-deploy`) |
 
 **Team shape.** Small fix in one area → senior alone. Feature touching separable modules → split, one junior per module, each in its own worktree; senior integrates. Ambiguous design → 2 juniors prototype competing approaches; senior picks and writes the decision into the PR. Tightly coupled change across shared files → sequential, never parallel.
 
@@ -48,7 +48,7 @@ Rollback note (how to revert safely)
 
 **평가기.** `evals/rubrics/engineering.md` — `ci-green`(체크, CI가 없으면 완료 기준의 명령), 테스트가 완료 기준을 커버, diff가 티켓 범위 안, 리플레이는 세트가 생긴 뒤에만.
 
-**기본 등급**(`modules/engineering`의 시작 등급. 현재 등급은 `company.yaml:actions`). `code.branch` T0, `code.merge.docs`·`code.merge.app` T2(`ci-green` + `verification-approved` 게이트, 승격 가능), `code.merge.contracts`·보안 핵심 경로 T3(영구). 스테이징·테스트넷 배포는 엔지니어링 행동이 아니라 운영 부서 티켓(`deploy.staging`, `testnet-deploy` 범위 내 T1).
+**기본 등급**(`modules/engineering`의 시작 등급. 현재 등급은 `company.yaml:actions`). `code.branch` T0, `code.merge.docs`·`code.merge.app` T2(`ci-green` + `verification-approved` 게이트, 승격 가능), `code.merge.critical`·보안 핵심 경로 T3(영구). 스테이징·테스트넷 배포는 엔지니어링 행동이 아니라 운영 부서 티켓(`deploy.staging`, `staging-deploy` 범위 내 T1).
 
 **팀 구성.** 한 영역의 작은 수정은 시니어 단독. 분리 가능한 모듈에 걸친 기능은 모듈당 주니어 1명씩 각자 워크트리에서 분할하고 시니어가 통합. 설계가 모호하면 주니어 2명이 경쟁 프로토타입을 만들고 시니어가 골라서 결정을 PR에 기록. 공유 파일에 걸친 강결합 변경은 병렬 금지, 순차로.
 

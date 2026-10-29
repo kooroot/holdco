@@ -25,7 +25,7 @@ Use the lowest level that contains the problem. `holdco interrupt <L> <target> -
 - Interrupts are issued outside the agents' reach: `control/interrupts.json`, written only by `holdco interrupt` / `holdco resume` and the tripwires, read by the kernel **before every tool call and before every dispatch**. Agents cannot write to it; a blocked tool call tells the agent to stop.
 - L1, L2, L3 and L5 are idempotent and reversible with the matching `holdco resume`. L4 is a one-shot action: it needs no resume and leaves no flag. `holdco init` tags `r0`, so L4 always has a target.
 - A flagged ticket is not penalised: an interrupt never counts as an attempt.
-- L5 suspends envelopes in the kernel; API keys, deploy keys, posting tokens and on-chain delegations are the Operator's to revoke and re-issue deliberately, since no session holds them.
+- L5 suspends envelopes in the kernel; API keys, deploy keys, posting tokens and external delegations are the Operator's to revoke and re-issue deliberately, since no session holds them.
 - Every interrupt is logged with its level, reason, and time. Agents may file a post-compliance note (Article 7.2) in their session report.
 
 ```text

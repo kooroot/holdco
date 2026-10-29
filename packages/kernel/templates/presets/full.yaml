@@ -8,8 +8,8 @@ version: 1
 
 company:
   name: example-co
-  mission: Ship and operate payment infrastructure that agents can use safely.
-  timezone: Asia/Seoul
+  mission: Build and operate one product; the company runs it, the Operator audits it.
+  timezone: UTC
 
 operator:
   github: OPERATOR

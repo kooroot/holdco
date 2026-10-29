@@ -24,7 +24,7 @@ Scores 0–4 per dimension (1 and 3 are intermediates). Gates are recorded in th
 | Upgrade / admin risk | 0.15 | Admin powers listed with their blast radius | Mentioned | Ignored |
 | Findings report | 0.10 | Severity, location, reproduction for each | Incomplete | Missing |
 
-**Threshold.** `approve` = every gate passed, overall ≥ 3.0, and no dimension at 0; otherwise `reject` with each finding as a failure (severity, location, reproduction in the evidence). Changes scored here are always T3 (`code.merge.contracts`, `graduation: never`): an approve only moves the ticket to the Operator's inbox, and the Operator still decides the merge. The rubric informs that decision; it never replaces it.
+**Threshold.** `approve` = every gate passed, overall ≥ 3.0, and no dimension at 0; otherwise `reject` with each finding as a failure (severity, location, reproduction in the evidence). Changes scored here are always T3 (`code.merge.critical`, `graduation: never`): an approve only moves the ticket to the Operator's inbox, and the Operator still decides the merge. The rubric informs that decision; it never replaces it.
 
 ## 한국어 요약
 

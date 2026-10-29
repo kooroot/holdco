@@ -22,9 +22,9 @@
 | Action | Tier |
 |---|---|
 | `ops.observe` (read monitoring, gather evidence, write a runbook) | T0 |
-| `deploy.staging` (merged, verified change to staging or testnet) | T1 within `testnet-deploy`, gates `ci-green` + `verification-approved` |
+| `deploy.staging` (merged, verified change to staging) | T1 within `staging-deploy`, gates `ci-green` + `verification-approved` |
 | `deploy.production` (reversible, with tested rollback) | T2, gate `rollback-tested` |
-| `prod.irreversible.mainnet-deploy`, `credentials.grant` | T3, never graduates; Operator performs them |
+| `prod.irreversible.deploy`, `credentials.grant` | T3, never graduates; Operator performs them |
 | Data deletion, key rotation, DNS changes | no shipped action: the Operator registers them under `prod.irreversible.*` (T3, never) and performs them by hand |
 
 **Team shape.** Mostly senior alone; operations work is sequential and stateful. `junior_reader` juniors only, for read-only investigation in parallel (e.g. one per log source during an incident). Juniors never receive secrets and never write files.
@@ -48,7 +48,7 @@
 
 **평가기.** `evals/rubrics/operations.md` — 티켓 단위 `#deploy`(되돌리기 품질, 범위, 드라이런 증거), 읽기 전용 티켓은 `#observe`, 기간 표는 다이제스트 건강 지표.
 
-**기본 등급**(`modules/operations`의 시작 등급. 현재 등급은 `company.yaml:actions`). `ops.observe` T0, `deploy.staging` T1(`testnet-deploy` 범위, `ci-green` + `verification-approved` 게이트), `deploy.production` T2(`rollback-tested` 게이트), `prod.irreversible.mainnet-deploy`·`credentials.grant` T3 영구(운영자 수행). 데이터 삭제·키 교체·DNS는 운영자가 `prod.irreversible.*`로 등록(T3, 영구)하고 직접 수행.
+**기본 등급**(`modules/operations`의 시작 등급. 현재 등급은 `company.yaml:actions`). `ops.observe` T0, `deploy.staging` T1(`staging-deploy` 범위, `ci-green` + `verification-approved` 게이트), `deploy.production` T2(`rollback-tested` 게이트), `prod.irreversible.deploy`·`credentials.grant` T3 영구(운영자 수행). 데이터 삭제·키 교체·DNS는 운영자가 `prod.irreversible.*`로 등록(T3, 영구)하고 직접 수행.
 
 **팀 구성.** 대부분 시니어 단독. `junior_reader`만, 병렬 읽기 전용 조사에(사고 중 로그 소스당 1명). 주니어는 시크릿을 받지 않고 파일을 쓰지 않습니다.
 

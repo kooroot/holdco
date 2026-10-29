@@ -7,7 +7,7 @@
 ```yaml
 voice:
   tone: <tone>                 # e.g. plain, technical, dry humor allowed
-  languages: <languages>       # e.g. en primary, ko for community channels
+  languages: <languages>       # e.g. en primary, de for community channels
   never:                        # automatic Voice = 0
     - hype words ("revolutionary", "game-changing", "to the moon")
     - price talk or promises of returns

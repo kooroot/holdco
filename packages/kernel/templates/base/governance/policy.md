@@ -55,7 +55,7 @@ Shipped module defaults:
 | Envelope | Module | Scope | Default limit | On exceed |
 |---|---|---|---|---|
 | `social-posting` | gtm | posts on company-owned accounts | 5 / week | queue for T2 |
-| `testnet-deploy` | operations | deploys to non-production networks and staging | 50 / day | escalate to T2 |
+| `staging-deploy` | operations | deploys to staging and other non-production environments | 50 / day | escalate to T2 |
 | `paid-data` | research | paid research data and third-party APIs | 30 USD / month | escalate to T2 |
 
 ### 4. Action registry
@@ -70,7 +70,7 @@ Shipped module defaults (starting tiers; the current tier is whatever `company.y
 | `code.branch` | engineering | T0 | — | `engineering.md#app` | auto |
 | `code.merge.docs` | engineering | T2 | `ci-green`, `verification-approved` | `engineering.md#docs` | auto |
 | `code.merge.app` | engineering | T2 | `ci-green`, `verification-approved` | `engineering.md#app` | auto |
-| `code.merge.contracts` | engineering | T3 | `ci-green`, `verification-approved` | `verification.md#security` | never |
+| `code.merge.critical` | engineering | T3 | `ci-green`, `verification-approved` | `verification.md#security` | never |
 | `content.draft` | gtm | T0 | — | `gtm.md#post` | auto |
 | `content.publish.company` | gtm | T1 (`social-posting`) | `verification-approved` | `gtm.md#post` | auto |
 | `operator.publish` | gtm | T3 | — | — | never |
@@ -78,9 +78,9 @@ Shipped module defaults (starting tiers; the current tier is whatever `company.y
 | `research.report` | research | T0 | — | `research.md` | auto |
 | `research.paid-source` | research | T1 (`paid-data`) | — | `research.md` | auto |
 | `ops.observe` | operations | T0 | — | `operations.md#observe` | never |
-| `deploy.staging` | operations | T1 (`testnet-deploy`) | `ci-green`, `verification-approved` | `operations.md` | auto |
+| `deploy.staging` | operations | T1 (`staging-deploy`) | `ci-green`, `verification-approved` | `operations.md` | auto |
 | `deploy.production` | operations | T2 | `rollback-tested` | `operations.md` | auto |
-| `prod.irreversible.mainnet-deploy` | operations | T3 | — | — | never |
+| `prod.irreversible.deploy` | operations | T3 | — | — | never |
 | `credentials.grant` | operations | T3 | — | — | never |
 | `improvement.merge` | improvement | T1 | `replay-gain`, `canary-clean` | `replay` | never |
 | `governance.exec-definition-change` | improvement | T3 | `replay-gain` | — | never |
@@ -157,7 +157,7 @@ An action type drops one tier immediately when any of these occurs. Restoring it
 
 레지스트리는 **`company.yaml:envelopes`**입니다. 위임 범위는 T1 행동이 결재 없이 움직일 수 있는 사전 승인된 경계이며 `id`, `scope`, `limit`, `unit`(`count`/`usd`), `period`, `on_exceed`(`escalate_t2`/`queue_t2`)를 명시합니다. 집행은 에이전트의 약속이 아니라 커널이 실행 시점에 합니다. 모델 지출은 위임 범위가 아니라 `company.yaml:budget`과 부서별 `shares`입니다.
 
-모듈 기본값: `social-posting`(gtm, 주 5건, 초과 시 T2 대기), `testnet-deploy`(operations, 일 50건, 초과 시 T2), `paid-data`(research, 월 30 USD, 초과 시 T2).
+모듈 기본값: `social-posting`(gtm, 주 5건, 초과 시 T2 대기), `staging-deploy`(operations, 일 50건, 초과 시 T2), `paid-data`(research, 월 30 USD, 초과 시 T2).
 
 ### 4. 행동 레지스트리
 

@@ -20,7 +20,7 @@ describe("init from every preset", () => {
   for (const preset of presetNames()) {
     test(preset, () => {
       const dir = NodePath.join(base, preset)
-      const r = scaffold({ dir, preset, github: "kooroot", kernelVersion: "0.0.0-test" })
+      const r = scaffold({ dir, preset, github: "operator", kernelVersion: "0.0.0-test" })
       const yaml = Bun.YAML.parse(readFileSync(NodePath.join(dir, "company.yaml"), "utf8"))
       expect(Exit.isSuccess(Schema.decodeUnknownExit(CompanyConfig, { onExcessProperty: "error" })(yaml))).toBe(true)
       expect(existsSync(NodePath.join(dir, "module.yaml"))).toBe(false)
@@ -49,9 +49,9 @@ describe("autonomy (D62)", () => {
     const tier = (id: string) => r.config.actions.find((a) => a.id === id)?.tier
     expect(tier("code.merge.app")).toBe("T1")
     expect(tier("code.merge.docs")).toBe("T1")
-    expect(tier("code.merge.contracts")).toBe("T3")
+    expect(tier("code.merge.critical")).toBe("T3")
     expect(tier("deploy.production")).toBe("T2")
-    expect(tier("prod.irreversible.mainnet-deploy")).toBe("T3")
+    expect(tier("prod.irreversible.deploy")).toBe("T3")
     expect(r.config.policy.autonomy).toBe("autonomous")
     expect(r.config.policy.graduation.samples).toBe(5)
     expect(r.config.policy.audit.weekly_sample).toBe(3)

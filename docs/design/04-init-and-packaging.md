@@ -78,7 +78,7 @@ $ bunx create-holdco my-co
 ◆ Host                ○ Linux (systemd)  ● macOS (launchd)  ○ manual
 ◆ Alerts              ● Telegram  ○ Slack  ○ webhook     → env var names, chat id
 ◆ First project       path ../app   class core
-◆ GitHub handle       kooroot
+◆ GitHub handle       <you>
 ```
 
 Then, in order, stopping at the first failure:

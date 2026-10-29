@@ -134,7 +134,7 @@ describe("dashboard", () => {
     const p = await act({ kind: "promote", action: "code.merge.app" })
     expect(p.body).toMatchObject({ from: "T2", to: "T1" })
     expect(readFileSync(NodePath.join(dir, "company.yaml"), "utf8")).toMatch(/id: code\.merge\.app\n\s+department: engineering\n\s+tier: T1/)
-    expect((await act({ kind: "promote", action: "code.merge.contracts" })).status).toBe(400)
+    expect((await act({ kind: "promote", action: "code.merge.critical" })).status).toBe(400)
   })
   test("tickets are opened, edited and annotated from the dashboard; notes reach the API detail", async () => {
     const c = await act({ kind: "ticket_create", department: "engineering", title: "Payout history page", goal: "paginated list", why: "seller objective", criteria: ["list renders", "tests pass"], project: "app", action: "code.merge.app", priority: 2 })

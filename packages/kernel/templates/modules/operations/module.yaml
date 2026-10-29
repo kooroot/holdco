@@ -1,10 +1,10 @@
 id: operations
 requires: []
 envelopes:
-  - { id: testnet-deploy, scope: deploys to non-production networks and staging, limit: 50, unit: count, period: daily, on_exceed: escalate_t2 }
+  - { id: staging-deploy, scope: deploys to staging and other non-production environments, limit: 50, unit: count, period: daily, on_exceed: escalate_t2 }
 actions:
   - { id: ops.observe, department: operations, tier: T0, evaluator: operations.md#observe, gates: [], graduation: never }
-  - { id: deploy.staging, department: operations, tier: T1, evaluator: operations.md, envelope: testnet-deploy, gates: [ci-green, verification-approved], graduation: auto }
+  - { id: deploy.staging, department: operations, tier: T1, evaluator: operations.md, envelope: staging-deploy, gates: [ci-green, verification-approved], graduation: auto }
   - { id: deploy.production, department: operations, tier: T2, evaluator: operations.md, gates: [rollback-tested], graduation: auto }
-  - { id: prod.irreversible.mainnet-deploy, department: operations, tier: T3, gates: [], graduation: never }
+  - { id: prod.irreversible.deploy, department: operations, tier: T3, gates: [], graduation: never }
   - { id: credentials.grant, department: operations, tier: T3, gates: [], graduation: never }

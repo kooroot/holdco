@@ -60,7 +60,7 @@ describe("graduation", () => {
   test("frozen graduation blocks it", () =>
     expect(graduationCheck(full, "code.merge.app", { ...clean(labels(30, () => true)), frozen: true }).eligible).toBe(false))
   test("graduation: never blocks it", () =>
-    expect(graduationCheck(full, "code.merge.contracts", clean(labels(50, () => true))).eligible).toBe(false))
+    expect(graduationCheck(full, "code.merge.critical", clean(labels(50, () => true))).eligible).toBe(false))
   test("auto_graduation off blocks it", () =>
     expect(graduationCheck(minimal, "code.merge.app", clean(labels(50, () => true))).reasons).toContain("auto_graduation is off"))
 })

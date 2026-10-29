@@ -9,7 +9,7 @@ version: 1
 company:
   name: solo-co
   mission: Build and ship one product with as little of my time as possible.
-  timezone: Asia/Seoul
+  timezone: UTC
 
 operator:
   github: OPERATOR
