@@ -21,6 +21,7 @@ import { evaluateGuard } from "../hooks/guard.ts"
 import { evaluateInterrupts } from "../hooks/interrupts.ts"
 import type { Engine, Outcome, RoleDefinition, SessionEvent, SessionSpec } from "../engine/types.ts"
 import { appendSessionEvent } from "./journal.ts"
+import { collectSignals, renderSignals } from "./signals.ts"
 import { stallAfterMs, stalls } from "./stalls.ts"
 import type { Interrupt } from "../schema/interrupts.ts"
 import { Brief } from "../protocol/brief.ts"
@@ -760,7 +761,11 @@ export class Supervisor {
     this.stallWatch(now, active, lastCeo)
     if (this.due("audit", DAY, now)) this.auditWatch(now)
     if (this.due("graduation", DAY, now)) this.graduationProposals(now, frozen)
-    if (this.config.modules.improvement.enabled && !frozen && this.due("improvement", WEEK, now)) this.improvementCycle(now)
+    if (this.config.modules.improvement.enabled && !frozen) {
+      const lastImp = this.lastJob.get("improvement") ?? 0
+      const finishedSince = this.store.allTickets().filter((t) => END_STATES.has(t.state) && t.updated_at > lastImp && t.department !== "improvement").length
+      if (this.due("improvement", WEEK, now) || (finishedSince >= 10 && this.due("improvement", 2 * DAY, now))) this.improvementCycle(now)
+    }
     if (this.due("digest", WEEK, now)) this.digest(now)
     if (this.dueAt("inbox-batch", this.config.policy.inbox.batch_at, now)) this.inboxBatch(now)
     if (!frozen && this.candidate === undefined && this.store.getMeta("release_pending") === "1" && this.due("release", DAY, now)) this.createCandidate("pending organization changes", now)
@@ -897,24 +902,27 @@ export class Supervisor {
   }
 
   /** Weekly Improvement session: diagnose from verdicts and labels, open tickets for itself (D20). */
+  /**
+   * D66: the Improvement cycle runs on what actually happened — rejections, verify failures, blocked
+   * tickets, failed sessions, guard refusals, cost per ticket — not only on the Operator's grades. The
+   * replay gate still needs labeled tickets; without them a candidate is judged by its canary alone.
+   */
   private improvementCycle(now: number) {
-    const labeled = this.store.labeledTicketIds().size
-    if (labeled < this.config.modules.improvement.replay_min_tickets) {
-      void this.notifier.send("info", `Improvement stays dormant: ${labeled}/${this.config.modules.improvement.replay_min_tickets} labeled tickets (run holdco audit weekly)`)
-      return
-    }
+    if ([...this.running.values()].some((r) => r.kind === "improvement" && r.ticketId === "IMPROVEMENT-CYCLE")) return
     const role = this.org.role("improvement")
-    const since = now - 4 * WEEK
-    const verdicts = this.store.verdictsSince(since)
-    const rejected = verdicts.filter((v) => v.verdict === "reject")
+    const since = now - 2 * WEEK
+    const signals = collectSignals(this.root, this.store, since, now)
+    const labeled = this.store.labeledTicketIds().size
+    const openImprovement = this.store.ticketsIn(["new", "triaged", "in_progress", "ready_for_verification", "verified", "awaiting_approval", "rejected", "blocked"]).filter((t) => t.department === "improvement")
     const prompt = [
       `# Improvement cycle at ${new Date(now).toISOString()} (release ${this.org.tag})`,
-      `Last 4 weeks: ${verdicts.length} verdicts, ${rejected.length} rejections, ${this.store.labels().length} Operator labels, agreement ${this.agreement()}.`,
-      "Rejected tickets and their failures:",
-      ...rejected.slice(-20).map((v) => `- ${v.ticket_id}: ${this.store.ticket(v.ticket_id)?.note?.split("\n")[0] ?? ""}`),
+      `Operator labels so far: ${labeled} (agreement ${this.agreement()}). ${labeled >= this.config.modules.improvement.replay_min_tickets ? "The replay gate can re-judge labeled tickets against a changed judge." : "Too few labels for the replay gate: a candidate that changes the judge is verified by its canary only, so prefer changes to producer prompts, skills, briefs and done-criteria templates over judge changes."}`,
+      openImprovement.length ? `Improvement tickets already open (do not duplicate): ${openImprovement.map((t) => `${t.id} ${t.title}`).join("; ")}` : "",
       "",
-      "Diagnose the biggest recurring cause. Open at most two tickets for the Improvement department with ticket_create (they start triaged): each must name the org/protocol/skill file to change and a measurable target. Do not edit anything in this session.",
-    ].join("\n")
+      renderSignals(signals),
+      "",
+      "Find the biggest recurring cause in the evidence above — something that cost tickets, attempts or money more than once. Open at most two tickets for the Improvement department with ticket_create (they start triaged): each names the org/protocol/skill/role file to change, the evidence it answers, and a measurable target (fewer rejections of kind X, fewer verify failures, lower cost per ticket). If the evidence shows nothing recurring, open nothing and say so in the report. Do not edit anything in this session.",
+    ].filter((l) => l !== "").join("\n")
     void this.startSession({ ticketId: "IMPROVEMENT-CYCLE", role, cwd: this.root, prompt, outputSchema: jsonSchema(SessionReport) })
   }
 

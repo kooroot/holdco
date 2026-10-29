@@ -258,6 +258,39 @@ describe("failure paths", () => {
   })
 })
 
+describe("Improvement on operational signals (D66)", () => {
+  test("the cycle runs after ten finished tickets without any Operator label, and its prompt carries rejections, verify failures and costs", async () => {
+    const c = company("signals", (raw) => {
+      ;(raw["projects"] as Array<Record<string, unknown>>).splice(1)
+      ;(raw["budget"] as Record<string, unknown>)["shares"] = { engineering: 0.3, research: 0.05, gtm: 0.05, operations: 0.05, verification: 0.2, executive: 0.25, improvement: 0.1 }
+      ;((raw["policy"] as Record<string, Record<string, unknown>>)["executive"] as Record<string, unknown>)["canary_rate"] = 0.01
+    }, "full")
+    const clock = { now: Date.UTC(2026, 9, 26, 9) }
+    const claude = new FakeEngine({ ceo: async () => ({}) })
+    const codex = new FakeEngine({}, 0.1, "codex")
+    const { sup, store } = makeSupervisor(c, claude, clock, codex)
+    await sup.boot()
+    await cycle(sup, clock, 1) // weekly jobs fire at boot (lastJob 0); from here the counter starts
+    const t0 = clock.now
+    // ten tickets finished by hand, one rejection and one kernel verify failure recorded as evidence
+    for (let i = 0; i < 10; i++) store.createTicket({ department: "engineering", title: `t${i}`, goal: "g", why: "w", done_criteria: ["d"], opened_by: "ceo", project: "app", state: "done", action: "code.merge.app", now: t0 + 1 + i })
+    const r = store.createTicket({ department: "engineering", title: "flaky", goal: "g", why: "w", done_criteria: ["d"], opened_by: "ceo", project: "app", state: "triaged", action: "code.merge.app", now: t0 })
+    store.db.run("UPDATE tickets SET state = 'rejected' WHERE id = ?", [r.id])
+    store.addVerdict({ ticket_id: r.id, session_id: "v1", at: t0, verdict: "reject", overall: 1, confidence: "high", payload: { summary: "tests do not cover the fee path", failures: [{ criterion: "tests cover it", evidence: "no test touches fee()" }] } })
+    store.db.run("INSERT INTO ticket_events(ticket_id, at, actor, from_state, to_state, note) VALUES (?, ?, 'kernel', 'ready_for_verification', 'rejected', ?)", [r.id, t0 + 1, "verify failed: `bun test` exited 1\n1 fail"])
+    clock.now += 2 * 86_400_000
+    await cycle(sup, clock, 2)
+    const imp = claude.runs.concat(codex.runs).filter((x) => x.role.kind === "improvement" && x.prompt.startsWith("# Improvement cycle"))
+    expect(imp.length).toBeGreaterThanOrEqual(2) // boot + the signal-triggered one
+    const last = imp.at(-1)!.prompt
+    expect(last).toContain("Tickets done: 10")
+    expect(last).toContain("tests do not cover the fee path")
+    expect(last).toContain("Rejected by the kernel's verify command")
+    expect(last).toContain("Too few labels for the replay gate")
+    await sup.stop()
+  })
+})
+
 describe("dual control (full preset: COO and judge on a second engine)", () => {
   test("a T2 merge executes after COO concurrence without touching the Operator; the judge ran on codex", async () => {
     const c = company("dual", (raw) => {
