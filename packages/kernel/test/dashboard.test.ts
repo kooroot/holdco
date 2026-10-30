@@ -1,7 +1,7 @@
 /** The Operator's dashboard: snapshot, ticket detail with diff, blind audit, and actions over HTTP. */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { spawnSync } from "node:child_process"
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as NodePath from "node:path"
 import { Schema } from "effect"
@@ -178,6 +178,23 @@ describe("dashboard", () => {
     expect(d.status).toBe(200)
     expect(d.body.proposal.review).toBeNull()
     expect(d.body.proposal.canary).toBe(false)
+  })
+  test("a recovery item (D68): approve marks the blocked ticket done; reject rolls back with the preserved undo", async () => {
+    const mkBlocked = (title: string) => {
+      const t = store.createTicket({ department: "engineering", title, goal: "g", why: "w", done_criteria: ["d"], opened_by: "ceo", project: "app", state: "triaged", action: "deploy.staging", now })
+      store.db.run("UPDATE tickets SET state = 'blocked', note = 'postcheck failed after action applied: health exited 1' WHERE id = ?", [t.id])
+      const marker = NodePath.join(dir, `applied-${t.id}`)
+      writeFileSync(marker, "")
+      store.logAction({ at: now, actor: "kernel", ticket_id: t.id, action: "deploy.staging", effective_tier: "T1", forced_by: [], inputs: {}, outputs: {}, undo: { kind: "executor-undo", action: "deploy.staging", argv: ["rm", marker], cwd: dir, env: [] } })
+      return { id: t.id, inbox: store.inboxAdd("recovery", t.id, { title: `Verify recovery for ${t.id}`, action: "deploy.staging" }, now, "urgent"), marker }
+    }
+    const ok = mkBlocked("Deploy A")
+    expect((await act({ kind: "inbox", id: ok.inbox, decision: "approved", note: "health is fine on inspection" })).status).toBe(200)
+    expect(store.ticket(ok.id)?.state).toBe("done")
+    const bad = mkBlocked("Deploy B")
+    expect((await act({ kind: "inbox", id: bad.inbox, decision: "rejected" })).status).toBe(200)
+    expect(store.ticket(bad.id)?.state).toBe("rolled_back")
+    expect(existsSync(bad.marker)).toBe(false) // the undo ran
   })
   test("files of a branch are listed and read; markdown is served as text", async () => {
     const f = await call("/api/ticket/ENG-1/files")

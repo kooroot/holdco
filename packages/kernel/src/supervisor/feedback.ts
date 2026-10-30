@@ -2,25 +2,27 @@
  * Observations can request investigation, never authorize an action. Decisions are context,
  * not policy; only the Operator CLI can write or revoke them.
  */
-import { z } from "zod"
+import { Schema } from "effect"
 import type { CompanyConfig } from "../config/company.ts"
 import type { Store } from "../store/store.ts"
 
-const id = z.string().min(1).max(120).regex(/^[A-Za-z0-9_.:/-]+$/)
-const text = z.string().trim().min(1).max(2000)
-const evidence = z.array(text.max(800)).min(1).max(8)
-export const Observation = z.object({
-  id, project: id, source: id, fingerprint: id,
-  observed_at: z.number().int().nonnegative(),
-  summary: text.max(500), evidence, done_criteria: z.array(text.max(500)).min(1).max(8),
-  department: id,
-  metric: z.object({ name: id, value: z.number().finite(), target: z.number().finite(), unit: text }).strict().optional(),
-}).strict()
-export const Decision = z.object({
-  id, project: id.nullable(), scope: text.max(500), decision: text.max(1000), rationale: text.max(1000), evidence,
-  expires_at: z.number().int().nonnegative(),
-}).strict()
-export type Decision = z.infer<typeof Decision>
+const Id = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(120), Schema.isPattern(/^[A-Za-z0-9_.:/-]+$/))
+const text = (max: number) => Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(max), Schema.isPattern(/\S/))
+const Evidence = Schema.Array(text(800)).check(Schema.isMinLength(1), Schema.isMaxLength(8))
+export const Observation = Schema.Struct({
+  id: Id, project: Id, source: Id, fingerprint: Id,
+  observed_at: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  summary: text(500), evidence: Evidence, done_criteria: Schema.Array(text(500)).check(Schema.isMinLength(1), Schema.isMaxLength(8)),
+  department: Id,
+  metric: Schema.optionalKey(Schema.Struct({ name: Id, value: Schema.Finite, target: Schema.Finite, unit: text(2000) })),
+})
+export const Decision = Schema.Struct({
+  id: Id, project: Schema.NullOr(Id), scope: text(500), decision: text(1000), rationale: text(1000), evidence: Evidence,
+  expires_at: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+})
+export type Decision = typeof Decision.Type
+/** Strict decoding: unknown keys are errors, so a typo in an Operator-written JSON file is caught, not ignored. */
+const parse = <S extends Schema.Codec<unknown, unknown, never, never>>(schema: S, input: unknown): S["Type"] => Schema.decodeUnknownSync(schema, { onExcessProperty: "error", errors: "all" })(input)
 
 const projectExists = (config: CompanyConfig, project: string) => {
   if (!config.projects.some((p) => p.id === project)) throw new Error(`unknown project '${project}'`)
@@ -28,7 +30,7 @@ const projectExists = (config: CompanyConfig, project: string) => {
 
 /** Atomic event ingestion; a repeated event is idempotent, a recurring open incident reuses its ticket. */
 export const ingestObservation = (store: Store, config: CompanyConfig, input: unknown, now: number): { ticket_id: string; duplicate: boolean } => {
-  const o = Observation.parse(input)
+  const o = parse(Observation, input)
   projectExists(config, o.project)
   if (!config.modules.departments.includes(o.department)) throw new Error(`department '${o.department}' is not enabled`)
   if (o.observed_at > now + 60_000 || o.observed_at < now - 7 * 86_400_000) throw new Error("observation must be within the last seven days (at most one minute clock skew)")
@@ -52,7 +54,7 @@ export const ingestObservation = (store: Store, config: CompanyConfig, input: un
 }
 
 export const recordDecision = (store: Store, config: CompanyConfig, input: unknown, now: number): Decision => {
-  const d = Decision.parse(input)
+  const d = parse(Decision, input)
   if (d.project !== null) projectExists(config, d.project)
   if (d.expires_at <= now) throw new Error("decision must have a future expiry")
   if (store.db.query("SELECT id FROM operator_decisions WHERE id = ?").get(d.id)) throw new Error("decision id already exists; revoke it and record a new id")
@@ -68,7 +70,7 @@ export const revokeDecision = (store: Store, id: string, now: number): void => {
 /** null = company-wide decisions only; undefined = executive view of every project. */
 export const activeDecisions = (store: Store, now: number, project?: string | null): Array<Decision> => {
   const rows = store.db.query<{ payload: string }, [number, number, string | null]>("SELECT payload FROM operator_decisions WHERE revoked_at IS NULL AND expires_at > ? AND (? = 1 OR project IS NULL OR project = ?) ORDER BY created_at DESC, id LIMIT 30").all(now, project === undefined ? 1 : 0, project ?? null)
-  return rows.map((r) => Decision.parse(JSON.parse(r.payload)))
+  return rows.map((r) => parse(Decision, JSON.parse(r.payload)))
 }
 
 export const feedbackContext = (store: Store, now: number, ticketId: string, executive: boolean): string => {

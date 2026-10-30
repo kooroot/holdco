@@ -87,7 +87,7 @@ const VERIFICATION_RULES = (gates: ReadonlyArray<string>, ticketId: string): Arr
     ? `Run the required gates (${gates.join(", ")}) with the repository's own commands and record each in \`gates\` with evidence.`
     : "This action requires no mechanical gate. Run the repository's tests or checks only where the changed files could affect them (a docs-only or data-only change needs none); record what you ran in `gates`.",
   "The rubric's gate list is advice for scoring; only the gates listed above are required. Do not reject for a gate the action does not require.",
-  "You have no network: remote CI and GitHub are unreachable by design, so cite the local run of the same checks instead; the kernel treats `ci-green` as the local test run. An environmental limit is not a code defect, but an unexecuted required gate must not be marked passed: return cannot-score with the missing prerequisite. For rollback-tested, exercise recovery in an isolated test environment and cite the command and restored-state checks; an undo declaration alone is insufficient.",
+  "You have no network: remote CI and GitHub are unreachable by design, so cite the local run of the same checks instead; the kernel treats `ci-green` as the local test run. An environmental limit is not a code defect, but an unexecuted required gate must not be marked passed: return cannot-score with the missing prerequisite. A gate the kernel has already evidenced in this prompt (the project's verify command, rollback-tested) counts as executed. For rollback-tested, exercise recovery in an isolated test environment and cite the command and restored-state checks; an undo declaration alone is insufficient.",
   "A LOCKED PATH refusal from the policy hook is not an interrupt and not a finding: skip that path and continue. Searching the company repository is unnecessary; your rubric and the registry are in this prompt.",
   "Verdicts: approve when the done criteria hold and no required gate failed; reject only for a defect in the work or a required gate that ran and failed; cannot-score when the done criteria or a required gate cannot be assessed.",
   `Score the rubric, then submit with verdict_submit; the verdict must name ticket ${ticketId}.`,
@@ -313,8 +313,12 @@ export class Supervisor {
     const verdict = this.store.verdictFor(t.id)
     const v = verdict ? (JSON.parse(verdict.payload) as Verdict) : undefined
     const action = this.config.actions.find((a) => a.id === t.action)
-    // An undo declaration is not a recovery test. Verification must supply non-empty evidence.
-    const missing = (action?.gates ?? []).filter((g) => !KERNEL_GATES.has(g) && !v?.gates.some((x) => x.gate === g && x.passed && x.evidence.trim().length > 0))
+    // rollback-tested is evidenced by the kernel, not by Verification: the judge has no network and no
+    // executor access, so it cannot exercise a deploy's recovery. The executor's declared undo (which the kernel
+    // runs on rollback) is the evidence (D50); a postcheck (D68) adds proof that the effect itself landed.
+    // Gates Verification does evidence need non-empty evidence text.
+    const kernelGates = this.config.executors?.[t.action]?.undo !== undefined ? new Set([...KERNEL_GATES, "rollback-tested"]) : KERNEL_GATES
+    const missing = (action?.gates ?? []).filter((g) => !kernelGates.has(g) && !v?.gates.some((x) => x.gate === g && x.passed && x.evidence.trim().length > 0))
     if (missing.length > 0) {
       this.store.transition(t.id, "rejected", "kernel", `gate(s) not evidenced by Verification: ${missing.join(", ")}`, now)
       this.store.bumpAttempts(t.id, this.config.runtime.max_attempts, "kernel", "gate missing", now)
@@ -662,7 +666,7 @@ export class Supervisor {
   private inboxTimeouts(now: number) {
     const timeout = durationMs(this.config.policy.inbox.timeout)
     for (const i of this.store.inboxOpen()) {
-      if (i.kind === "issue" || i.kind === "graduation" || i.kind === "manual_action") continue
+      if (i.kind === "issue" || i.kind === "graduation" || i.kind === "manual_action" || i.kind === "recovery") continue
       if (now - i.created_at > timeout) {
         this.store.inboxDecide(i.id, "expired", "no answer within the timeout: rejected by default", now)
         void this.notifier.send("warning", `inbox #${i.id} expired: ${String(i.payload["title"] ?? i.kind)}`)
@@ -824,8 +828,8 @@ export class Supervisor {
       `## Blocked tickets (${blocked.length}) — use ticket_unblock with a decision, or leave for the Operator`,
       ...blocked.map((t) => `- ${t.id} [${t.department}] ${t.title}: ${t.note}`),
       "",
-      "## Then: choose evidence-backed work, or wait",
-      `Open tickets: ${this.store.ticketsIn(["new", "triaged", "in_progress", "ready_for_verification", "verified", "awaiting_approval", "rejected", "blocked"]).length}. Open work only for a concrete unmet objective in governance/strategy.md or observed product evidence. Cite that objective or observation, the expected user/business outcome, and a measurable acceptance criterion. Check existing tickets before creating another. There is no ticket quota: when no justified work is available, open nothing and explain what evidence or decision would change that. Do not invent maintenance or refactoring work to keep departments busy. Keep the inbox small: escalate only what policy or genuinely new judgment requires.`,
+      "## Then: keep every objective moving — with evidence, never with busywork",
+      `Open tickets: ${this.store.ticketsIn(["new", "triaged", "in_progress", "ready_for_verification", "verified", "awaiting_approval", "rejected", "blocked"]).length}. The company stops when nothing is open, so for every objective in governance/strategy.md that no open ticket serves, open the next concrete ticket with ticket_create (they start triaged): small, one deliverable, testable done criteria, and cite the objective or the product observation it answers. Check existing tickets before creating another. Open nothing for what the strategy does not name — no maintenance or refactoring to keep departments busy; when every objective is served or met, open nothing and say in the report what evidence or decision would change that. Keep the inbox small: escalate only what policy or genuinely new judgment requires.`,
       "End with the structured cycle report.",
     ].join("\n")
     void this.startSession({ ticketId: "CEO-CYCLE", role, cwd: this.root, prompt, outputSchema: jsonSchema(CeoCycleReport), onOutcome: (o) => {
@@ -1211,7 +1215,8 @@ export class Supervisor {
       companyRoot: this.root,
       ...(p.projectRoot ? { projectRoot: p.projectRoot, projectLocked: p.locked ?? [] } : { configRoot: this.root }),
       instructions: p.org.instructions(p.role, p.extra ?? []),
-      prompt: [p.prompt, feedbackContext(this.store, this.now(), p.ticketId, kind === "ceo" || kind === "coo")].filter(Boolean).join("\n\n"),
+      // Juniors see only their brief (delegation.md §1); everyone else gets the ticket's observations and the Operator's decisions.
+      prompt: [p.prompt, kind.startsWith("junior") ? "" : feedbackContext(this.store, this.now(), p.ticketId, kind === "ceo" || kind === "coo")].filter(Boolean).join("\n\n"),
       ...(p.outputSchema ? { outputSchema: p.outputSchema } : {}),
       limits: { maxTurns: p.maxTurns ?? 60, maxBudgetUsd: p.cap, timeoutMs: durationMs(this.config.runtime.session_timeout) },
       sandbox: { writableRoots: writable, denyWrite, denyRead, allowedDomains },

@@ -424,10 +424,10 @@ describe("replay gate (D54)", () => {
 })
 
 describe("evidence-backed execution", () => {
-  test("an undo declaration alone cannot satisfy rollback-tested", async () => {
+  test("rollback-tested is the kernel's evidence (a declared undo), never Verification's; without an undo the gate is missing", async () => {
     const c = company("rollback-evidence", (raw) => {
       ;(raw["actions"] as Array<Record<string, unknown>>).push({ id: "deploy.staging", department: "engineering", tier: "T1", evaluator: "engineering.md#app", gates: ["verification-approved", "rollback-tested"], graduation: "auto" })
-      raw["executors"] = { "deploy.staging": { command: ["touch", "applied"], undo: ["rm", "applied"] } }
+      raw["executors"] = { "deploy.staging": { command: ["touch", "applied"], cwd: "project" } } // no undo: nothing can evidence the gate
     })
     const clock = { now: Date.UTC(2026, 9, 30) }
     const engine = new FakeEngine({ ceo: async () => ({}), senior: seniorScript("deploy.staging") })

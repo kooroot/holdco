@@ -17,7 +17,7 @@ interface Update {
   callback_query?: { id: string; from: { id: number }; message?: { message_id: number; chat: { id: number | string }; text?: string }; data?: string }
 }
 
-const KIND_LABEL: Record<string, [string, string]> = { t3: ["Approval needed", "승인 필요"], t2_objection: ["COO objected", "COO 반대"], coo_timeout: ["COO did not answer", "COO 무응답"], triage: ["Triage", "분류"], blocked: ["Blocked ticket", "막힌 티켓"], graduation: ["Graduation proposal", "승격 제안"], issue: ["Issue from an agent", "에이전트 이슈"], manual_action: ["Run by hand", "수동 실행"], candidate_withdrawn: ["Candidate withdrawn", "후보 철회"] }
+const KIND_LABEL: Record<string, [string, string]> = { t3: ["Approval needed", "승인 필요"], t2_objection: ["COO objected", "COO 반대"], coo_timeout: ["COO did not answer", "COO 무응답"], triage: ["Triage", "분류"], blocked: ["Blocked ticket", "막힌 티켓"], graduation: ["Graduation proposal", "승격 제안"], issue: ["Issue from an agent", "에이전트 이슈"], manual_action: ["Run by hand", "수동 실행"], candidate_withdrawn: ["Candidate withdrawn", "후보 철회"], recovery: ["Recovery needed", "복구 필요"] }
 
 const esc = (s: unknown) => String(s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c] as string))
 const left = (ms: number) => { if (ms <= 0) return "expired"; const h = Math.floor(ms / 3_600_000); const m = Math.floor((ms % 3_600_000) / 60_000); return h > 0 ? `${h}h ${m}m` : `${m}m` }

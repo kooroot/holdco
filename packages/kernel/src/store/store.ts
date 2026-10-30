@@ -179,7 +179,7 @@ export const TRANSITIONS: Readonly<Record<TicketState, ReadonlyArray<TicketState
   ready_for_verification: ["verified", "rejected", "ready_for_verification", "blocked"],
   verified: ["done", "awaiting_approval", "blocked", "rejected"],
   awaiting_approval: ["done", "declined", "awaiting_approval", "blocked"],
-  blocked: ["triaged", "declined"],
+  blocked: ["triaged", "declined", "done", "rolled_back"], // done / rolled_back: the Operator resolving a failed postcheck (D68)
   done: ["rolled_back"],
   declined: [],
   rolled_back: [],
