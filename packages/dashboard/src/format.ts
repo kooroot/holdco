@@ -5,7 +5,7 @@ export const left = (ms: number) => { if (ms <= 0) return "expired"; const h = M
 export const locale = () => (getLang() === "ko" ? "ko-KR" : "en-US")
 export const clock = (t: number) => new Date(t).toLocaleString(locale(), { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
 export const STATE_LABEL: Record<string, string> = { new: "New", triaged: "Triaged", in_progress: "In progress", ready_for_verification: "Verifying", verified: "Verified", awaiting_approval: "Approval", done: "Done", rejected: "Rejected", blocked: "Blocked", declined: "Declined", rolled_back: "Rolled back" }
-export const KIND_LABEL: Record<string, string> = { t3: "Approval needed", t2_objection: "COO objected", coo_timeout: "COO did not answer", triage: "Triage", blocked: "Blocked ticket", graduation: "Graduation proposal", issue: "Issue from an agent", manual_action: "Run by hand", candidate_withdrawn: "Candidate withdrawn" }
+export const KIND_LABEL: Record<string, string> = { t3: "Approval needed", t2_objection: "COO objected", coo_timeout: "COO did not answer", triage: "Triage", blocked: "Blocked ticket", graduation: "Graduation proposal", issue: "Issue from an agent", manual_action: "Run by hand", candidate_withdrawn: "Candidate withdrawn", recovery: "Recovery needed" }
 export const END_STATES = new Set(["done", "declined", "rolled_back"])
 
 /** English wording of what a ticket waits on (`Snapshot.waiting[].on`); i18n keys `w.<on>` carry the Korean. */

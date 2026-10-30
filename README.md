@@ -87,6 +87,14 @@ bunx holdco service install      # 24/7 in the background (launchd / systemd --u
 
 From there the company runs itself: the CEO opens tickets from `governance/strategy.md`, seniors work in worktrees, Verification judges on the other engine, T2/T3 actions go through the COO's second key, and the Operator gets a **dashboard** (ten views, a live feed of what each session is doing, blind weekly audit, Korean or English) and a **Telegram bot** (every decision with Approve / Reject buttons, `/status`, `/new`, `/note`, `/pause`, `/halt`). Ten minutes a week: `docs/operator-guide.md`.
 
+### Product feedback
+
+Feed real product incidents into `holdco observe <file.json>`, reuse scoped Operator
+judgments with `holdco decision add|list|revoke`, and declare executor `postcheck`
+commands to verify the observed result before closing work. See
+[Product feedback and decision memory](docs/design/09-product-feedback.md) for setup,
+recovery behavior and the migration of `rollback-tested` to evidence-based checks.
+
 ### Repository
 
 ```

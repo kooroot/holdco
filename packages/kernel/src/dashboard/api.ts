@@ -323,6 +323,25 @@ export const act = async (ctx: DashboardContext, a: Action): Promise<Record<stri
         if (t && (t.state === "blocked" || t.state === "new")) store.transition(t.id, a.decision === "approved" ? "triaged" : "declined", "operator", a.note ?? `${a.decision} from the dashboard`, now)
       }
       if (item.kind === "graduation" && a.decision === "approved" && typeof item.payload["action"] === "string") return act(ctx, { kind: "promote", action: item.payload["action"] })
+      if (item.kind === "recovery" && item.ticket_id) {
+        // D68: the action ran but its postcheck failed. Approve = you verified the effect is fine → the ticket is
+        // done; reject = roll it back with the undo the kernel preserved (the latest action logged for the ticket).
+        const t = store.ticket(item.ticket_id)
+        if (t && t.state === "blocked") {
+          if (a.decision === "approved") store.transition(t.id, "done", "operator", a.note ?? "recovery verified by the Operator", now)
+          else {
+            const last = store.actionsSince(0).filter((x) => x.ticket_id === t.id).sort((x, y) => y.at - x.at)[0]
+            const log = last ? store.actionLog(last.id) : undefined
+            const undoable = (() => { try { return log !== undefined && !log.rolled_back && Object.keys(JSON.parse(log.undo) as object).length > 0 } catch { return false } })()
+            if (log && undoable) {
+              const r = act(ctx, { kind: "rollback", id: log.id, note: a.note ?? "rolled back from the recovery item" })
+              store.transition(t.id, "rolled_back", "operator", a.note ?? "rolled back after a failed postcheck", now)
+              return r
+            }
+            store.transition(t.id, "declined", "operator", a.note ?? "declined after a failed postcheck (no undo available)", now)
+          }
+        }
+      }
       return { ok: true }
     }
     case "unblock": {

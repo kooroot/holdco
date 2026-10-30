@@ -145,6 +145,8 @@ export const TOOLS: ReadonlyArray<Tool> = [
     input: obj({ id: str("ticket id"), decision: { type: "string", enum: ["triaged", "declined"] }, note: str("the decision that unblocks it, or why it is declined") }),
     kinds: ["ceo"],
     run: (a, b, host) => {
+      const t = host.store.ticket(String(a["id"]))
+      if (t?.note?.startsWith("postcheck failed after action applied:")) throw new ToolError("postcheck recovery requires the Operator; do not automatically retry an applied action")
       host.store.transition(String(a["id"]), a["decision"] as "triaged" | "declined", b.role, String(a["note"]), host.now())
       host.onTicketChanged?.(String(a["id"]))
       return view(host.store.ticket(String(a["id"])) as Ticket)

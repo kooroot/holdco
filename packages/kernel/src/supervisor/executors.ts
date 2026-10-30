@@ -21,6 +21,8 @@ export interface ExecResult {
   readonly error?: string
   /** Not finished yet (checks still running); the kernel retries on a later tick. */
   readonly pending?: boolean
+  /** External command succeeded but its postcondition failed; preserve undo and do not auto-retry. */
+  readonly applied?: boolean
 }
 
 const git = (cwd: string, args: ReadonlyArray<string>) => spawnSync("git", [...args], { cwd, encoding: "utf8" })
@@ -205,6 +207,9 @@ export const runAsync = (argv: ReadonlyArray<string>, cwd: string, env: Record<s
 export const runExecutor = async (o: RunExecutorOptions): Promise<ExecResult> => {
   const argv = renderArgv(o.executor.command, o.placeholders)
   if (typeof argv === "string") return fail(argv)
+  // Validate probe placeholders before performing an external effect.
+  const check = o.executor.postcheck ? renderArgv(o.executor.postcheck, o.placeholders) : undefined
+  if (typeof check === "string") return fail(check)
   const r = await runAsync(argv, o.cwd, executorEnv(o.executor.env ?? [], o.env), durationMs(o.executor.timeout ?? "15m"))
   const stdout = r.stdout
   const stderr = r.stderr + (r.error ? `\n${r.error}` : "")
@@ -216,6 +221,11 @@ export const runExecutor = async (o: RunExecutorOptions): Promise<ExecResult> =>
     const previous = json && typeof json["previous"] === "string" ? (json["previous"] as string) : null
     const u = renderArgv(o.executor.undo, { ...o.placeholders, previous })
     undo = typeof u === "string" ? { kind: "executor-undo-unavailable", reason: u } : { kind: "executor-undo", action: o.action, argv: u, cwd: o.cwd, env: o.executor.env ?? [] }
+  }
+  if (check) {
+    const probe = await runAsync(check, o.cwd, executorEnv(o.executor.env ?? [], o.env), durationMs(o.executor.timeout ?? "15m"))
+    outputs["postcheck"] = { command: check, exit: probe.status, stdout: probe.stdout.slice(-4000), stderr: (probe.stderr + (probe.error ?? "")).slice(-4000) }
+    if (probe.status !== 0) return { ok: false, applied: true, outputs, undo, error: `postcheck exited ${probe.status ?? "by signal"}` }
   }
   return { ok: true, outputs, undo }
 }
