@@ -31,7 +31,7 @@ executors:
 - The process runs with the listed env names only, plus `PATH`/`HOME`, from the supervisor's environment (the env file). Secrets stay in the kernel (D14).
 - Output and exit code go to `action_log.outputs`; the undo argv to `action_log.undo`, so `holdco rollback` can run it.
 - An action with no executor entry still becomes a `manual_action` inbox item (D46).
-- Gate `rollback-tested` means: the executor has an `undo`. Doctor fails an executor whose command's first element is not executable.
+- Gate `rollback-tested` requires Verification evidence of an exercised recovery test in an isolated environment. Declaring `undo` is a prerequisite, never proof. Doctor checks executable availability, not recovery success. An optional `postcheck` argv runs after the external command; a failed probe preserves the action log and undo, blocks the ticket, and alerts the Operator instead of retrying an already-applied action.
 - The executor is itself an action at its registry tier: T0/T1 run after Verification; T2/T3 after approval, like merges.
 - Executors run off the supervisor's tick (a child process with a kill-on-timeout); the ticket stays `verified`/`awaiting_approval` until the process ends. GitHub check-waiting is likewise one poll per tick until `merge_wait` passes, never a blocking sleep.
 - `{deliverable}` is the path a senior writes in the `ticket_update` note as `deliverable: <path>` (`protocols/ticket-lifecycle.md`).
@@ -90,7 +90,7 @@ Interactive wizard, npm publishing, CI for the repository itself: packaging, not
 ## 한국어
 
 ### 1. 외부 실행기 (D50)
-배포·게시·외부 연락·자격 증명 행동은 `company.yaml:executors`에 운영자가 argv 배열로 선언합니다. 커널이 선언된 환경변수 이름만 넘겨 실행하고(시크릿은 커널에만, D14), 출력과 되돌리기 argv를 행동 로그에 기록해 `holdco rollback`이 되돌릴 수 있게 합니다. 플레이스홀더는 `{branch}`, `{ticket}`, `{deliverable}`, `{previous}`. 실행기가 없는 행동은 지금처럼 `manual_action` 인박스로 갑니다. `rollback-tested` 게이트는 `undo`가 있다는 뜻이고, doctor가 명령 실행 파일 존재를 확인합니다.
+배포·게시·외부 연락·자격 증명 행동은 `company.yaml:executors`에 운영자가 argv 배열로 선언합니다. 커널이 선언된 환경변수 이름만 넘겨 실행하고(시크릿은 커널에만, D14), 출력과 되돌리기 argv를 행동 로그에 기록해 `holdco rollback`이 되돌릴 수 있게 합니다. 플레이스홀더는 `{branch}`, `{ticket}`, `{deliverable}`, `{previous}`. 실행기가 없는 행동은 지금처럼 `manual_action` 인박스로 갑니다. `rollback-tested`는 격리된 환경에서 복구를 실행한 검증 증거를 요구합니다. `undo` 선언은 전제조건이며 복구 성공 증거가 아닙니다. `postcheck` 명령을 설정하면 외부 작업 후 실제 상태를 검사하고, 실패 시 되돌리기 정보와 로그를 보존한 채 작업을 차단해 운영자에게 알립니다.
 
 ### 2. GitHub 기반 머지 (D51)
 프로젝트별 `merge: local | github`. `github`면 브랜치를 push하고 PR을 열어(`gh pr create`, 기존 PR 재사용) `gh pr merge`로 머지합니다. 브랜치 보호와 CODEOWNERS가 그 시점에 적용되고, 거절되면 티켓은 사유와 함께 `rejected`. 체크가 녹색이 될 때까지 `merge_wait`(기본 20분) 기다리고 실패하면 반려. 되돌리기는 머지 커밋 revert 후 push.

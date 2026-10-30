@@ -18,6 +18,7 @@ import { undoAction } from "../supervisor/executors.ts"
 import { liveNotifier } from "../supervisor/notify.ts"
 import { latestReleaseTag } from "../supervisor/org.ts"
 import { Supervisor } from "../supervisor/supervisor.ts"
+import { activeDecisions, ingestObservation, recordDecision, revokeDecision } from "../supervisor/feedback.ts"
 import { dashboardToken, startDashboard } from "../dashboard/server.ts"
 import { discoverChatId, TelegramBridge, telegramConfig } from "../supervisor/telegram.ts"
 import { envFilePath } from "./env.ts"
@@ -88,6 +89,30 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
   const now = Date.now()
   const sub = args.positional[1]
   switch (cmd) {
+    case "observe":
+    case "decision": {
+      const config = loadConfig(dir)
+      const file = cmd === "observe" ? sub : args.positional[2]
+      // Decision memory is Operator-authored. Observations are lower-trust input for triage.
+      if (cmd === "decision" && sub !== "list") requireTty("writing decision memory")
+      if (cmd === "observe" && !file) throw new OperatorError("usage: holdco observe <observation.json>")
+      if (cmd === "decision" && !["add", "revoke", "list"].includes(sub ?? "")) throw new OperatorError("usage: holdco decision add <file.json> | revoke <id> | list [--project id]")
+      const store = Store.open(dir)
+      try {
+        if (cmd === "observe") console.log(JSON.stringify(ingestObservation(store, config, JSON.parse(readFileSync(file!, "utf8")), now), null, 2))
+        else if (sub === "list") console.log(JSON.stringify(activeDecisions(store, now, args.flag("project")), null, 2))
+        else if (sub === "revoke") {
+          if (!file) throw new Error("decision id is required")
+          revokeDecision(store, file, now)
+          console.log(`revoked ${file}`)
+        } else {
+          if (!file) throw new Error("decision JSON file is required")
+          console.log(JSON.stringify(recordDecision(store, config, JSON.parse(readFileSync(file, "utf8")), now), null, 2))
+        }
+      } catch (e) { throw new OperatorError(e instanceof Error ? e.message : String(e)) }
+      finally { store.close() }
+      return true
+    }
     case "supervise": {
       const config = loadConfig(dir)
       const lock = NodePath.join(dir, ".holdco", "supervisor.pid")

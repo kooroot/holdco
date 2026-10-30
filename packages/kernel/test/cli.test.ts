@@ -153,3 +153,19 @@ describe("operator commands", () => {
     expect(r.status).toBe(1)
   })
 })
+
+describe("product observations and decision memory CLI", () => {
+  test("observe imports evidence idempotently and decision writes require the Operator terminal", () => {
+    const path = NodePath.join(base, "observation.json")
+    writeFileSync(path, JSON.stringify({ id: "first", project: "app", source: "collector", fingerprint: "freshness", observed_at: Date.now(), summary: "Stale collection", evidence: ["probe: 120m behind"], done_criteria: ["freshness < 5m"], department: "engineering" }))
+    const first = holdco("observe", path)
+    expect(first.status).toBe(0)
+    const second = holdco("observe", path)
+    expect(second.status).toBe(0)
+    expect(JSON.parse(second.stdout)).toEqual({ ...JSON.parse(first.stdout), duplicate: true })
+    expect(holdco("decision", "list").status).toBe(0)
+    const refused = holdco("decision", "add", path)
+    expect(refused.status).toBe(1)
+    expect(refused.stderr).toContain("interactive terminal")
+  })
+})

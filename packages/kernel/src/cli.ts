@@ -251,6 +251,7 @@ const doctor = async (dir: string): Promise<Array<Check>> => {
       for (const [id, ex] of Object.entries(config.executors ?? {})) {
         const cwd = ex.cwd === "company" ? dir : NodePath.resolve(dir, config.projects[0]?.path ?? ".")
         add(`executor '${id}' command is runnable (${ex.command[0]})`, executorCommandExists(ex.command, cwd, process.env), "the first argv element must be an executable path or on PATH")
+        if (ex.postcheck) add(`executor '${id}' postcheck is runnable (${ex.postcheck[0]})`, executorCommandExists(ex.postcheck, cwd, process.env), "postcheck must be a read-only health/recovery probe")
         for (const name of ex.env ?? []) add(`executor '${id}' env ${name} is set`, (process.env[name] ?? "") !== "", "set it in the env file the service loads", true)
         const action = config.actions.find((a) => a.id === id)
         if (action?.gates.includes("rollback-tested")) add(`executor '${id}' has an undo (gate rollback-tested)`, ex.undo !== undefined, "add executors.<id>.undo or drop the gate")
@@ -444,7 +445,7 @@ switch (cmd) {
     const { runOperator, OperatorError } = await import("./cli/operator.ts")
     try {
       const handled = cmd === undefined ? false : await runOperator(cmd, { positional, flag, has }, instanceDir())
-      if (!handled) fail("usage: holdco init | doctor | build-hook | smoke | supervise | dashboard | telegram [setup] | service [install] | status | models (= roles) | ticket | inbox | interrupt | resume | audit | digest | release | promote | rollback | project | engines | config check | validate | presets | schemas | examples")
+      if (!handled) fail("usage: holdco init | doctor | build-hook | smoke | supervise | dashboard | telegram [setup] | service [install] | observe <file.json> | decision add|revoke|list | status | models (= roles) | ticket | inbox | interrupt | resume | audit | digest | release | promote | rollback | project | engines | config check | validate | presets | schemas | examples")
     } catch (e) {
       if (e instanceof OperatorError) fail(e.message)
       throw e

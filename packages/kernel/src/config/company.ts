@@ -226,6 +226,8 @@ export const Executor = Schema.Struct({
   cwd: Schema.optionalKey(Schema.Literals(["project", "company"])),
   env: Schema.optionalKey(Schema.Array(EnvName)),
   undo: Schema.optionalKey(Schema.Array(Text).check(Schema.isMinLength(1))),
+  /** Read-only recovery/health probe run after the command; failure blocks rather than retries the action. */
+  postcheck: Schema.optionalKey(Schema.Array(Text).check(Schema.isMinLength(1))),
   timeout: Schema.optionalKey(Duration),
 })
 export type Executor = typeof Executor.Type

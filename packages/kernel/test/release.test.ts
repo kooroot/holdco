@@ -115,7 +115,11 @@ describe("executors (D50)", () => {
     git(c.app, "add", "-A")
     git(c.app, "commit", "-qm", "deploy script")
     const clock = { now: Date.UTC(2026, 9, 26, 9) }
-    const engine = new FakeEngine({ ceo: async () => ({}), senior: seniorScript("deploy.staging") })
+    const engine = new FakeEngine({ ceo: async () => ({}), senior: seniorScript("deploy.staging"), verification: async ({ spec, call }) => {
+      const verdict = { ticket: spec.ticketId, rubric: "engineering.md#app", verdict: "approve", scores: { correctness: 4 }, overall: 4, confidence: "high", failures: [], gates: [{ gate: "rollback-tested", passed: true, evidence: "fixture recovery exercised against the staging state" }], summary: "verified" }
+      await call("verdict_submit", { verdict })
+      return { report: verdict }
+    } })
     const { sup, store, sent } = makeSupervisor(c, engine, clock, undefined, { DEPLOY_TOKEN: "tok" })
     await sup.boot()
     const id = store.createTicket({ department: "engineering", title: "Deploy", goal: "staging has it", why: "demo", done_criteria: ["deployed"], opened_by: "operator", project: "app", state: "triaged", action: "deploy.staging", now: clock.now }).id
@@ -416,5 +420,71 @@ describe("replay gate (D54)", () => {
       }
       await sup.stop()
     }
+  })
+})
+
+describe("evidence-backed execution", () => {
+  test("an undo declaration alone cannot satisfy rollback-tested", async () => {
+    const c = company("rollback-evidence", (raw) => {
+      ;(raw["actions"] as Array<Record<string, unknown>>).push({ id: "deploy.staging", department: "engineering", tier: "T1", evaluator: "engineering.md#app", gates: ["verification-approved", "rollback-tested"], graduation: "auto" })
+      raw["executors"] = { "deploy.staging": { command: ["touch", "applied"], undo: ["rm", "applied"] } }
+    })
+    const clock = { now: Date.UTC(2026, 9, 30) }
+    const engine = new FakeEngine({ ceo: async () => ({}), senior: seniorScript("deploy.staging") })
+    const { sup, store } = makeSupervisor(c, engine, clock)
+    try {
+      await sup.boot()
+      const t = store.createTicket({ department: "engineering", title: "Deploy", goal: "healthy", why: "incident", done_criteria: ["healthy"], opened_by: "operator", project: "app", state: "triaged", action: "deploy.staging", now: clock.now })
+      await cycle(sup, clock, 5)
+      expect(store.events(t.id).some((e) => e.note?.includes("gate(s) not evidenced by Verification: rollback-tested"))).toBe(true)
+      expect(existsSync(NodePath.join(c.app, "applied"))).toBe(false)
+      expect(store.ticket(t.id)?.state).not.toBe("done")
+    } finally { await sup.stop() }
+  })
+
+  test("failed postcheck preserves undo, alerts, and prevents CEO retry of an applied action", async () => {
+    const c = company("postcheck-failure", (raw) => {
+      ;(raw["actions"] as Array<Record<string, unknown>>).push({ id: "deploy.staging", department: "engineering", tier: "T1", evaluator: "engineering.md#app", gates: ["verification-approved"], graduation: "auto" })
+      raw["executors"] = { "deploy.staging": { command: ["sh", "./deploy.sh"], postcheck: ["sh", "./health.sh"], undo: ["sh", "./undo.sh"], cwd: "project" } }
+    })
+    writeFileSync(NodePath.join(c.app, "deploy.sh"), "echo applied >> applied.txt\n")
+    writeFileSync(NodePath.join(c.app, "health.sh"), "echo unhealthy >&2\nexit 1\n")
+    writeFileSync(NodePath.join(c.app, "undo.sh"), "rm -f applied.txt\n")
+    git(c.app, "add", "-A"); git(c.app, "commit", "-qm", "probes")
+    const clock = { now: Date.UTC(2026, 9, 30) }
+    const engine = new FakeEngine({ senior: seniorScript("deploy.staging"), ceo: async ({ call }) => {
+      const blocked = await call("ticket_list", { states: ["blocked"] }) as Array<{ id: string }>
+      for (const t of blocked) await expect(call("ticket_unblock", { id: t.id, decision: "triaged", note: "retry" })).rejects.toThrow("requires the Operator")
+      return {}
+    } })
+    const { sup, store, sent } = makeSupervisor(c, engine, clock)
+    try {
+      await sup.boot()
+      const t = store.createTicket({ department: "engineering", title: "Deploy", goal: "healthy", why: "incident", done_criteria: ["healthy"], opened_by: "operator", project: "app", state: "triaged", action: "deploy.staging", now: clock.now })
+      await cycle(sup, clock, 8)
+      expect(store.ticket(t.id)?.state).toBe("blocked")
+      expect(readFileSync(NodePath.join(c.app, "applied.txt"), "utf8")).toBe("applied\n")
+      const actions = store.actionsSince(0).filter((a) => a.ticket_id === t.id)
+      expect(actions).toHaveLength(1)
+      const log = store.actionLog(actions[0]!.id)!
+      expect(JSON.parse(log.undo).kind).toBe("executor-undo")
+      const output = store.db.query<{ outputs: string }, [number]>("SELECT outputs FROM action_log WHERE id = ?").get(log.id)!
+      expect(JSON.parse(output.outputs).postcheck.exit).toBe(1)
+      expect(store.inboxOpen().some((i) => i.kind === "recovery" && i.urgency === "urgent")).toBe(true)
+      expect(sent.some((m) => m.includes("postcheck failed"))).toBe(true)
+      expect(sent.some((m) => m.includes(`${t.id} done`))).toBe(false)
+    } finally { await sup.stop() }
+  })
+
+  test("postcheck must pass and missing placeholders cannot allow the external action to run", async () => {
+    const dir = NodePath.join(base, "probe-unit")
+    mkdirSync(dir)
+    const opts = { action: "deploy.staging", cwd: dir, placeholders: { ticket: "T" }, env: { PATH: process.env["PATH"] } }
+    const good = await runExecutor({ ...opts, executor: { command: ["touch", "healthy"], postcheck: ["test", "-f", "healthy"] } })
+    expect(good.ok).toBe(true)
+    expect(good.outputs["postcheck"]).toMatchObject({ exit: 0 })
+    const bad = await runExecutor({ ...opts, executor: { command: ["touch", "should-not-exist"], postcheck: ["test", "-f", "{deliverable}"] } })
+    expect(bad.ok).toBe(false)
+    expect(existsSync(NodePath.join(dir, "should-not-exist"))).toBe(false)
   })
 })

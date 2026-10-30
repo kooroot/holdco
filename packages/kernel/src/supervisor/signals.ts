@@ -89,7 +89,7 @@ export const collectSignals = (root: string, store: Store, since: number, now: n
     period_days: Math.max(1, Math.round((now - since) / 86_400_000)),
     tickets_done: done.length,
     tickets_failed: failed.length,
-    cost_per_done_usd: done.length ? done.reduce((a, t) => a + cost(t.id), 0) / done.length : null,
+    cost_per_done_usd: done.length ? sessions.reduce((a, s) => a + s.cost_usd, 0) / done.length : null,
     rejections: top(rejections, 15),
     verify_failures: top(verifyFailures, 10),
     blocked: top(blocked, 10),
@@ -104,7 +104,7 @@ export const collectSignals = (root: string, store: Store, since: number, now: n
 /** The evidence section of the Improvement prompt. */
 export const renderSignals = (s: Signals): string => [
   `## Evidence from the last ${s.period_days} days`,
-  `Tickets done: ${s.tickets_done} · failed (declined/rolled back): ${s.tickets_failed} · cost per done ticket: ${s.cost_per_done_usd === null ? "n/a" : `$${s.cost_per_done_usd.toFixed(2)}`}`,
+  `Tickets done: ${s.tickets_done} · failed (declined/rolled back): ${s.tickets_failed} · period spend per done ticket (including failures and overhead): ${s.cost_per_done_usd === null ? "n/a" : `$${s.cost_per_done_usd.toFixed(2)}`}`,
   s.teams.length ? `Team sizing by seniors: ${s.teams.map((t) => `${t.pattern} ×${t.sessions} (avg ${t.avg_minutes.toFixed(0)}m, $${t.avg_usd.toFixed(2)} incl. juniors)`).join(", ")} — solo everywhere while tickets split into parts means wall-clock left on the table; many juniors on small tickets means cost.` : "",
   s.cost_by_action.length ? `Cost by action: ${s.cost_by_action.map((a) => `${a.action} ${a.tickets}× $${a.usd.toFixed(2)}`).join(", ")}` : "",
   s.rejections.length ? `### Rejected by Verification (${s.rejections.length})\n${s.rejections.map((r) => `- ${r.ticket_id} [${r.action ?? "?"}]: ${r.summary}${r.failures.length ? `\n  failures: ${r.failures.join(" | ")}` : ""}`).join("\n")}` : "No rejections.",

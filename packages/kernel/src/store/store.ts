@@ -91,6 +91,17 @@ export interface LabelRow {
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS product_observations (
+  project TEXT NOT NULL, source TEXT NOT NULL, event_id TEXT NOT NULL, fingerprint TEXT NOT NULL,
+  ticket_id TEXT NOT NULL REFERENCES tickets(id), observed_at INTEGER NOT NULL, received_at INTEGER NOT NULL,
+  payload TEXT NOT NULL, PRIMARY KEY (project, source, event_id)
+);
+CREATE INDEX IF NOT EXISTS observations_incident ON product_observations(project, source, fingerprint);
+CREATE INDEX IF NOT EXISTS observations_ticket ON product_observations(ticket_id, observed_at);
+CREATE TABLE IF NOT EXISTS operator_decisions (
+  id TEXT PRIMARY KEY, project TEXT, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
+  revoked_at INTEGER, payload TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS tickets (
   id TEXT PRIMARY KEY, project TEXT, department TEXT NOT NULL, action TEXT, state TEXT NOT NULL,
   approval_stage TEXT, interrupt_flag TEXT, priority INTEGER NOT NULL DEFAULT 3,
