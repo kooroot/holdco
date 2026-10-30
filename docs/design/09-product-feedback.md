@@ -5,6 +5,11 @@ explicit Operator decisions. Evidence creates work; it never grants permissions.
 Existing companies gain the two SQLite tables when they next open their state store.
 No company template regeneration or policy change is required.
 
+Holdco is a standalone agent-company runtime. Its kernel owns work intake, scoped
+decision memory, policy enforcement, execution verification and cost accounting.
+Project-specific data sources, thresholds and business logic belong in optional
+external adapters; no particular business or product is required to run Holdco.
+
 ## 1. Connect a product observation
 
 A collector writes a JSON file and invokes `holdco observe <file> --dir <company>`.
@@ -17,22 +22,22 @@ Example producer (replace project with the registered project's id):
 
 ```ts
 const observation = {
-  id: "collector-20261030-1200", // stable event id; retry with exactly the same payload
-  project: "loldosa",
-  source: "match-collector",
-  fingerprint: "match-freshness", // same incident while its ticket remains open
+  id: "probe-20261030-1200", // stable event id; retry with exactly the same payload
+  project: "app",
+  source: "service-monitor",
+  fingerprint: "api-latency", // same incident while its ticket remains open
   observed_at: Date.now(),
-  summary: "Match data is 120 minutes behind",
-  evidence: ["collector health probe: last successful snapshot is 120m old"],
-  done_criteria: ["Freshness is below five minutes on three consecutive collector runs"],
+  summary: "API latency exceeds its service objective",
+  evidence: ["service health probe: p95 response time is 1200ms"],
+  done_criteria: ["p95 response time is below 500ms on three consecutive probe runs"],
   department: "engineering",
-  metric: { name: "freshness", value: 120, target: 5, unit: "minutes" },
+  metric: { name: "p95-latency", value: 1200, target: 500, unit: "milliseconds" },
 }
-await Bun.write("/tmp/collector-observation.json", JSON.stringify(observation))
+await Bun.write("/tmp/service-observation.json", JSON.stringify(observation))
 ```
 
 ```sh
-holdco observe /tmp/collector-observation.json --dir /path/to/company
+holdco observe /tmp/service-observation.json --dir /path/to/company
 ```
 
 Only emit an observation when a problem is observed. The metric is evidence, not an
@@ -58,11 +63,11 @@ There is no agent-facing write tool. The store lives under the existing protecte
 
 ```ts
 const decision = {
-  id: "data-quality-first-v1",
-  project: "loldosa", // null for a company-wide decision
-  scope: "This month's data-quality milestone",
-  decision: "Prioritize collection completeness before adding another dashboard",
-  rationale: "Missing matches undermine the dataset's usefulness",
+  id: "reliability-first-v1",
+  project: "app", // null for a company-wide decision
+  scope: "Current service-reliability milestone",
+  decision: "Prioritize the service latency objective before new features",
+  rationale: "Slow responses prevent users from completing existing workflows",
   evidence: ["Operator planning decision, 2026-10-30"],
   expires_at: Date.now() + 30 * 24 * 60 * 60 * 1000,
 }
@@ -71,8 +76,8 @@ await Bun.write("/tmp/decision.json", JSON.stringify(decision))
 
 ```sh
 holdco decision add /tmp/decision.json --dir /path/to/company
-holdco decision list --project loldosa --dir /path/to/company
-holdco decision revoke data-quality-first-v1 --dir /path/to/company
+holdco decision list --project app --dir /path/to/company
+holdco decision revoke reliability-first-v1 --dir /path/to/company
 ```
 
 Records are immutable; revoke and add a new id to revise one. Expired and revoked
@@ -97,7 +102,7 @@ executors:
     cwd: project
     env: [DEPLOY_TOKEN]
     undo: ["./scripts/deploy.sh", "staging", "{previous}"]
-    postcheck: ["./scripts/check-collector-health.sh", "staging"]
+    postcheck: ["./scripts/check-service-health.sh", "staging"]
     timeout: 2m
 ```
 
@@ -141,6 +146,6 @@ executive/review overhead, rather than only successful-ticket sessions.
 - `rollback-tested`에는 실제 복구 시험 증거가 필요합니다.
 - 일감 수를 채우기 위한 지시를 제거하고, 실패·관리 비용까지 포함한 완료당 비용을 봅니다.
 
-These changes do not connect a live LOLDOSA instance, schedule its collector, or
-change production credentials. Configure the producer and probes in the target
-company after measuring the product's actual health indicators.
+The examples use a fictional project named `app`. No external integration, scheduler
+or production credentials are configured by this feature. Each company may choose
+its own observation producers and postcondition probes without changing the kernel.

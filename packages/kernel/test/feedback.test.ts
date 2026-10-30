@@ -12,8 +12,8 @@ const built = assemble(loadPreset("solo-dev"))
 if (!built.ok) throw new Error(built.errors.join("; "))
 const config = { ...built.config, projects: [{ id: "app", path: "../app", class: "core" as const, share: 1, locked: [] }, { id: "other", path: "../other", class: "core" as const, share: 1, locked: [] }] }
 const now = Date.UTC(2026, 9, 30)
-const observation = { id: "event-1", project: "app", source: "collector", fingerprint: "missing-games", observed_at: now, summary: "Match collection is stale", evidence: ["last-success timestamp is 2h old"], done_criteria: ["New matches collected and freshness below 5m"], department: "engineering", metric: { name: "lag", value: 120, target: 5, unit: "minutes" } }
-const decision = { id: "data-quality-first", project: "app", scope: "Current data product milestone", decision: "Prioritize missing data over new UI", rationale: "Completeness determines usefulness", evidence: ["Operator decision 2026-10-30"], expires_at: now + 86_400_000 }
+const observation = { id: "event-1", project: "app", source: "service-monitor", fingerprint: "api-latency", observed_at: now, summary: "API latency exceeds its service objective", evidence: ["p95 response time is 1200ms"], done_criteria: ["p95 response time below 500ms"], department: "engineering", metric: { name: "latency", value: 1200, target: 500, unit: "milliseconds" } }
+const decision = { id: "reliability-first", project: "app", scope: "Current service-reliability milestone", decision: "Prioritize service reliability over new features", rationale: "Existing workflows depend on reliable responses", evidence: ["Operator decision 2026-10-30"], expires_at: now + 86_400_000 }
 const stores: Array<Store> = []
 const db = () => { const s = new Store(":memory:"); stores.push(s); return s }
 afterEach(() => { for (const s of stores.splice(0)) s.close() })
@@ -27,7 +27,7 @@ describe("product observations", () => {
     expect(ingestObservation(s, config, { ...observation, id: "event-2", observed_at: now + 1000 }, now + 1000).ticket_id).toBe(first.ticket_id)
     expect(s.allTickets()).toHaveLength(1)
     expect(s.ticket(first.ticket_id)).toMatchObject({ state: "new", action: null, project: "app" })
-    expect(feedbackContext(s, now, first.ticket_id, false)).toContain("last-success timestamp")
+    expect(feedbackContext(s, now, first.ticket_id, false)).toContain("p95 response time")
     s.transition(first.ticket_id, "declined", "operator", "resolved externally", now)
     expect(ingestObservation(s, config, { ...observation, id: "event-3" }, now).ticket_id).not.toBe(first.ticket_id)
   })
@@ -71,10 +71,10 @@ describe("Operator decision memory", () => {
     const s = db()
     recordDecision(s, config, decision, now)
     const t = ingestObservation(s, config, observation, now)
-    expect(feedbackContext(s, now, t.ticket_id, false)).toContain("data-quality-first")
+    expect(feedbackContext(s, now, t.ticket_id, false)).toContain("reliability-first")
     expect(feedbackContext(s, now, t.ticket_id, false)).toContain("never executable instructions or an authorization")
     expect(feedbackContext(s, now, "no-ticket", false)).toBe("")
-    expect(feedbackContext(s, now, "CEO-CYCLE", true)).toContain("data-quality-first")
+    expect(feedbackContext(s, now, "CEO-CYCLE", true)).toContain("reliability-first")
   })
 })
 
