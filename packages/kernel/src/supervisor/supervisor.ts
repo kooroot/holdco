@@ -21,6 +21,7 @@ import { evaluateGuard } from "../hooks/guard.ts"
 import { evaluateInterrupts } from "../hooks/interrupts.ts"
 import type { Engine, Outcome, RoleDefinition, SessionEvent, SessionSpec } from "../engine/types.ts"
 import { appendSessionEvent } from "./journal.ts"
+import { fmtReset, mergeSessionWindow, quotaPolicy, quotaVerdict, readQuota, renderQuota, WINDOW_LENGTH, writeQuota } from "./quota.ts"
 import { collectSignals, renderSignals } from "./signals.ts"
 import { feedbackContext } from "./feedback.ts"
 import { stallAfterMs, stalls } from "./stalls.ts"
@@ -58,6 +59,7 @@ interface Running {
   readonly role: string
   readonly department: string
   readonly kind: RoleKind
+  readonly engine: EngineId
   readonly abort: AbortController
   readonly cap: number
   readonly promise: Promise<void>
@@ -70,6 +72,8 @@ interface Running {
 
 /** Below this much remaining budget a share counts as exhausted: no session could do anything with it. */
 const MIN_SESSION_USD = 0.05
+/** D72: how often the engines' usage endpoints are asked for the plan windows. */
+export const QUOTA_POLL_MS = 5 * 60_000
 /** With no work left, the CEO is woken at most this often to open the next tickets from the strategy. */
 /** Tickets only the CEO can move (triage, a proposal to write) that changed after `since`. */
 export const ceoWorkSince = (store: Store, since: number): boolean =>
@@ -769,6 +773,7 @@ export class Supervisor {
     if (this.config.modules.executive !== "none" && (this.due("ceo", durationMs(this.config.policy.executive.ceo_cycle), now) || (idleWake && this.due("ceo", 0, now) && (this.store.setMeta("ceo_idle_streak", String(streak + 1)), true)) || (ceoWork && this.due("ceo", WORK_WAKE_MS, now)))) this.ceoCycle(now)
     if (this.config.modules.executive === "ceo+coo") this.cooReviews(now)
     if (this.due("tripwires", durationMs(this.config.runtime.tick), now)) this.tripwires(now)
+    if (this.due("quota", QUOTA_POLL_MS, now)) void this.pollQuota(now)
     this.stallWatch(now, active, lastCeo)
     if (this.due("audit", DAY, now)) this.auditWatch(now)
     if (this.due("graduation", DAY, now)) this.graduationProposals(now, frozen)
@@ -819,6 +824,7 @@ export class Supervisor {
       `Projects and the Operator's allocation (D70) — share of effort vs. share of this month's project spend, open tickets:`,
       ...this.projectAllocation(now),
       `Budget this month: ${this.store.spentAll(this.monthStart(now)).toFixed(2)} of ${this.config.budget.monthly_usd} USD spent.`,
+      ...(this.quotaLines(now).length ? ["Subscription limits (the real budget — sessions pause on an engine past its limit; when the week is burning faster than it passes, only core projects run):", ...this.quotaLines(now)] : []),
       "",
       `## New tickets to triage (${news.length}) — use ticket_triage for each`,
       ...news.map((t) => `- ${t.id} [${t.department}] ${t.title}: ${t.goal}`),
@@ -982,6 +988,46 @@ export class Supervisor {
     return tag
   }
 
+  /** D72: ask each subscription engine for its plan windows; keep the answer in meta; tell the Operator once per window when it crosses pause_at. */
+  async pollQuota(now: number) {
+    for (const [id, engine] of this.engines) {
+      if (!engine.quota || (this.config.engines[id] as { auth?: string } | undefined)?.auth === "api_key") continue
+      try {
+        const q = await engine.quota(this.env)
+        if (!q) continue
+        writeQuota(this.store, { engine: id, plan: q.plan, windows: q.windows.map((w) => ({ id: w.id, label: w.label, used_pct: w.usedPct, resets_at: w.resetsAt, length_ms: w.lengthMs })), fetched_at: now, source: "endpoint" })
+      } catch (e) {
+        const cur = readQuota(this.store, id)
+        if (cur) writeQuota(this.store, { ...cur, error: `last poll failed: ${String(e).slice(0, 120)}` })
+        this.log(`quota ${id}: ${String(e)}`)
+      }
+    }
+    const policy = quotaPolicy(this.config)
+    for (const id of this.engines.keys()) {
+      const q = readQuota(this.store, id)
+      if (!q) continue
+      for (const w of q.windows) {
+        const key = `quota_alert:${id}:${w.id}:${w.resets_at ?? "none"}`
+        if (w.used_pct >= policy.pause_at && !this.store.getMeta(key)) {
+          this.store.setMeta(key, String(now))
+          void this.notifier.send("warning", `${id} is at ${Math.round(w.used_pct)}% of its ${w.label} limit${w.resets_at ? ` (resets in ${fmtReset(w.resets_at, now)})` : ""}; no new sessions on it until then. ${renderQuota(q, now)}`)
+        }
+      }
+    }
+  }
+
+  /** D72: the quota lines for prompts and status. */
+  quotaLines(now: number): Array<string> {
+    const out: Array<string> = []
+    for (const id of this.engines.keys()) {
+      const q = readQuota(this.store, id)
+      if (!q) continue
+      const v = quotaVerdict(q, quotaPolicy(this.config), now)
+      out.push(`- ${renderQuota(q, now)}${v.kind === "ok" ? "" : ` — ${v.reason}`}`)
+    }
+    return out
+  }
+
   /** One line per project for the CEO: share vs. actual spend this month, so allocation is a fact, not a hint. */
   private projectAllocation(now: number): Array<string> {
     if (!this.config.projects.length) return ["- none registered (the Operator adds one in Settings → Projects or `holdco project add`)"]
@@ -1022,6 +1068,11 @@ export class Supervisor {
     const id = { agentId: "", dept: department, operator: false }
     const blocked = evaluateInterrupts(id, active)
     if (blocked) return blocked.detail
+    // D72: the engine this role runs on must have room in its plan windows; when it is burning the week too fast, only core work runs.
+    const engineId = assignmentFor(this.config, kind, kind === "senior" ? department : undefined).engine
+    const verdict = quotaVerdict(readQuota(this.store, engineId), quotaPolicy(this.config), now)
+    if (verdict.kind === "pause") return verdict.reason
+    if (verdict.kind === "pace" && ticket && kind !== "verification" && this.config.projects.find((p) => p.id === ticket.project)?.class !== "core") return verdict.reason
     const spender = this.spenderOf(kind, department)
     const share = this.config.budget.shares[spender] ?? 0
     const reserved = [...this.running.values()].filter((r) => this.spenderOf(r.kind, r.department) === spender).reduce((a, r) => a + r.cap, 0)
@@ -1304,7 +1355,7 @@ export class Supervisor {
     const now = this.now()
     const abort = new AbortController()
     this.store.startSession({ id: sessionId, ticket_id: p.ticketId, parent_session: p.parent ?? null, role: p.role.role, kind: p.role.kind, department: p.spender ?? p.role.department, engine: spec.assignment.engine, model: spec.assignment.model, worktree: p.cwd, started_at: now, boot_id: this.bootId, release: org.tag })
-    const running: Running = { sessionId, ticketId: p.ticketId, role: p.role.role, department: p.role.department, kind: p.role.kind, abort, cap, startedAt: now, release: org.tag, org, toolErrors: new Map(), promise: Promise.resolve() }
+    const running: Running = { sessionId, ticketId: p.ticketId, role: p.role.role, department: p.role.department, kind: p.role.kind, engine: spec.assignment.engine, abort, cap, startedAt: now, release: org.tag, org, toolErrors: new Map(), promise: Promise.resolve() }
     const timeout = setTimeout(() => abort.abort(), spec.limits.timeoutMs)
     const run = async (): Promise<Outcome> => {
       let outcome: Outcome
@@ -1338,6 +1389,7 @@ export class Supervisor {
 
   private onEvent(r: Running, e: SessionEvent) {
     if (e.kind !== "activity") appendSessionEvent(this.root, r.sessionId, e, this.now())
+    if (e.kind === "quota") mergeSessionWindow(this.store, r.engine, { id: e.window, label: e.label, used_pct: e.usedPct, resets_at: e.resetsAt, length_ms: WINDOW_LENGTH[e.window] ?? null }, this.now(), e.status === "rejected")
     const t = this.store.ticket(r.ticketId)
     if (t?.lease_holder === r.sessionId) this.store.renewLease(t.id, r.sessionId, durationMs(this.config.runtime.session_timeout) + durationMs(this.config.runtime.lease_grace), this.now())
     if (e.kind === "tool" && !e.ok) {

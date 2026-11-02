@@ -22,6 +22,7 @@ import { activeDecisions, ingestObservation, recordDecision, revokeDecision } fr
 import { dashboardToken, startDashboard } from "../dashboard/server.ts"
 import { discoverChatId, TelegramBridge, telegramConfig } from "../supervisor/telegram.ts"
 import { envFilePath } from "./env.ts"
+import { quotaPolicy, quotaVerdict, readQuota, renderQuota, writeQuota } from "../supervisor/quota.ts"
 import { addProject, openTicketsFor, PROJECT_CLASSES, type ProjectClass, ProjectError, removeProject, setProject } from "../config/projects.ts"
 import type { Level } from "../schema/interrupts.ts"
 
@@ -252,6 +253,33 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
       await bridge.start()
       return true
     }
+    case "quota": {
+      // D72: read the plans' rate-limit windows now (the supervisor polls them every 5 minutes) and print them.
+      const config = loadConfig(dir)
+      const store = Store.open(dir)
+      const engines = await loadEngines(config, dir)
+      const policy = quotaPolicy(config)
+      let any = false
+      for (const [id, engine] of engines) {
+        if (!engine.quota) continue
+        if ((config.engines[id] as { auth?: string } | undefined)?.auth === "api_key") { console.log(`${id}: API key — no plan windows (rate limits are the provider's)`); continue }
+        try {
+          const q = await engine.quota(process.env)
+          if (!q) { console.log(`${id}: no subscription login found on this host`); continue }
+          const quota = { engine: id, plan: q.plan, windows: q.windows.map((w) => ({ id: w.id, label: w.label, used_pct: w.usedPct, resets_at: w.resetsAt, length_ms: w.lengthMs })), fetched_at: now, source: "endpoint" as const }
+          writeQuota(store, quota)
+          const v = quotaVerdict(quota, policy, now)
+          console.log(`${renderQuota(quota, now)}${v.kind === "ok" ? "" : `\n  → ${v.reason}`}`)
+          any = true
+        } catch (e) {
+          const cached = readQuota(store, id)
+          console.log(`${id}: could not read the usage endpoint (${String(e).slice(0, 120)})${cached ? `; last known: ${renderQuota(cached, now)}` : ""}`)
+        }
+      }
+      if (any) console.log(`policy: pause an engine at ${policy.pause_at}% of any window${policy.pace ? `; when the 7-day window is ${policy.pace_margin}+ points ahead of the clock, only core projects run` : ""} (budget.quota in company.yaml)`)
+      store.close()
+      return true
+    }
     case "status": {
       const config = loadConfig(dir)
       const store = Store.open(dir)
@@ -263,6 +291,7 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
       console.log(`interrupts: ${inter.length ? inter.map((i) => `${i.level}:${i.target} (${i.reason ?? ""})`).join(", ") : "none"}`)
       const monthAgo = now - 30 * 86_400_000
       console.log(`spend (30d): $${store.spentAll(monthAgo).toFixed(2)} of $${config.budget.monthly_usd} — ${store.spentByDepartment(monthAgo).map((d) => `${d.department} $${d.usd.toFixed(2)}`).join(", ") || "nothing"}`)
+      for (const id of Object.keys(config.engines) as Array<EngineId>) { const q = readQuota(store, id); if (q) { const v = quotaVerdict(q, quotaPolicy(config), now); console.log(`limits: ${renderQuota(q, now)}${v.kind === "ok" ? "" : ` — ${v.reason}`}`) } }
       const open = store.openSessions()
       console.log(`sessions running: ${open.length}${open.length ? ` (${open.map((s) => `${s.role}@${s.ticket_id}`).join(", ")})` : ""}`)
       const tickets = store.allTickets().filter((t) => !["done", "declined", "rolled_back"].includes(t.state))

@@ -5,10 +5,10 @@
  * the generated sandbox is checked against the real Codex binary by `probe` (no model call).
  */
 import { spawnSync } from "node:child_process"
-import { mkdirSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { Codex } from "@openai/codex-sdk"
-import type { Engine, EngineCapabilities, Outcome, ProbeContext, ProbeResult, SessionEvent, SessionSpec } from "@holdco/kernel/engine"
+import type { Engine, EngineCapabilities, EngineQuota, EngineQuotaWindow, Outcome, ProbeContext, ProbeResult, SessionEvent, SessionSpec } from "@holdco/kernel/engine"
 import { type CodexBinary, resolveCodexBinary } from "./binary.ts"
 import { type CodexPlan, toCodexOptions } from "./options.ts"
 import { CodexRunState } from "./outcome.ts"
@@ -156,7 +156,46 @@ export const loginStatus = async (env: Record<string, string | undefined>): Prom
   return { name: "Codex login (codex login status)", ok, detail: ok ? text.split("\n")[0] : `${text.split("\n")[0] || "not logged in"}; run \`codex login\` as the Operator (auth.json is copied into each session home)` }
 }
 
-export const engine: Engine = { id: "codex", capabilities, run, probe: (ctx) => probe(ctx), loginStatus }
+/**
+ * D72: the ChatGPT plan's rate-limit windows (what `codex /status` shows) from the backend's usage endpoint,
+ * with the Operator's login in ~/.codex/auth.json (CODEX_HOME honoured). Undefined without a ChatGPT login
+ * (API-key auth has no plan windows); throws when the endpoint fails.
+ */
+export const quota = async (env: Record<string, string | undefined>): Promise<EngineQuota | undefined> => {
+  const file = join(env["CODEX_HOME"] ?? join(env["HOME"] ?? process.env["HOME"] ?? "", ".codex"), "auth.json")
+  if (!existsSync(file)) return undefined
+  let auth: { auth_mode?: string; tokens?: { access_token?: string; id_token?: string; account_id?: string } }
+  try { auth = JSON.parse(readFileSync(file, "utf8")) } catch { return undefined }
+  const token = auth.tokens?.access_token
+  if (!token || (auth.auth_mode && auth.auth_mode !== "chatgpt")) return undefined
+  const accountId = auth.tokens?.account_id ?? accountIdFromJwt(auth.tokens?.id_token)
+  const r = await fetch("https://chatgpt.com/backend-api/wham/usage", { headers: { authorization: `Bearer ${token}`, "user-agent": "codex-cli", ...(accountId ? { "chatgpt-account-id": accountId } : {}) }, signal: AbortSignal.timeout(10_000) })
+  if (!r.ok) throw new Error(`usage endpoint: HTTP ${r.status}`)
+  const body = (await r.json()) as { plan_type?: string; rate_limit?: { primary_window?: Window | null; secondary_window?: Window | null } }
+  const windows: Array<EngineQuotaWindow> = []
+  for (const w of [body.rate_limit?.primary_window, body.rate_limit?.secondary_window]) {
+    if (!w || typeof w.used_percent !== "number") continue
+    const lengthMs = typeof w.limit_window_seconds === "number" ? w.limit_window_seconds * 1000 : null
+    const hours = lengthMs ? lengthMs / 3_600_000 : null
+    const id = hours !== null && hours <= 6 ? "5h" : hours !== null && hours >= 24 * 6 ? "7d" : `${Math.round(hours ?? 0)}h`
+    const label = id === "5h" ? "5-hour" : id === "7d" ? "weekly" : `${Math.round(hours ?? 0)}-hour`
+    const resetsAt = typeof w.reset_at === "number" ? (w.reset_at < 1e12 ? w.reset_at * 1000 : w.reset_at) : typeof w.reset_after_seconds === "number" ? Date.now() + w.reset_after_seconds * 1000 : null
+    windows.push({ id, label, usedPct: Math.max(0, Math.min(100, w.used_percent)), resetsAt, lengthMs })
+  }
+  return { plan: body.plan_type ?? null, windows }
+}
+interface Window { used_percent?: number; limit_window_seconds?: number; reset_at?: number; reset_after_seconds?: number }
+
+const accountIdFromJwt = (idToken: string | undefined): string | undefined => {
+  if (!idToken) return undefined
+  try {
+    const payload = JSON.parse(Buffer.from(idToken.split(".")[1] ?? "", "base64url").toString("utf8")) as Record<string, unknown>
+    const auth = payload["https://api.openai.com/auth"] as { chatgpt_account_id?: string } | undefined
+    return auth?.chatgpt_account_id
+  } catch { return undefined }
+}
+
+export const engine: Engine = { id: "codex", capabilities, run, probe: (ctx) => probe(ctx), loginStatus, quota }
 export { type CodexBinary, resolveCodexBinary, wrapperScript } from "./binary.ts"
 export { codexConfig, codexHome, codexHooks, DISABLED_FEATURES, toCodexOptions, workspaceAccess } from "./options.ts"
 export { CodexRunState, costUsd } from "./outcome.ts"

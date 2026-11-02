@@ -29,6 +29,7 @@ const line = (e: SessionEvent): { text: string; ok?: boolean } => {
     case "blocked": return { text: e.reason, ok: false }
     case "error": return { text: e.message, ok: false }
     case "activity": return { text: "" }
+    case "quota": return { text: `${e.label} limit ${Math.round(e.usedPct)}% used`, ok: e.status !== "rejected" }
   }
 }
 

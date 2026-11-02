@@ -201,6 +201,13 @@ const Budget = Schema.Struct({
    * steers the CEO and the dispatch order only.
    */
   project_shares: Schema.optionalKey(Schema.Literals(["hard", "soft"])),
+  /**
+   * D72: the subscription logins' rate-limit windows run the company. `pause_at` (percent, default 90): no new
+   * session on an engine whose 5-hour or 7-day window is past it. `pace` (default true): when the 7-day window is
+   * more than `pace_margin` points (default 15) ahead of the clock, only core projects, Verification and the
+   * executive run until it is back on pace.
+   */
+  quota: Schema.optionalKey(Schema.Struct({ pause_at: Schema.optionalKey(IntIn(50, 100)), pace: Schema.optionalKey(Schema.Boolean), pace_margin: Schema.optionalKey(IntIn(0, 50)) })),
 })
 
 const Project = Schema.Struct({

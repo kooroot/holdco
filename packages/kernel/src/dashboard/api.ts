@@ -20,6 +20,7 @@ import { undoAction } from "../supervisor/executors.ts"
 import { latestReleaseTag } from "../supervisor/org.ts"
 import { idleWakeMs, Supervisor, WORK_WAKE_MS } from "../supervisor/supervisor.ts"
 import { defaultBranch } from "../supervisor/worktrees.ts"
+import { aheadOfWeek, quotaPolicy, quotaVerdict, readQuota } from "../supervisor/quota.ts"
 
 const DAY = 86_400_000
 
@@ -195,6 +196,12 @@ export const snapshot = (ctx: DashboardContext) => {
     roles: Object.fromEntries(Object.entries(config.roles).filter(([k]) => k !== "by_department").map(([k, v]) => [k, v])),
     departments: config.modules.departments,
     executive: config.modules.executive,
+    quotas: (Object.keys(config.engines) as Array<"claude" | "codex">).flatMap((id) => {
+      const q = readQuota(store, id)
+      if (!q) return []
+      const v = quotaVerdict(q, quotaPolicy(config), now)
+      return [{ engine: q.engine, plan: q.plan, fetched_at: q.fetched_at, source: q.source, error: q.error ?? null, windows: q.windows.map((w) => ({ id: w.id, label: w.label, used_pct: w.used_pct, resets_at: w.resets_at, ahead: w.id === "7d" ? aheadOfWeek(q, now) : null })), verdict: { kind: v.kind, reason: v.kind === "ok" ? null : v.reason } }]
+    }),
     projects: config.projects.map((p) => ({
       id: p.id, path: p.path, class: p.class, share: p.share, merge: p.merge ?? "local", verify: p.verify ? [...p.verify] : null, kill_criteria: p.kill_criteria ?? null, min_tier: p.min_tier ?? null,
       spent_month: spentByProject[p.id] ?? 0, cap_month: p.share * config.budget.monthly_usd, capped: (config.budget.project_shares ?? "hard") === "hard" && p.share * config.budget.monthly_usd - (spentByProject[p.id] ?? 0) < 0.05, open: openTicketsFor(store, p.id).length, running: running.filter((r) => store.ticket(r.ticket_id)?.project === p.id).length, exists: existsSync(NodePath.join(ctx.root, p.path, ".git")),

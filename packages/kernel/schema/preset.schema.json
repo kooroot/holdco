@@ -636,6 +636,25 @@
             "hard",
             "soft"
           ]
+        },
+        "quota": {
+          "type": "object",
+          "properties": {
+            "pause_at": {
+              "type": "integer",
+              "minimum": 50,
+              "maximum": 100
+            },
+            "pace": {
+              "type": "boolean"
+            },
+            "pace_margin": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 50
+            }
+          },
+          "additionalProperties": false
         }
       },
       "required": [

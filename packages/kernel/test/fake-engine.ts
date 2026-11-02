@@ -9,7 +9,7 @@ import { writeFileSync } from "node:fs"
 import * as NodePath from "node:path"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
-import type { Engine, Outcome, SessionEvent, SessionSpec } from "../src/engine/types.ts"
+import type { Engine, Outcome, SessionEvent, SessionSpec, EngineQuota } from "../src/engine/types.ts"
 
 export type Script = (ctx: Ctx) => Promise<Partial<Outcome> & { report?: unknown }>
 export interface Ctx {
@@ -90,11 +90,17 @@ export const DEFAULT_SCRIPTS: Record<string, Script> = {
 export class FakeEngine implements Engine {
   readonly capabilities = { abort: true, structuredOutput: true, systemInstructions: true, reportsCost: true, midSessionBudgetCap: true, preToolHook: "in-process", subagentIdentityInHooks: true, osSandboxWrites: true, osSandboxDenyRead: "native", projectConfigIsolation: "native", companyTools: "in-process-or-mcp" } as const
   readonly runs: Array<SessionSpec> = []
+  /** D72: what `quota()` answers (set by a test); undefined = no subscription login. */
+  quotaAnswer: EngineQuota | undefined | (() => Promise<EngineQuota | undefined>) = undefined
+  /** D72: quota events emitted at the start of every run (what a Claude session's rate_limit_event looks like). */
+  quotaEvents: Array<Extract<SessionEvent, { kind: "quota" }>> = []
+  async quota(): Promise<EngineQuota | undefined> { return typeof this.quotaAnswer === "function" ? this.quotaAnswer() : this.quotaAnswer }
   constructor(readonly scripts: Partial<Record<string, Script>> = {}, readonly costPerRun = 0.1, readonly id: "claude" | "codex" = "claude") {}
 
   async run(spec: SessionSpec, onEvent: (e: SessionEvent) => void, signal: AbortSignal): Promise<Outcome> {
     this.runs.push(spec)
     onEvent({ kind: "started", engineSessionId: `fake-${spec.sessionId}` })
+    for (const e of this.quotaEvents) onEvent(e)
     const script = this.scripts[spec.role.kind] ?? DEFAULT_SCRIPTS[spec.role.kind]
     if (script === undefined) return { status: "error", finalText: "", costUsd: 0, costSource: "engine", turns: 0, error: `no script for ${spec.role.kind}` }
     const needsTools = spec.role.kind !== "junior_worker" && spec.role.kind !== "junior_reader"

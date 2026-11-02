@@ -83,6 +83,10 @@ export const Shell = ({ children }: { children: ReactNode }) => {
         <Button tone="primary" kbd="n" onClick={() => setNew(true)} style={{ margin: "8px 10px 0" }}>{t("New ticket")}</Button>
         <div {...st.foot()}>
           <div {...st.status()}><i {...cx(st.dot(), !alive && st.dotOff(), alive && held && st.dotHold(), alive && !held && st.dotOn())} /><span>{q.isError ? t("unreachable: {m}", { m: q.error.message }) : !S ? t("connecting…") : !S.supervisor.alive ? t("supervisor not running") : halted ? t("halted (L5)") : S.interrupts.length ? t("running · {n} interrupts", { n: S.interrupts.length }) : t("running · {n} sessions", { n: S.running.length })}</span></div>
+          {S?.quotas.map((q) => <div key={q.engine} title={q.verdict.reason ?? t("{e} plan limits · from {s}", { e: q.engine, s: q.source === "endpoint" ? t("the usage endpoint") : t("the last session") })}>
+            <div {...cn(st.status(), ui.num())}><span>{q.engine}{q.verdict.kind !== "ok" ? ` · ${q.verdict.kind === "pause" ? t("paused") : t("pacing")}` : ""}</span><span style={{ marginLeft: "auto" }}>{q.windows.map((w) => `${w.label.replace("-hour", "h").replace("-day", "d")} ${Math.round(w.used_pct)}%`).join(" · ")}</span></div>
+            {q.windows.slice(0, 2).map((w) => <div key={w.id} style={{ marginTop: 3 }}><Meter ratio={w.used_pct / 100} /></div>)}
+          </div>)}
           <div {...cn(st.status(), ui.num())}>{S ? t("{a} of {b} this month", { a: usd(S.budget.spent_month), b: usd(S.budget.monthly) }) : "—"}</div>
           <Meter ratio={ratio} />
         </div>

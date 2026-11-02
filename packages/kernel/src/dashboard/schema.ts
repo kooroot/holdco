@@ -59,6 +59,12 @@ export const Activity = Schema.Struct({ ticket_id: Str, at: Num, actor: Str, fro
 /** D70: a registered project with what the Operator weighs it against — spend this month and open work. */
 export const ProjectClass = Schema.Literals(["core", "experiment", "maintenance", "brand"])
 export const ProjectRow = Schema.Struct({ id: Str, path: Str, class: ProjectClass, share: Num, merge: Str, verify: Schema.NullOr(Schema.Array(Str)), kill_criteria: NullStr, min_tier: Schema.NullOr(Tier), spent_month: Num, cap_month: Num, capped: Bool, open: Num, running: Num, exists: Bool })
+/** D72: an engine's plan rate-limit windows and what the kernel does about them right now. */
+export const QuotaView = Schema.Struct({
+  engine: Str, plan: NullStr, fetched_at: Num, source: Schema.Literals(["endpoint", "session"]), error: NullStr,
+  windows: Schema.Array(Schema.Struct({ id: Str, label: Str, used_pct: Num, resets_at: NullNum, ahead: NullNum })),
+  verdict: Schema.Struct({ kind: Schema.Literals(["ok", "pause", "pace"]), reason: NullStr }),
+})
 export const Department = Schema.Struct({ id: Str, share: Num, open: Num, senior: Str, running: Num, actions: Schema.Array(Str) })
 export const Org = Schema.Struct({ executive: Str, improvement: Bool, juniors: Bool, departments: Schema.Array(Department), roles: Schema.Record(Str, Str), by_department: Schema.Record(Str, Str), engines: Schema.Array(Str), models: Schema.Record(Str, Schema.Array(Str)) })
 export const Settings = Schema.Struct({
@@ -77,6 +83,7 @@ export const Snapshot = Schema.Struct({
   departments: Schema.Array(Str),
   executive: Str,
   projects: Schema.Array(ProjectRow),
+  quotas: Schema.Array(QuotaView),
   inbox: Schema.Array(InboxItem),
   inbox_timeout_ms: Num,
   tickets: Schema.Array(TicketListed),

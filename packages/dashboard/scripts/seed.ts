@@ -32,6 +32,9 @@ writeFileSync(NodePath.join(dir, "company.yaml"), renderCompanyYaml(config, "ful
 git(dir, "config", "user.email", "t@t"); git(dir, "config", "user.name", "t"); git(dir, "commit", "-qam", "seed")
 const store = Store.open(dir)
 const now = Date.now(); const H = 3600_000
+// D72: subscription limits as the supervisor would have polled them
+store.setMeta("quota:claude", JSON.stringify({ engine: "claude", plan: "max", fetched_at: Date.now() - 3 * 60_000, source: "endpoint", windows: [{ id: "5h", label: "5-hour", used_pct: 42, resets_at: Date.now() + 2 * H, length_ms: 5 * H }, { id: "7d", label: "7-day", used_pct: 61, resets_at: Date.now() + 2.5 * 24 * H, length_ms: 7 * 24 * H }] }))
+store.setMeta("quota:codex", JSON.stringify({ engine: "codex", plan: "plus", fetched_at: Date.now() - 40_000, source: "session", windows: [{ id: "5h", label: "5-hour", used_pct: 93, resets_at: Date.now() + 50 * 60_000, length_ms: 5 * H }, { id: "7d", label: "weekly", used_pct: 30, resets_at: Date.now() + 5 * 24 * H, length_ms: 7 * 24 * H }] }))
 const mk = (o: any) => store.createTicket({ opened_by: "ceo", why: "strategy objective 1", done_criteria: ["tests pass", "docs updated"], now: now - 30 * H, ...o })
 const t1 = mk({ department: "engineering", title: "Settlement fee applied at checkout", goal: "Sellers see the net amount before confirming", project: "acme", state: "awaiting_approval", action: "code.merge.app" })
 store.db.run("UPDATE tickets SET branch='t/ENG-3', approval_stage='inbox', updated_at=? WHERE id=?", [now - 2 * H, t1.id])

@@ -6,7 +6,7 @@
 import { query, type SDKMessage, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk"
 import { spawnSync } from "node:child_process"
 import { existsSync, readFileSync } from "node:fs"
-import type { Engine, EngineCapabilities, Outcome, ProbeContext, ProbeResult, SessionEvent, SessionSpec } from "@holdco/kernel/engine"
+import type { Engine, EngineCapabilities, EngineQuota, EngineQuotaWindow, Outcome, ProbeContext, ProbeResult, SessionEvent, SessionSpec } from "@holdco/kernel/engine"
 import { resolveClaudeBinary } from "./binary.ts"
 import { toClaudeOptions } from "./options.ts"
 import { aborted, fromResult } from "./outcome.ts"
@@ -42,6 +42,7 @@ const run = async (spec: SessionSpec, onEvent: (e: SessionEvent) => void, signal
       }
       if (msg.type === "assistant" || msg.type === "user") for (const e of translate(msg, pending)) onEvent(e)
       if (msg.type === "result") result = msg
+      if (msg.type === "rate_limit_event") { const q = quotaEvent(msg.rate_limit_info); if (q) onEvent(q) }
     }
   } catch (e) {
     if (signal.aborted) return aborted(sessionId)
@@ -50,6 +51,50 @@ const run = async (spec: SessionSpec, onEvent: (e: SessionEvent) => void, signal
   }
   if (result === undefined) return signal.aborted ? aborted(sessionId) : { status: "error", finalText: "", costUsd: 0, costSource: "engine", turns: 0, error: "no result message" }
   return fromResult(result, sessionId)
+}
+
+/** D72: a rate_limit_event → one quota window; the CLI reports utilization as a fraction, the endpoint as percent. */
+const WINDOWS: Record<string, { id: string; label: string; lengthMs: number }> = {
+  five_hour: { id: "5h", label: "5-hour", lengthMs: 5 * 3_600_000 },
+  seven_day: { id: "7d", label: "7-day", lengthMs: 7 * 24 * 3_600_000 },
+  seven_day_opus: { id: "7d_opus", label: "7-day Opus", lengthMs: 7 * 24 * 3_600_000 },
+  seven_day_sonnet: { id: "7d_sonnet", label: "7-day Sonnet", lengthMs: 7 * 24 * 3_600_000 },
+}
+const quotaEvent = (info: { status: "allowed" | "allowed_warning" | "rejected"; rateLimitType?: string; utilization?: number; resetsAt?: number }): SessionEvent | undefined => {
+  const w = info.rateLimitType ? WINDOWS[info.rateLimitType] : undefined
+  if (!w || typeof info.utilization !== "number") return undefined
+  const usedPct = info.utilization <= 1 ? info.utilization * 100 : info.utilization
+  return { kind: "quota", window: w.id, label: w.label, usedPct: Math.max(0, Math.min(100, usedPct)), resetsAt: typeof info.resetsAt === "number" ? (info.resetsAt < 1e12 ? info.resetsAt * 1000 : info.resetsAt) : null, status: info.status }
+}
+
+/**
+ * D72: the plan's usage windows from claude.ai's OAuth usage endpoint (what `/usage` shows), with the
+ * Operator's login: CLAUDE_CODE_OAUTH_TOKEN, else the macOS keychain item Claude Code keeps, else
+ * ~/.claude/.credentials.json. Undefined without a subscription login; throws when the endpoint fails.
+ */
+export const quota = async (env: Record<string, string | undefined>): Promise<EngineQuota | undefined> => {
+  const token = oauthToken(env)
+  if (!token) return undefined
+  const r = await fetch("https://api.anthropic.com/api/oauth/usage", { headers: { authorization: `Bearer ${token}`, "anthropic-beta": "oauth-2025-04-20" }, signal: AbortSignal.timeout(10_000) })
+  if (!r.ok) throw new Error(`usage endpoint: HTTP ${r.status}`)
+  const body = (await r.json()) as Record<string, { utilization?: number | null; resets_at?: string | null } | null | undefined>
+  const windows: Array<EngineQuotaWindow> = []
+  for (const [k, w] of Object.entries(WINDOWS)) {
+    const u = body[k]
+    if (u && typeof u.utilization === "number") windows.push({ id: w.id, label: w.label, usedPct: Math.max(0, Math.min(100, u.utilization)), resetsAt: u.resets_at ? Date.parse(u.resets_at) || null : null, lengthMs: w.lengthMs })
+  }
+  return { plan: null, windows }
+}
+
+const oauthToken = (env: Record<string, string | undefined>): string | undefined => {
+  if (env["CLAUDE_CODE_OAUTH_TOKEN"]) return env["CLAUDE_CODE_OAUTH_TOKEN"]
+  const parse = (text: string) => { try { return (JSON.parse(text) as { claudeAiOauth?: { accessToken?: string } }).claudeAiOauth?.accessToken } catch { return undefined } }
+  if (process.platform === "darwin") {
+    const r = spawnSync("security", ["find-generic-password", "-s", "Claude Code-credentials", "-w"], { encoding: "utf8", timeout: 5000 })
+    if (r.status === 0 && r.stdout.trim()) { const t = parse(r.stdout.trim()); if (t) return t }
+  }
+  const file = `${env["HOME"] ?? process.env["HOME"] ?? ""}/.claude/.credentials.json`
+  return existsSync(file) ? parse(readFileSync(file, "utf8")) : undefined
 }
 
 const clip = (v: unknown, n = 400): string => { const t = typeof v === "string" ? v : JSON.stringify(v) ?? ""; return t.length > n ? `${t.slice(0, n)}…` : t }
@@ -129,7 +174,7 @@ export const probe = async (_ctx: ProbeContext): Promise<ReadonlyArray<ProbeResu
   return out
 }
 
-export const engine: Engine = { id: "claude", capabilities, run, loginStatus, probe }
+export const engine: Engine = { id: "claude", capabilities, run, loginStatus, probe, quota }
 export { resolveClaudeBinary } from "./binary.ts"
 export { CLAUDE_TOOLS, toClaudeOptions, toolLists } from "./options.ts"
 export { fromResult } from "./outcome.ts"

@@ -117,7 +117,7 @@ const decodeConfig = (file: string): { config?: CompanyConfig; errors: Array<str
 // ── engines ────────────────────────────────────────────────────────────────
 
 /** Load an engine adapter as the company resolves it (its own node_modules), not as the kernel does. */
-const loadEngine = async (id: EngineId, dir: string): Promise<Pick<Engine, "capabilities" | "probe" | "loginStatus"> | string> => {
+const loadEngine = async (id: EngineId, dir: string): Promise<Pick<Engine, "capabilities" | "probe" | "loginStatus" | "quota"> | string> => {
   try {
     const path = Bun.resolveSync(`@holdco/engine-${id}`, dir)
     const mod = await import(path)
@@ -228,6 +228,15 @@ const doctor = async (dir: string): Promise<Array<Check>> => {
         const { sessionEnv } = await import("./supervisor/supervisor.ts")
         const r = await engine.loginStatus(sessionEnv(config, id, process.env))
         add(`engine '${id}' subscription, as a session sees it: ${r.name}`, r.ok, r.ok ? undefined : `${r.detail ?? ""}; for headless use run \`claude setup-token\` and put CLAUDE_CODE_OAUTH_TOKEN in the env file`.replace(/^; /, ""))
+        // D72: the plan's rate-limit windows are the company's real budget; the supervisor polls them and pauses an engine past budget.quota.pause_at
+        if (r.ok && engine.quota) {
+          try {
+            const q = await engine.quota(process.env)
+            add(`engine '${id}' plan limits readable${q ? `: ${q.windows.map((w) => `${w.label} ${Math.round(w.usedPct)}%`).join(", ") || "no windows reported"}` : ""}`, q !== undefined, "no subscription token found on this host; the kernel then relies on what sessions report", true)
+          } catch (e) {
+            add(`engine '${id}' plan limits readable`, false, `${String(e).slice(0, 120)}; the kernel then relies on what sessions report`, true)
+          }
+        }
       } else {
         add(`engine '${id}' subscription login`, false, "adapter cannot check login status")
       }
@@ -445,7 +454,7 @@ switch (cmd) {
     const { runOperator, OperatorError } = await import("./cli/operator.ts")
     try {
       const handled = cmd === undefined ? false : await runOperator(cmd, { positional, flag, has }, instanceDir())
-      if (!handled) fail("usage: holdco init | doctor | build-hook | smoke | supervise | dashboard | telegram [setup] | service [install] | observe <file.json> | decision add|revoke|list | status | models (= roles) | ticket | inbox | interrupt | resume | audit | digest | release | promote | rollback | project | engines | config check | validate | presets | schemas | examples")
+      if (!handled) fail("usage: holdco init | doctor | build-hook | smoke | supervise | dashboard | telegram [setup] | service [install] | observe <file.json> | decision add|revoke|list | quota | status | models (= roles) | ticket | inbox | interrupt | resume | audit | digest | release | promote | rollback | project | engines | config check | validate | presets | schemas | examples")
     } catch (e) {
       if (e instanceof OperatorError) fail(e.message)
       throw e

@@ -75,6 +75,8 @@ A share is also budget: a project's share of `budget.monthly_usd` is its cap for
 
 Every change is one commit to `company.yaml`. Removing a project never touches its repository.
 
+**The real budget is your subscription.** Dollars are metered for comparability, but what actually runs out is the plans' rate-limit windows — Claude Code's 5-hour and 7-day, Codex's 5-hour and weekly. The kernel reads them from the same usage endpoints `/usage` and `/status` use (with your login on this host; Claude: `CLAUDE_CODE_OAUTH_TOKEN`, the keychain, or `~/.claude/.credentials.json`; Codex: `~/.codex/auth.json`), polls every five minutes, and also takes the rate-limit events sessions themselves report. They show as percentages in the dashboard's sidebar and on Sessions & spend, in `holdco status`, and `holdco quota` reads them on demand. Policy (`budget.quota`): an engine past `pause_at` (default 90%) starts no new session until the window resets — the Operator is told once, and the stall line says so instead of going quiet; with `pace` (default on), when the 7-day window is more than `pace_margin` (15) points ahead of the clock, only core projects, Verification and the executive run until the week is back on pace. The CEO sees the same lines every cycle.
+
 ### 5. Your weekly ten minutes
 
 | Command | What it is |
@@ -153,6 +155,8 @@ bunx holdco project remove old-repo                       # 열린 티켓이 있
 배분은 예산이기도 합니다. 프로젝트의 배분 × `budget.monthly_usd`가 그 달의 상한이고, 다 쓰면 다음 달이나 배분을 늘리기 전까지 새 작업 세션이 시작되지 않습니다(`budget.project_shares: soft`면 유도만 하고 상한은 없음). 대시보드는 프로젝트별 지출/상한을 보여주고, 정체 진단은 조용히 멈추는 대신 "배분을 다 씀"이라고 말하며, 운영자에게 한 번 알립니다. 프로젝트별 `min_tier`(설정 → 최소 등급, 또는 `--min-tier T3`)는 그 프로젝트의 모든 행동 등급 하한입니다 — 결제 저장소는 운영자 승인으로, 장난감 프로젝트는 자율로. 한 머신에 회사 둘이면 두 번째에 `runtime.dashboard_port`를 지정합니다.
 
 모든 변경은 `company.yaml`에 커밋 하나입니다. 프로젝트 제거는 저장소를 건드리지 않습니다.
+
+**진짜 예산은 구독입니다.** 달러는 비교를 위해 계량하지만 실제로 바닥나는 건 구독의 레이트 리밋 창 — Claude Code의 5시간·7일, Codex의 5시간·주간 — 입니다. 커널은 `/usage`·`/status`가 쓰는 사용량 엔드포인트를 이 호스트의 로그인으로 읽고(Claude: `CLAUDE_CODE_OAUTH_TOKEN`, 키체인, 또는 `~/.claude/.credentials.json`; Codex: `~/.codex/auth.json`), 5분마다 폴링하며, 세션 자체가 보고하는 레이트 리밋 이벤트도 반영합니다. 대시보드 사이드바와 세션·지출 화면, `holdco status`에 퍼센트로 보이고 `holdco quota`로 즉시 읽을 수 있습니다. 정책(`budget.quota`): `pause_at`(기본 90%)을 넘긴 엔진은 창이 리셋될 때까지 새 세션을 시작하지 않고 — 운영자에게 한 번 알리고 정체 진단이 이유를 말함 — `pace`(기본 켜짐)는 7일 창이 시계보다 `pace_margin`(15)p 이상 앞서면 주간 페이스로 돌아올 때까지 core 프로젝트·검증·경영진만 돌립니다. CEO도 매 사이클 같은 줄을 봅니다.
 
 ### 5. 매주 10분
 

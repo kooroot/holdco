@@ -319,6 +319,53 @@ describe("project shares are budget (D71)", () => {
   })
 })
 
+describe("subscription limits run the company (D72)", () => {
+  const H = 3_600_000
+  test("an engine past pause_at starts no session and the Operator is told once; the stall names the limit; the window resetting lifts it", async () => {
+    const c = company("quota-pause")
+    const clock = { now: Date.UTC(2026, 10, 2, 9) }
+    const engine = new FakeEngine({}, 0.1)
+    engine.quotaAnswer = { plan: "max", windows: [{ id: "5h", label: "5-hour", usedPct: 94, resetsAt: clock.now + 30 * 60_000, lengthMs: 5 * H }, { id: "7d", label: "7-day", usedPct: 20, resetsAt: clock.now + 3 * 24 * H, lengthMs: 7 * 24 * H }] }
+    const { sup, store, sent } = makeSupervisor(c, engine, clock)
+    await sup.boot()
+    const t = store.createTicket({ department: "engineering", title: "work", goal: "y", why: "z", done_criteria: ["a"], opened_by: "operator", project: "app", state: "triaged", action: "code.merge.app", now: clock.now })
+    await cycle(sup, clock, 3)
+    expect(engine.runs.filter((r) => r.role.kind === "senior").length).toBe(0)
+    expect(sent.filter((s) => s.includes("claude is at 94% of its 5-hour limit")).length).toBe(1)
+    expect(sup.quotaLines(clock.now)[0]).toContain("5-hour 94%")
+    await cycle(sup, clock, 16) // D63: the stall says why
+    expect(sent.some((s) => s.includes(t.id) && s.includes("94% of its 5-hour limit"))).toBe(true)
+    // the 5-hour window resets (the endpoint now reports it empty): work starts
+    engine.quotaAnswer = { plan: "max", windows: [{ id: "5h", label: "5-hour", usedPct: 3, resetsAt: clock.now + 5 * H, lengthMs: 5 * H }] }
+    await cycle(sup, clock, 8)
+    expect(engine.runs.filter((r) => r.role.kind === "senior").length).toBeGreaterThan(0)
+    await sup.stop()
+  })
+  test("pacing: a week burning faster than it passes runs core projects only; sessions' own rate_limit events update the picture", async () => {
+    const c = company("quota-pace", (raw) => {
+      ;(raw["projects"] as Array<Record<string, unknown>>).push({ id: "side", path: `../quota-pace-app`, class: "experiment", share: 0.3, kill_criteria: "none", locked: [] })
+      ;(raw["projects"] as Array<Record<string, unknown>>)[0]!["share"] = 0.7
+    })
+    const clock = { now: Date.UTC(2026, 10, 2, 9) }
+    const engine = new FakeEngine({}, 0.1)
+    // 4 of 7 days elapsed, 85% used: 28 points ahead
+    engine.quotaAnswer = { plan: "max", windows: [{ id: "7d", label: "7-day", usedPct: 85, resetsAt: clock.now + 3 * 24 * H, lengthMs: 7 * 24 * H }] }
+    engine.quotaEvents = [{ kind: "quota", window: "5h", label: "5-hour", usedPct: 41, resetsAt: clock.now + 2 * H, status: "allowed" }]
+    const { sup, store } = makeSupervisor(c, engine, clock)
+    await sup.boot()
+    const core = store.createTicket({ department: "engineering", title: "core work", goal: "y", why: "z", done_criteria: ["a"], opened_by: "operator", project: "app", state: "triaged", action: "code.merge.app", now: clock.now })
+    const side = store.createTicket({ department: "engineering", title: "side work", goal: "y", why: "z", done_criteria: ["a"], opened_by: "operator", project: "side", state: "triaged", action: "code.merge.app", now: clock.now })
+    await cycle(sup, clock, 4)
+    const started = engine.runs.filter((r) => r.role.kind === "senior").map((r) => r.ticketId)
+    expect(started).toContain(core.id)
+    expect(started).not.toContain(side.id)
+    expect(sup.quotaLines(clock.now)[0]).toContain("points ahead of the week")
+    // the session's rate_limit_event landed as the 5-hour window
+    expect(sup.quotaLines(clock.now)[0]).toContain("5-hour 41%")
+    await sup.stop()
+  })
+})
+
 describe("Improvement on operational signals (D66)", () => {
   test("the cycle runs after ten finished tickets without any Operator label, and its prompt carries rejections, verify failures and costs", async () => {
     const c = company("signals", (raw) => {

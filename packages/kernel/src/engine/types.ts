@@ -90,6 +90,8 @@ export type SessionEvent =
   | { readonly kind: "file_change"; readonly paths: ReadonlyArray<string> }
   | { readonly kind: "blocked"; readonly reason: string }
   | { readonly kind: "error"; readonly message: string }
+  /** D72: the engine reported a plan rate-limit window (Claude's rate_limit_event). `usedPct` 0–100. */
+  | { readonly kind: "quota"; readonly window: string; readonly label: string; readonly usedPct: number; readonly resetsAt: number | null; readonly status: "allowed" | "allowed_warning" | "rejected" }
 
 export interface TokenUsage {
   readonly inputTokens: number
@@ -137,6 +139,25 @@ export interface Engine {
   probe?(ctx: ProbeContext): Promise<ReadonlyArray<ProbeResult>>
   /** Optional: is the Operator's subscription login usable on this host? (`holdco doctor`) */
   loginStatus?(env: Record<string, string | undefined>): Promise<ProbeResult>
+  /**
+   * D72: the plan's rate-limit windows from the engine's usage endpoint, using the Operator's own login on
+   * this host. Returns undefined when there is no subscription login; throws when the endpoint fails.
+   */
+  quota?(env: Record<string, string | undefined>): Promise<EngineQuota | undefined>
+}
+
+export interface EngineQuota {
+  readonly plan: string | null
+  readonly windows: ReadonlyArray<EngineQuotaWindow>
+}
+
+/** D72: one rate-limit window as an engine reports it. */
+export interface EngineQuotaWindow {
+  readonly id: string
+  readonly label: string
+  readonly usedPct: number
+  readonly resetsAt: number | null
+  readonly lengthMs: number | null
 }
 
 export interface ProbeContext {
