@@ -196,8 +196,8 @@ export const snapshot = (ctx: DashboardContext) => {
     departments: config.modules.departments,
     executive: config.modules.executive,
     projects: config.projects.map((p) => ({
-      id: p.id, path: p.path, class: p.class, share: p.share, merge: p.merge ?? "local", verify: p.verify ? [...p.verify] : null, kill_criteria: p.kill_criteria ?? null,
-      spent_month: spentByProject[p.id] ?? 0, open: openTicketsFor(store, p.id).length, running: running.filter((r) => store.ticket(r.ticket_id)?.project === p.id).length, exists: existsSync(NodePath.join(ctx.root, p.path, ".git")),
+      id: p.id, path: p.path, class: p.class, share: p.share, merge: p.merge ?? "local", verify: p.verify ? [...p.verify] : null, kill_criteria: p.kill_criteria ?? null, min_tier: p.min_tier ?? null,
+      spent_month: spentByProject[p.id] ?? 0, cap_month: p.share * config.budget.monthly_usd, capped: (config.budget.project_shares ?? "hard") === "hard" && p.share * config.budget.monthly_usd - (spentByProject[p.id] ?? 0) < 0.05, open: openTicketsFor(store, p.id).length, running: running.filter((r) => store.ticket(r.ticket_id)?.project === p.id).length, exists: existsSync(NodePath.join(ctx.root, p.path, ".git")),
     })),
     inbox,
     inbox_timeout_ms: timeout,
@@ -314,7 +314,7 @@ export type Action =
   | { kind: "comment"; id: string; body: string }
   | { kind: "role_set"; role: string; assignment: string }
   | { kind: "project_add"; path: string; id?: string; class?: ProjectClass; share?: number; verify?: string }
-  | { kind: "project_set"; id: string; share?: number; class?: ProjectClass; verify?: string; kill_criteria?: string | null }
+  | { kind: "project_set"; id: string; share?: number; class?: ProjectClass; verify?: string; kill_criteria?: string | null; min_tier?: Tier | null }
   | { kind: "project_shares"; shares: Readonly<Record<string, number>> }
   | { kind: "project_remove"; id: string; force?: boolean }
   | { kind: "settings"; strategy?: string; budget?: { monthly_usd?: number; session_max_usd?: number }; inbox?: { timeout?: string; batch_at?: string }; audit_weekly_sample?: number; runtime?: { max_concurrent_sessions?: number; max_attempts?: number } }
@@ -474,7 +474,7 @@ export const act = async (ctx: DashboardContext, a: Action): Promise<Record<stri
           return { ok: true, id: r.project.id }
         }
         if (a.kind === "project_set") {
-          ctx.saveConfig(setProject(config, a.id, { ...(a.share !== undefined ? { share: a.share } : {}), ...(a.class ? { class: a.class } : {}), ...(a.verify !== undefined ? { verify: argv(a.verify) as Array<string> } : {}), ...(a.kill_criteria !== undefined ? { kill_criteria: a.kill_criteria } : {}) }), `project set ${a.id}`)
+          ctx.saveConfig(setProject(config, a.id, { ...(a.share !== undefined ? { share: a.share } : {}), ...(a.class ? { class: a.class } : {}), ...(a.verify !== undefined ? { verify: argv(a.verify) as Array<string> } : {}), ...(a.kill_criteria !== undefined ? { kill_criteria: a.kill_criteria } : {}), ...(a.min_tier !== undefined ? { min_tier: a.min_tier } : {}) }), `project set ${a.id}`)
           return { ok: true }
         }
         if (a.kind === "project_shares") {

@@ -19,13 +19,15 @@ export interface Signals {
   readonly guard_refusals: Array<{ reason: string; count: number }>
   readonly attempts_exhausted: Array<string>
   readonly cost_by_action: Array<{ action: string; tickets: number; usd: number }>
+  /** D71: per project, its share of effort against its share of the period's spend and its done/failed counts. */
+  readonly projects: Array<{ id: string; share: number; actual: number; usd: number; done: number; failed: number }>
   /** How seniors sized their teams (SessionReport.team), with wall-clock and cost per pattern. */
   readonly teams: Array<{ pattern: string; sessions: number; avg_minutes: number; avg_usd: number }>
 }
 
 const top = <T>(xs: ReadonlyArray<T>, n: number) => xs.slice(0, n)
 
-export const collectSignals = (root: string, store: Store, since: number, now: number): Signals => {
+export const collectSignals = (root: string, store: Store, since: number, now: number, shares: ReadonlyArray<{ id: string; share: number }> = []): Signals => {
   const tickets = store.allTickets().filter((t) => t.updated_at >= since)
   const done = tickets.filter((t) => t.state === "done")
   const failed = tickets.filter((t) => t.state === "declined" || t.state === "rolled_back")
@@ -82,6 +84,11 @@ export const collectSignals = (root: string, store: Store, since: number, now: n
     teams.set(pattern, { n: cur.n + 1, minutes: cur.minutes + (s.ended_at - s.started_at) / 60_000, usd: cur.usd + s.cost_usd + kids.reduce((a, j) => a + j.cost_usd, 0) })
   }
 
+  const byProject = new Map<string, number>()
+  for (const s of sessions) { const pid = store.ticket(s.ticket_id)?.project; if (pid) byProject.set(pid, (byProject.get(pid) ?? 0) + s.cost_usd) }
+  const projectTotal = [...byProject.values()].reduce((a, b) => a + b, 0)
+  const projects = shares.map((p) => ({ id: p.id, share: p.share, actual: projectTotal > 0 ? (byProject.get(p.id) ?? 0) / projectTotal : 0, usd: byProject.get(p.id) ?? 0, done: done.filter((t) => t.project === p.id).length, failed: failed.filter((t) => t.project === p.id).length }))
+
   const byAction = new Map<string, { tickets: number; usd: number }>()
   for (const t of done) { const k = t.action ?? "(none)"; const c = byAction.get(k) ?? { tickets: 0, usd: 0 }; byAction.set(k, { tickets: c.tickets + 1, usd: c.usd + cost(t.id) }) }
 
@@ -96,6 +103,7 @@ export const collectSignals = (root: string, store: Store, since: number, now: n
     session_failures: [...failures.entries()].map(([k, v]) => { const [role, status] = k.split("|") as [string, string]; return { role, status, ...v } }).sort((a, b) => b.count - a.count),
     guard_refusals: [...refusals.entries()].map(([reason, count]) => ({ reason, count })).sort((a, b) => b.count - a.count).slice(0, 10),
     attempts_exhausted: [...new Set(exhausted)],
+    projects,
     cost_by_action: [...byAction.entries()].map(([action, v]) => ({ action, ...v })).sort((a, b) => b.usd - a.usd),
     teams: [...teams.entries()].map(([pattern, v]) => ({ pattern, sessions: v.n, avg_minutes: v.minutes / v.n, avg_usd: v.usd / v.n })).sort((a, b) => b.sessions - a.sessions),
   }
@@ -106,6 +114,7 @@ export const renderSignals = (s: Signals): string => [
   `## Evidence from the last ${s.period_days} days`,
   `Tickets done: ${s.tickets_done} · failed (declined/rolled back): ${s.tickets_failed} · period spend per done ticket (including failures and overhead): ${s.cost_per_done_usd === null ? "n/a" : `$${s.cost_per_done_usd.toFixed(2)}`}`,
   s.teams.length ? `Team sizing by seniors: ${s.teams.map((t) => `${t.pattern} ×${t.sessions} (avg ${t.avg_minutes.toFixed(0)}m, $${t.avg_usd.toFixed(2)} incl. juniors)`).join(", ")} — solo everywhere while tickets split into parts means wall-clock left on the table; many juniors on small tickets means cost.` : "",
+  s.projects.length ? `By project (share of effort → share of spend): ${s.projects.map((p) => `${p.id} ${Math.round(p.share * 100)}%→${Math.round(p.actual * 100)}% ($${p.usd.toFixed(2)}, ${p.done} done, ${p.failed} failed)`).join(", ")} — a project far over its share with little done is where the cost is leaking.` : "",
   s.cost_by_action.length ? `Cost by action: ${s.cost_by_action.map((a) => `${a.action} ${a.tickets}× $${a.usd.toFixed(2)}`).join(", ")}` : "",
   s.rejections.length ? `### Rejected by Verification (${s.rejections.length})\n${s.rejections.map((r) => `- ${r.ticket_id} [${r.action ?? "?"}]: ${r.summary}${r.failures.length ? `\n  failures: ${r.failures.join(" | ")}` : ""}`).join("\n")}` : "No rejections.",
   s.verify_failures.length ? `### Rejected by the kernel's verify command (${s.verify_failures.length})\n${s.verify_failures.map((v) => `- ${v.ticket_id}: ${v.note}`).join("\n")}` : "",

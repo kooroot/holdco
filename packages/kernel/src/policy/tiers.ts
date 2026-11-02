@@ -55,5 +55,7 @@ export const tierForChange = (
           const project = config.projects.find((x) => x.id === target.projectId)
           return matches(p, PROJECT_FIXED_LOCKED) || matchesGlob(p, project?.locked ?? [])
         })
-  return { tier: forcedBy.length > 0 ? "T3" : base, forcedBy }
+  const floor = target.repo === "project" ? config.projects.find((x) => x.id === target.projectId)?.min_tier : undefined
+  const floored = floor && ORDER.indexOf(floor) > ORDER.indexOf(base) ? floor : base
+  return { tier: forcedBy.length > 0 ? "T3" : floored, forcedBy: floor && floored !== base && forcedBy.length === 0 ? [`project min_tier ${floor}`] : forcedBy }
 }

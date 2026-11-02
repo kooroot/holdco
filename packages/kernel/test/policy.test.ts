@@ -33,6 +33,15 @@ describe("tier for a change", () => {
     expect(tierForChange(full, "code.merge.app", { repo: "project", projectId: "side-bet" }, [".claude/settings.json"]).tier).toBe("T3"))
   test("an ordinary project merge keeps its tier", () =>
     expect(tierForChange(full, "code.merge.app", { repo: "project", projectId: "main-product" }, ["src/a.ts"]).tier).toBe("T2"))
+  test("D71: a project's min_tier floors every action there; locked paths still force T3", () => {
+    const strict = { ...full, projects: full.projects.map((p) => (p.id === "side-bet" ? { ...p, min_tier: "T3" as const } : p)) }
+    const r = tierForChange(strict, "code.merge.app", { repo: "project", projectId: "side-bet" }, ["src/a.ts"])
+    expect(r.tier).toBe("T3")
+    expect(r.forcedBy).toEqual(["project min_tier T3"])
+    expect(tierForChange(strict, "code.merge.app", { repo: "project", projectId: "main-product" }, ["src/a.ts"]).tier).toBe("T2")
+    const loose = { ...full, projects: full.projects.map((p) => (p.id === "side-bet" ? { ...p, min_tier: "T1" as const } : p)) }
+    expect(tierForChange(loose, "code.merge.app", { repo: "project", projectId: "side-bet" }, ["src/a.ts"]).tier).toBe("T2") // a floor never lowers
+  })
   test("a change touching a CEO role file is T3", () =>
     expect(tierForChange(full, "improvement.merge", { repo: "company" }, ["org/roles/ceo.md"]).tier).toBe("T3"))
 })

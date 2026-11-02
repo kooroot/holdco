@@ -128,7 +128,7 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
       writeFileSync(lock, String(process.pid), { mode: 0o600 })
       await sup.boot()
       sup.start()
-      const dash = startDashboard({ root: dir, config: () => loadConfig(dir), store: sup.store, now: () => Date.now(), supervisor: sup, saveConfig: (c, m) => saveConfig(dir, c, m) }, Number(process.env["HOLDCO_DASHBOARD_PORT"] ?? args.flag("dashboard-port") ?? 7117), (l) => console.log(l))
+      const dash = startDashboard({ root: dir, config: () => loadConfig(dir), store: sup.store, now: () => Date.now(), supervisor: sup, saveConfig: (c, m) => saveConfig(dir, c, m) }, Number(process.env["HOLDCO_DASHBOARD_PORT"] ?? args.flag("dashboard-port") ?? config.runtime.dashboard_port ?? 7117), (l) => console.log(l))
       const tg = telegramConfig(config, process.env)
       const bridge = tg ? new TelegramBridge({ ctx: { root: dir, config: () => loadConfig(dir), store: sup.store, now: () => Date.now(), supervisor: sup, saveConfig: (c, m) => saveConfig(dir, c, m) }, token: tg.token, chatId: tg.chatId, log: (l) => console.error(l) }) : undefined
       if (bridge) {
@@ -459,7 +459,7 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
     case "project": {
       // D70: list | add <path> [--id --class --share --verify "cmd"] | set <id> [--share --class --verify "cmd"|none --kill …] | remove <id> [--force] | verify <id> [cmd…]
       const config = loadConfig(dir)
-      const usage = "usage: holdco project list | add <path> [--id x] [--class core|experiment|maintenance|brand] [--share 0.3] [--verify \"bun test\"] | set <id> [--share 0.3] [--class …] [--verify \"cmd\"|none] [--kill \"…\"] | remove <id> [--force] | verify <id> [command…]"
+      const usage = "usage: holdco project list | add <path> [--id x] [--class core|experiment|maintenance|brand] [--share 0.3] [--verify \"bun test\"] | set <id> [--share 0.3] [--class …] [--verify \"cmd\"|none] [--kill \"…\"] [--min-tier T0..T3|none] | remove <id> [--force] | verify <id> [command…]"
       const pct = (x: number) => `${Math.round(x * 100)}%`
       const shareArg = (v: string | undefined): number | undefined => {
         if (v === undefined) return undefined
@@ -478,8 +478,8 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
           const store = Store.open(dir)
           const since = new Date(); since.setUTCDate(1); since.setUTCHours(0, 0, 0, 0)
           const spent = Object.fromEntries(store.spentByProject(since.getTime()).map((r) => [r.project ?? "", r.usd]))
-          console.log("id               class        share   spent (month)  open  path  ·  verify")
-          for (const pr of config.projects) console.log(`${pr.id.padEnd(16)} ${pr.class.padEnd(12)} ${pct(pr.share).padStart(5)}   ${`$${(spent[pr.id] ?? 0).toFixed(2)}`.padStart(13)}  ${String(openTicketsFor(store, pr.id).length).padStart(4)}  ${pr.path}${pr.verify ? `  ·  ${pr.verify.join(" ")}` : ""}`)
+          console.log("id               class        share   spent / cap (month)   open  path  ·  verify  ·  min tier")
+          for (const pr of config.projects) console.log(`${pr.id.padEnd(16)} ${pr.class.padEnd(12)} ${pct(pr.share).padStart(5)}   ${`$${(spent[pr.id] ?? 0).toFixed(2)} / $${(pr.share * config.budget.monthly_usd).toFixed(2)}`.padStart(19)}  ${String(openTicketsFor(store, pr.id).length).padStart(4)}  ${pr.path}${pr.verify ? `  ·  ${pr.verify.join(" ")}` : ""}${pr.min_tier ? `  ·  ≥${pr.min_tier}` : ""}`)
           const total = config.projects.reduce((a, pr) => a + pr.share, 0)
           if (total < 0.999) console.log(`${pct(1 - total)} of effort is unallocated (the CEO treats it as free)`)
           store.close()
@@ -504,12 +504,14 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
           const id = args.positional[2] ?? (() => { throw new OperatorError(usage) })()
           const verify = args.flag("verify")
           const kill = args.flag("kill")
-          const patch = { ...(shareArg(args.flag("share")) !== undefined ? { share: shareArg(args.flag("share")) as number } : {}), ...(classArg(args.flag("class")) ? { class: classArg(args.flag("class")) as ProjectClass } : {}), ...(verify !== undefined ? { verify: verify === "none" ? [] : verify.split(/\s+/) } : {}), ...(kill !== undefined ? { kill_criteria: kill === "none" ? null : kill } : {}) }
+          const minTier = args.flag("min-tier")
+          if (minTier !== undefined && !["T0", "T1", "T2", "T3", "none"].includes(minTier)) throw new OperatorError("--min-tier: T0, T1, T2, T3 or none")
+          const patch = { ...(minTier !== undefined ? { min_tier: minTier === "none" ? null : (minTier as "T0" | "T1" | "T2" | "T3") } : {}), ...(shareArg(args.flag("share")) !== undefined ? { share: shareArg(args.flag("share")) as number } : {}), ...(classArg(args.flag("class")) ? { class: classArg(args.flag("class")) as ProjectClass } : {}), ...(verify !== undefined ? { verify: verify === "none" ? [] : verify.split(/\s+/) } : {}), ...(kill !== undefined ? { kill_criteria: kill === "none" ? null : kill } : {}) }
           if (!Object.keys(patch).length) throw new OperatorError(usage)
           const next = setProject(config, id, patch)
           saveConfig(dir, next, `project set ${id}`)
           const pr = next.projects.find((x) => x.id === id) as CompanyConfig["projects"][number]
-          console.log(`${pr.id}: ${pr.class}, ${pct(pr.share)} of effort${pr.verify ? `, verify: ${pr.verify.join(" ")}` : ""}`)
+          console.log(`${pr.id}: ${pr.class}, ${pct(pr.share)} of effort${pr.verify ? `, verify: ${pr.verify.join(" ")}` : ""}${pr.min_tier ? `, every action at least ${pr.min_tier}` : ""}`)
           return true
         }
         if (sub === "remove") {
@@ -610,7 +612,7 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
       const home = process.env["HOME"] ?? dir
       const path = process.env["PATH"] ?? "/usr/local/bin:/usr/bin:/bin" // the Operator's PATH: bun, claude, codex, gh live there
       const pidAlive = () => { const lock = NodePath.join(dir, ".holdco", "supervisor.pid"); const pid = existsSync(lock) ? Number(readFileSync(lock, "utf8")) : 0; return pid > 0 && spawnSync("kill", ["-0", String(pid)]).status === 0 ? pid : 0 }
-      const dashboardUrl = `http://127.0.0.1:${process.env["HOLDCO_DASHBOARD_PORT"] ?? 7117}/?t=${dashboardToken(dir)}`
+      const dashboardUrl = `http://127.0.0.1:${process.env["HOLDCO_DASHBOARD_PORT"] ?? config.runtime.dashboard_port ?? 7117}/?t=${dashboardToken(dir)}`
       const status = () => { const pid = pidAlive(); console.log(`${config.company.name}: supervisor ${pid ? `running (pid ${pid})` : "not running"}\ndashboard: ${dashboardUrl}\nlog: ${logFile}`); return pid }
       const waitUp = async () => { for (let i = 0; i < 20; i++) { if (pidAlive()) return true; await Bun.sleep(500) } return false }
       const run = (cmd: string, args: Array<string>) => spawnSync(cmd, args, { stdio: "pipe", encoding: "utf8" })

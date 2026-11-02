@@ -71,6 +71,8 @@ bunx holdco project set gap-trade --share 0.4 --class core
 bunx holdco project remove old-repo                       # refused while it has open tickets; --force declines them
 ```
 
+A share is also budget: a project's share of `budget.monthly_usd` is its cap for the month, and once it is spent no new work session starts there until next month or a bigger share (`budget.project_shares: soft` keeps the steering and drops the cap). The dashboard shows spend against cap per project, the stall line says "spent its share" instead of going quiet, and the Operator is told once. `min_tier` per project (Settings → Min tier, or `--min-tier T3`) floors every action there — a payments repository stays Operator-approved while a toy project is autonomous. Two companies on one machine: set `runtime.dashboard_port` on the second.
+
 Every change is one commit to `company.yaml`. Removing a project never touches its repository.
 
 ### 5. Your weekly ten minutes
@@ -147,6 +149,8 @@ bunx holdco project add ../other-repo --class experiment --share 20% --verify "b
 bunx holdco project set gap-trade --share 0.4 --class core
 bunx holdco project remove old-repo                       # 열린 티켓이 있으면 거부; --force는 전부 거절 처리
 ```
+
+배분은 예산이기도 합니다. 프로젝트의 배분 × `budget.monthly_usd`가 그 달의 상한이고, 다 쓰면 다음 달이나 배분을 늘리기 전까지 새 작업 세션이 시작되지 않습니다(`budget.project_shares: soft`면 유도만 하고 상한은 없음). 대시보드는 프로젝트별 지출/상한을 보여주고, 정체 진단은 조용히 멈추는 대신 "배분을 다 씀"이라고 말하며, 운영자에게 한 번 알립니다. 프로젝트별 `min_tier`(설정 → 최소 등급, 또는 `--min-tier T3`)는 그 프로젝트의 모든 행동 등급 하한입니다 — 결제 저장소는 운영자 승인으로, 장난감 프로젝트는 자율로. 한 머신에 회사 둘이면 두 번째에 `runtime.dashboard_port`를 지정합니다.
 
 모든 변경은 `company.yaml`에 커밋 하나입니다. 프로젝트 제거는 저장소를 건드리지 않습니다.
 

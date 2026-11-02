@@ -63,12 +63,14 @@ export interface ProjectPatch {
   readonly verify?: ReadonlyArray<string>
   readonly kill_criteria?: string | null
   readonly merge?: "local" | "github"
+  /** D71: a tier floor for every action in the project; null clears it. */
+  readonly min_tier?: "T0" | "T1" | "T2" | "T3" | null
 }
 
 export const setProject = (config: CompanyConfig, id: string, patch: ProjectPatch): CompanyConfig => {
   const cur = config.projects.find((p) => p.id === id)
   if (!cur) throw new ProjectError(`no project '${id}' (${config.projects.map((p) => p.id).join(", ") || "none registered"})`)
-  const { verify: _v, verify_timeout: _t, kill_criteria: _k, ...rest } = cur
+  const { verify: _v, verify_timeout: _t, kill_criteria: _k, min_tier: _m, ...rest } = cur
   const next: Project = {
     ...rest,
     ...(patch.share !== undefined ? { share: patch.share } : {}),
@@ -76,6 +78,7 @@ export const setProject = (config: CompanyConfig, id: string, patch: ProjectPatc
     ...(patch.merge !== undefined ? { merge: patch.merge } : {}),
     ...(patch.verify === undefined ? (cur.verify ? { verify: cur.verify, ...(cur.verify_timeout ? { verify_timeout: cur.verify_timeout } : {}) } : {}) : patch.verify.length ? { verify: [...patch.verify], ...(cur.verify_timeout ? { verify_timeout: cur.verify_timeout } : {}) } : {}),
     ...(patch.kill_criteria === undefined ? (cur.kill_criteria ? { kill_criteria: cur.kill_criteria } : {}) : patch.kill_criteria === null ? {} : { kill_criteria: patch.kill_criteria }),
+    ...(patch.min_tier === undefined ? (cur.min_tier ? { min_tier: cur.min_tier } : {}) : patch.min_tier === null ? {} : { min_tier: patch.min_tier }),
   }
   return validated(config, config.projects.map((p) => (p.id === id ? next : p)))
 }

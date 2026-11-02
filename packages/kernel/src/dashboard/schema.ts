@@ -58,7 +58,7 @@ export const Activity = Schema.Struct({ ticket_id: Str, at: Num, actor: Str, fro
 
 /** D70: a registered project with what the Operator weighs it against — spend this month and open work. */
 export const ProjectClass = Schema.Literals(["core", "experiment", "maintenance", "brand"])
-export const ProjectRow = Schema.Struct({ id: Str, path: Str, class: ProjectClass, share: Num, merge: Str, verify: Schema.NullOr(Schema.Array(Str)), kill_criteria: NullStr, spent_month: Num, open: Num, running: Num, exists: Bool })
+export const ProjectRow = Schema.Struct({ id: Str, path: Str, class: ProjectClass, share: Num, merge: Str, verify: Schema.NullOr(Schema.Array(Str)), kill_criteria: NullStr, min_tier: Schema.NullOr(Tier), spent_month: Num, cap_month: Num, capped: Bool, open: Num, running: Num, exists: Bool })
 export const Department = Schema.Struct({ id: Str, share: Num, open: Num, senior: Str, running: Num, actions: Schema.Array(Str) })
 export const Org = Schema.Struct({ executive: Str, improvement: Bool, juniors: Bool, departments: Schema.Array(Department), roles: Schema.Record(Str, Str), by_department: Schema.Record(Str, Str), engines: Schema.Array(Str), models: Schema.Record(Str, Schema.Array(Str)) })
 export const Settings = Schema.Struct({
@@ -142,7 +142,7 @@ export const Action = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("comment"), id: Str, body: Str }),
   Schema.Struct({ kind: Schema.Literal("role_set"), role: Str, assignment: Str }),
   Schema.Struct({ kind: Schema.Literal("project_add"), path: Str, id: Schema.optionalKey(Str), class: Schema.optionalKey(ProjectClass), share: Schema.optionalKey(Num), verify: Schema.optionalKey(Str) }),
-  Schema.Struct({ kind: Schema.Literal("project_set"), id: Str, share: Schema.optionalKey(Num), class: Schema.optionalKey(ProjectClass), verify: Schema.optionalKey(Str), kill_criteria: Schema.optionalKey(NullStr) }),
+  Schema.Struct({ kind: Schema.Literal("project_set"), id: Str, share: Schema.optionalKey(Num), class: Schema.optionalKey(ProjectClass), verify: Schema.optionalKey(Str), kill_criteria: Schema.optionalKey(NullStr), min_tier: Schema.optionalKey(Schema.NullOr(Tier)) }),
   Schema.Struct({ kind: Schema.Literal("project_shares"), shares: Schema.Record(Str, Num) }),
   Schema.Struct({ kind: Schema.Literal("project_remove"), id: Str, force: Schema.optionalKey(Bool) }),
   Schema.Struct({ kind: Schema.Literal("settings"), strategy: Schema.optionalKey(Str), budget: Schema.optionalKey(Schema.Struct({ monthly_usd: Schema.optionalKey(Num), session_max_usd: Schema.optionalKey(Num) })), inbox: Schema.optionalKey(Schema.Struct({ timeout: Schema.optionalKey(Str), batch_at: Schema.optionalKey(Str) })), audit_weekly_sample: Schema.optionalKey(Num), runtime: Schema.optionalKey(Schema.Struct({ max_concurrent_sessions: Schema.optionalKey(Num), max_attempts: Schema.optionalKey(Num) })) }),

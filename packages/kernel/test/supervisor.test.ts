@@ -271,6 +271,54 @@ describe("failure paths", () => {
   })
 })
 
+describe("project shares are budget (D71)", () => {
+  test("a project that spent its share gets no new session; the other project keeps working; the Operator is told once", async () => {
+    const c = company("projshare", (raw) => {
+      ;(raw["budget"] as Record<string, unknown>)["monthly_usd"] = 100
+      ;(raw["budget"] as Record<string, unknown>)["session_max_usd"] = 5
+      ;(raw["projects"] as Array<Record<string, unknown>>).push({ id: "side", path: `../projshare-app`, class: "experiment", share: 0.1, kill_criteria: "none", locked: [] })
+      ;(raw["projects"] as Array<Record<string, unknown>>)[0]!["share"] = 0.9
+    })
+    const clock = { now: Date.UTC(2026, 10, 2, 9) }
+    const engine = new FakeEngine({}, 0.5)
+    const { sup, store, sent } = makeSupervisor(c, engine, clock)
+    await sup.boot()
+    // `side` has a $10 cap for the month and has already spent it
+    store.charge({ at: clock.now, role: "x", department: "engineering", project: "side", session_id: null, usd: 10, source: "test" })
+    const stuck = store.createTicket({ department: "engineering", title: "side work", goal: "y", why: "z", done_criteria: ["a"], opened_by: "operator", project: "side", state: "triaged", action: "code.merge.app", now: clock.now })
+    const fine = store.createTicket({ department: "engineering", title: "app work", goal: "y", why: "z", done_criteria: ["a"], opened_by: "operator", project: "app", state: "triaged", action: "code.merge.app", now: clock.now })
+    await cycle(sup, clock, 4)
+    expect(engine.runs.filter((r) => r.role.kind === "senior").map((r) => r.ticketId)).toContain(fine.id)
+    expect(engine.runs.map((r) => r.ticketId)).not.toContain(stuck.id)
+    expect(store.ticket(stuck.id)?.state).toBe("triaged")
+    expect(sent.filter((s) => s.includes("project side has spent its 10% share")).length).toBe(1)
+    const burn = sup.projectBurn(clock.now)
+    expect(burn.get("side")).toMatchObject({ cap: 10, spent: 10 })
+    expect(burn.get("side")?.remaining).toBeLessThanOrEqual(0)
+    // D63: the stall names the cap, not a mystery
+    await cycle(sup, clock, 16)
+    expect(sent.some((s) => s.includes(stuck.id) && s.includes("spent its 10% share"))).toBe(true)
+    await sup.stop()
+  })
+  test("soft shares only steer: the capped project still runs", async () => {
+    const c = company("projsoft", (raw) => {
+      ;(raw["budget"] as Record<string, unknown>)["monthly_usd"] = 100
+      ;(raw["budget"] as Record<string, unknown>)["project_shares"] = "soft"
+      ;(raw["projects"] as Array<Record<string, unknown>>)[0]!["share"] = 0.05
+    })
+    const clock = { now: Date.UTC(2026, 10, 2, 9) }
+    const engine = new FakeEngine({}, 0.5)
+    const { sup, store, sent } = makeSupervisor(c, engine, clock)
+    await sup.boot()
+    store.charge({ at: clock.now, role: "x", department: "engineering", project: "app", session_id: null, usd: 5, source: "test" })
+    const t = store.createTicket({ department: "engineering", title: "app work", goal: "y", why: "z", done_criteria: ["a"], opened_by: "operator", project: "app", state: "triaged", action: "code.merge.app", now: clock.now })
+    await cycle(sup, clock, 4)
+    expect(engine.runs.map((r) => r.ticketId)).toContain(t.id)
+    expect(sent.some((s) => s.includes("shares are soft"))).toBe(true)
+    await sup.stop()
+  })
+})
+
 describe("Improvement on operational signals (D66)", () => {
   test("the cycle runs after ten finished tickets without any Operator label, and its prompt carries rejections, verify failures and costs", async () => {
     const c = company("signals", (raw) => {

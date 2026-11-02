@@ -117,6 +117,8 @@ const Runtime = Schema.Struct({
   /** A ticket that has not moved for this long with no session is diagnosed and reported (D63); default 15m. */
   stall_after: Schema.optionalKey(Duration),
   max_attempts: IntIn(1, 10),
+  /** D71: the dashboard's port (default 7117); two companies on one machine need two. */
+  dashboard_port: Schema.optionalKey(IntIn(1024, 65535)),
 })
 
 const Modules = Schema.Struct({
@@ -193,6 +195,12 @@ const Budget = Schema.Struct({
   shares: Schema.Record(Slug, Ratio),
   /** Operator attests that a hard spend cap is set at the model provider. Doctor warns while false. */
   provider_cap_set: Schema.Boolean,
+  /**
+   * D71: a project's share of effort is also its share of `monthly_usd`. `hard` (default): once a project has
+   * spent its share, no new work session starts on it until next month or a bigger share; `soft`: the share
+   * steers the CEO and the dispatch order only.
+   */
+  project_shares: Schema.optionalKey(Schema.Literals(["hard", "soft"])),
 })
 
 const Project = Schema.Struct({
@@ -204,6 +212,11 @@ const Project = Schema.Struct({
   /** Operator-only paths inside the project, as globs relative to `path`. */
   locked: Schema.Array(Text),
   kill_criteria: Schema.optionalKey(Text),
+  /**
+   * D71: a floor under every action's tier in this project — `T3` makes a payments repository Operator-approved
+   * whatever the company-wide autonomy says, while a toy project stays autonomous. Locked paths still force T3.
+   */
+  min_tier: Schema.optionalKey(Schema.Literals(["T0", "T1", "T2", "T3"])),
   /** How verified branches land (D51): `local` merges and pushes main; `github` opens and merges a PR with `gh`. */
   merge: Schema.optionalKey(Schema.Literals(["local", "github"])),
   /** With `merge: github`, how long to wait for checks before rejecting (default 20m). */

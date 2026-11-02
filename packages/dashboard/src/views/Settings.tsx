@@ -31,17 +31,18 @@ const Projects = ({ S, act }: { S: Snapshot; act: ReturnType<typeof useAct> }) =
   }
   return (
     <Card pad><div {...ui.stack()}>
-      <div><h3 {...ui.h3()}>{t("Projects & allocation")}</h3><p {...cn(ui.small(), ui.muted())} style={{ margin: "4px 0 0" }}>{t("Share of effort per project. The CEO opens the next ticket where actual spend is under its share; core is dispatched first. Change it whenever your priorities do.")}</p></div>
+      <div><h3 {...ui.h3()}>{t("Projects & allocation")}</h3><p {...cn(ui.small(), ui.muted())} style={{ margin: "4px 0 0" }}>{t("Share of effort per project — and of the monthly budget: a project that has spent its share gets no new session until next month or a bigger share. The CEO opens the next ticket where a project is under its share; core is dispatched first. Change it whenever your priorities do.")}</p></div>
       {S.projects.length ? <div style={{ overflowX: "auto" }}><table {...ui.table()}>
-        <thead><tr><Th>{t("Project")}</Th><Th>{t("Class")}</Th><Th style={{ width: 90 }}>{t("Share %")}</Th><Th>{t("This month")}</Th><Th>{t("Verify command")}</Th><Th /></tr></thead>
+        <thead><tr><Th>{t("Project")}</Th><Th>{t("Class")}</Th><Th style={{ width: 90 }}>{t("Share %")}</Th><Th>{t("This month / cap")}</Th><Th>{t("Verify command")}</Th><Th>{t("Min tier")}</Th><Th /></tr></thead>
         <tbody>{S.projects.map((p) => {
           const actual = spentTotal > 0 ? p.spent_month / spentTotal : 0
           return <tr key={p.id}>
             <Td><div><strong>{p.id}</strong>{!p.exists ? <> <Pill tone="bad">{t("repository missing")}</Pill></> : null}</div><div {...cn(ui.small(), ui.muted(), ui.mono())}>{p.path}</div><div {...cn(ui.small(), ui.muted())}>{p.open ? t("{n} open", { n: p.open }) : t("nothing open")}{p.running ? ` · ${t("{n} running", { n: p.running })}` : ""}</div></Td>
             <Td><select {...cn(ui.input(), ui.select())} value={p.class} onChange={(e) => void act({ kind: "project_set", id: p.id, class: e.target.value as Cls }, t("{id} saved", { id: p.id }))}>{CLASSES.map((c) => <option key={c} value={c}>{t(CLASS_LABEL[c])}</option>)}</select>{p.kill_criteria ? <div {...cn(ui.small(), ui.muted())} title={t("kill criteria")}>{p.kill_criteria}</div> : null}</Td>
             <Td><input {...ui.input()} type="number" min={0} max={100} value={shares[p.id] ?? ""} onChange={(e) => setShares({ ...shares, [p.id]: e.target.value })} /></Td>
-            <Td><div {...ui.num()}>{usd(p.spent_month)} · {Math.round(actual * 100)}%</div><Meter ratio={p.share > 0 ? Math.min(1, actual / p.share) : actual > 0 ? 1 : 0} /><div {...cn(ui.small(), ui.muted())}>{spentTotal === 0 ? t("nothing spent yet") : actual > p.share + 0.1 ? t("over its share") : actual < p.share - 0.1 ? t("under its share") : t("on allocation")}</div></Td>
+            <Td><div {...ui.num()}>{usd(p.spent_month)} / {usd(p.cap_month)}</div><Meter ratio={p.cap_month > 0 ? Math.min(1, p.spent_month / p.cap_month) : p.spent_month > 0 ? 1 : 0} /><div {...cn(ui.small(), ui.muted())}>{p.capped ? <Pill tone="warn">{t("capped: no new sessions this month")}</Pill> : spentTotal === 0 ? t("nothing spent yet") : actual > p.share + 0.1 ? t("over its share") : actual < p.share - 0.1 ? t("under its share") : t("on allocation")}</div></Td>
             <Td><input {...ui.input()} defaultValue={p.verify?.join(" ") ?? ""} placeholder={t("none")} onBlur={(e) => { if (e.target.value.trim() !== (p.verify?.join(" ") ?? "")) void act({ kind: "project_set", id: p.id, verify: e.target.value }, t("{id} saved", { id: p.id })) }} /></Td>
+            <Td><select {...cn(ui.input(), ui.select())} value={p.min_tier ?? ""} title={t("A floor under every action's tier in this project: T3 means you approve everything here, whatever the company-wide autonomy.")} onChange={(e) => void act({ kind: "project_set", id: p.id, min_tier: (e.target.value || null) as "T0" | "T1" | "T2" | "T3" | null }, t("{id} saved", { id: p.id }))}><option value="">{t("company default")}</option>{(["T1", "T2", "T3"] as const).map((x) => <option key={x} value={x}>{x === "T3" ? t("T3 — you approve everything") : x === "T2" ? t("T2 — COO second key") : x}</option>)}</select></Td>
             <Td><Button sm tone="bad" onClick={() => remove(p)}>{t("Remove")}</Button></Td>
           </tr>
         })}</tbody>

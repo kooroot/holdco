@@ -790,7 +790,7 @@ export class Supervisor {
     const found = stalls({
       config: this.config, store: this.store, now, lastCeoAt: lastCeo, after: stallAfterMs(this.config),
       nextCeoAt: this.config.modules.executive === "none" ? null : Math.min(lastCeo + durationMs(this.config.policy.executive.ceo_cycle), lastCeo + WORK_WAKE_MS),
-      admitReason: (t) => { const g = this.admit(t.state === "ready_for_verification" ? "verification" : t.department === "improvement" ? "improvement" : "senior", t.department, active, now); return typeof g === "string" ? g : undefined },
+      admitReason: (t) => { const g = this.admit(t.state === "ready_for_verification" ? "verification" : t.department === "improvement" ? "improvement" : "senior", t.department, active, now, t.state === "ready_for_verification" ? undefined : t); return typeof g === "string" ? g : undefined },
     })
     const current = new Set(found.map((f) => f.ticket_id))
     for (const f of found) {
@@ -880,6 +880,13 @@ export class Supervisor {
         void this.notifier.send("critical", `tripwire: ${d.department} spend spike; L2 raised`)
       }
     }
+    for (const [id, b] of this.projectBurn(now)) {
+      const key = `project_cap:${id}:${new Date(now).toISOString().slice(0, 7)}`
+      if (b.cap > 0 && b.cap - b.spent < MIN_SESSION_USD && !this.store.getMeta(key)) {
+        this.store.setMeta(key, String(now))
+        void this.notifier.send("warning", (this.config.budget.project_shares ?? "hard") === "hard" ? `project ${id} has spent its ${Math.round(b.share * 100)}% share for the month ($${b.cap.toFixed(2)}); new sessions on it wait for next month or a bigger share (Settings → Projects)` : `project ${id} has spent its ${Math.round(b.share * 100)}% share for the month ($${b.cap.toFixed(2)}); shares are soft, so work continues`)
+      }
+    }
     for (const [dept, share] of Object.entries(this.config.budget.shares)) {
       if (share * this.config.budget.monthly_usd - this.store.spent(dept, this.monthStart(now)) < MIN_SESSION_USD && !readControl(this.root).some((i) => i.level === "L2" && i.target === dept)) {
         raiseInterrupt(this.root, "L2", dept, "monthly share reached 100%", now)
@@ -923,7 +930,7 @@ export class Supervisor {
     if ([...this.running.values()].some((r) => r.kind === "improvement" && r.ticketId === "IMPROVEMENT-CYCLE")) return
     const role = this.org.role("improvement")
     const since = now - 2 * WEEK
-    const signals = collectSignals(this.root, this.store, since, now)
+    const signals = collectSignals(this.root, this.store, since, now, this.config.projects)
     const labeled = this.store.labeledTicketIds().size
     const openImprovement = this.store.ticketsIn(["new", "triaged", "in_progress", "ready_for_verification", "verified", "awaiting_approval", "rejected", "blocked"]).filter((t) => t.department === "improvement")
     const prompt = [
@@ -982,11 +989,15 @@ export class Supervisor {
     const spent = Object.fromEntries(this.store.spentByProject(month).map((r) => [r.project ?? "", r.usd]))
     const total = this.config.projects.reduce((a, p) => a + (spent[p.id] ?? 0), 0)
     const open = this.store.ticketsIn(["new", "triaged", "in_progress", "ready_for_verification", "verified", "awaiting_approval", "rejected", "blocked"])
+    const burn = this.projectBurn(now)
+    const hard = (this.config.budget.project_shares ?? "hard") === "hard"
     const lines = this.config.projects.map((p) => {
       const actual = total > 0 ? (spent[p.id] ?? 0) / total : 0
       const gap = p.share - actual
-      const verdict = p.share === 0 ? "no share: open nothing new here" : total === 0 ? "nothing spent yet" : gap > 0.1 ? "UNDER its share — open its next ticket first" : gap < -0.1 ? "over its share — do not open more here until others catch up" : "on allocation"
-      return `- ${p.id} (${p.class}${p.kill_criteria ? `, kill: ${p.kill_criteria}` : ""}): share ${Math.round(p.share * 100)}%, actual ${Math.round(actual * 100)}% ($${(spent[p.id] ?? 0).toFixed(2)}), open ${open.filter((t) => t.project === p.id).length} — ${verdict}`
+      const b = burn.get(p.id)
+      const capped = b !== undefined && b.cap > 0 && b.cap - b.spent < MIN_SESSION_USD
+      const verdict = p.share === 0 ? "no share: open nothing new here" : capped ? (hard ? "CAPPED for the month — open nothing here; the Operator can raise its share" : "spent its share for the month — open nothing more here") : total === 0 ? "nothing spent yet" : gap > 0.1 ? "UNDER its share — open its next ticket first" : gap < -0.1 ? "over its share — do not open more here until others catch up" : "on allocation"
+      return `- ${p.id} (${p.class}${p.kill_criteria ? `, kill: ${p.kill_criteria}` : ""}): share ${Math.round(p.share * 100)}% ($${(b?.cap ?? 0).toFixed(2)} this month), actual ${Math.round(actual * 100)}% ($${(spent[p.id] ?? 0).toFixed(2)}), open ${open.filter((t) => t.project === p.id).length} — ${verdict}`
     })
     const allocated = this.config.projects.reduce((a, p) => a + p.share, 0)
     return allocated < 0.999 ? [...lines, `- ${Math.round((1 - allocated) * 100)}% of effort is unallocated; the Operator has not committed it.`] : lines
@@ -995,27 +1006,53 @@ export class Supervisor {
   // ── dispatch ─────────────────────────────────────────────────────────────
 
   private dispatch(now: number, active: ReadonlyArray<Interrupt>) {
+    // D71: core first, then the project furthest under its share of the month, then priority, then age.
+    const burn = this.projectBurn(now)
     const order = (a: Ticket, b: Ticket) => {
       const cls = (t: Ticket) => ["core", "experiment", "maintenance", "brand"].indexOf(this.config.projects.find((p) => p.id === t.project)?.class ?? "maintenance")
-      return cls(a) - cls(b) || a.priority - b.priority || a.created_at - b.created_at
+      const used = (t: Ticket) => burn.get(t.project ?? "")?.used ?? 0
+      return cls(a) - cls(b) || used(a) - used(b) || a.priority - b.priority || a.created_at - b.created_at
     }
     for (const t of this.store.ticketsIn(["ready_for_verification"]).sort(order)) this.tryStart(t, "verification", now, active)
     for (const t of this.store.ticketsIn(["triaged", "rejected"]).sort(order)) this.tryStart(t, t.department === "improvement" ? "improvement" : "senior", now, active)
   }
 
   /** The session gate (03-runtime §3): interrupts, budget share, slots. */
-  private admit(kind: RoleKind, department: string, active: ReadonlyArray<Interrupt>, now: number): { cap: number } | string {
+  private admit(kind: RoleKind, department: string, active: ReadonlyArray<Interrupt>, now: number, ticket?: Ticket): { cap: number } | string {
     const id = { agentId: "", dept: department, operator: false }
     const blocked = evaluateInterrupts(id, active)
     if (blocked) return blocked.detail
     const spender = this.spenderOf(kind, department)
     const share = this.config.budget.shares[spender] ?? 0
     const reserved = [...this.running.values()].filter((r) => this.spenderOf(r.kind, r.department) === spender).reduce((a, r) => a + r.cap, 0)
-    const remaining = share * this.config.budget.monthly_usd - this.store.spent(spender, this.monthStart(now)) - reserved
+    let remaining = share * this.config.budget.monthly_usd - this.store.spent(spender, this.monthStart(now)) - reserved
     if (remaining < MIN_SESSION_USD) return `${spender} has no budget left this month`
+    // D71: the ticket's project has its own share of the month (hard by default).
+    if (ticket?.project && (this.config.budget.project_shares ?? "hard") === "hard") {
+      const b = this.projectBurn(now).get(ticket.project)
+      if (b) {
+        if (b.cap === 0) return `project ${ticket.project} has no share of effort; give it one in Settings → Projects`
+        if (b.remaining < MIN_SESSION_USD) return `project ${ticket.project} has spent its ${Math.round(b.share * 100)}% share for the month ($${b.cap.toFixed(2)}); work there waits for next month or a bigger share`
+        remaining = Math.min(remaining, b.remaining)
+      }
+    }
     const slots = this.config.runtime.max_concurrent_sessions - this.running.size
     if (slots <= 0) return "no free slot"
     return { cap: Math.min(this.config.budget.session_max_usd, remaining) }
+  }
+
+  /** D71: per project, its cap for the month (share × monthly), what is spent and reserved by running sessions, and the fraction used. */
+  projectBurn(now: number): Map<string, { share: number; cap: number; spent: number; remaining: number; used: number }> {
+    const month = this.monthStart(now)
+    const spent = Object.fromEntries(this.store.spentByProject(month).map((r) => [r.project ?? "", r.usd]))
+    const out = new Map<string, { share: number; cap: number; spent: number; remaining: number; used: number }>()
+    for (const p of this.config.projects) {
+      const cap = p.share * this.config.budget.monthly_usd
+      const reserved = [...this.running.values()].filter((r) => this.store.ticket(r.ticketId)?.project === p.id).reduce((a, r) => a + r.cap, 0)
+      const s = spent[p.id] ?? 0
+      out.set(p.id, { share: p.share, cap, spent: s, remaining: cap - s - reserved, used: cap > 0 ? s / cap : s > 0 ? 1 : 0 })
+    }
+    return out
   }
 
   private spenderOf(kind: RoleKind, department: string): string {
@@ -1025,7 +1062,7 @@ export class Supervisor {
   private tryStart(t: Ticket, kind: "verification" | "senior" | "improvement", now: number, active: ReadonlyArray<Interrupt>) {
     if (t.interrupt_flag !== null || t.lease_holder !== null) return
     if ([...this.running.values()].some((r) => r.ticketId === t.id)) return
-    const gate = this.admit(kind, t.department, active, now)
+    const gate = this.admit(kind, t.department, active, now, kind === "verification" ? undefined : t)
     if (typeof gate === "string") return
     const sessionId = `s-${t.id}-${randomUUID().slice(0, 8)}`
     const ttl = durationMs(this.config.runtime.session_timeout) + durationMs(this.config.runtime.lease_grace)
