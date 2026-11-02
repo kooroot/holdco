@@ -45,7 +45,7 @@ export const diagnose = (ctx: StallContext, t: Ticket): StallDiagnosis | undefin
     case "blocked": return d("waiting for your decision (inbox)", "operator")
     case "new": return d(`waiting for CEO triage${eta}`)
     case "awaiting_approval": {
-      if (t.approval_stage === "inbox") return d("waiting for your approval (inbox)", "operator")
+      if (t.approval_stage === "inbox") return store.inboxOpen().some((i) => i.ticket_id === t.id) ? d("waiting for your approval (inbox)", "operator") : d("at the approval stage with nothing open in the inbox; the kernel's routing did not move it")
       if (t.approval_stage === "needs_proposal") {
         const ceo = lastExecutive(store, "CEO-CYCLE")
         if (ceo?.status && ceo.status !== "success" && ceo.started_at > ctx.lastCeoAt - 1) return d(`the last CEO session ended ${ceo.status}${ceo.report ? `: ${String((JSON.parse(ceo.report) as { error?: string }).error ?? "").slice(0, 160)}` : ""}; the proposal was not written`)

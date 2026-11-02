@@ -374,6 +374,11 @@ export class Supervisor {
     const review = p?.review as { decision?: string } | undefined
     const open = this.store.inboxOpen().find((i) => i.ticket_id === t.id)
     if (open) return
+    // A manual action (no executor declared): the Operator did it by hand → done; declined → declined. Checked here,
+    // on every tick, not only inside execute() — the first live run approved the item and the ticket never moved.
+    const manual = this.store.db.query<{ status: string }, [string]>("SELECT status FROM inbox WHERE ticket_id = ? AND kind = 'manual_action' ORDER BY id DESC LIMIT 1").get(t.id)
+    if (manual?.status === "approved") { this.store.transition(t.id, "done", "operator", "performed by the Operator", now); return }
+    if (manual?.status === "rejected" || manual?.status === "expired") { this.store.transition(t.id, "declined", "operator", `manual action ${manual.status}`, now); return }
     const decided = this.store.db.query<{ status: string }, [string]>("SELECT status FROM inbox WHERE ticket_id = ? AND kind IN ('t3','t2_objection') ORDER BY id DESC LIMIT 1").get(t.id)
     if (decided?.status === "approved") {
       this.execute(t, [], tier, now)
