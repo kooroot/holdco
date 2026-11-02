@@ -541,6 +541,8 @@ describe("worktree dependencies", () => {
     const { provisionDependencies, createWorktree } = await import("../src/supervisor/worktrees.ts")
     const repo = NodePath.join(base, "deps-repo")
     mkdirSync(NodePath.join(repo, "node_modules", "left-pad"), { recursive: true })
+    mkdirSync(NodePath.join(repo, "packages", "seller", "node_modules", "hono"), { recursive: true }) // a workspace's own deps (monorepo)
+    writeFileSync(NodePath.join(repo, "packages", "seller", "package.json"), "{}\n")
     git(repo, "init", "-q", "-b", "main")
     git(repo, "config", "user.email", "t@t")
     git(repo, "config", "user.name", "t")
@@ -551,6 +553,7 @@ describe("worktree dependencies", () => {
     const wt = createWorktree(repo, "t-X", "t/X", "main")
     expect(provisionDependencies(wt, repo)).toContain("symlink")
     expect(existsSync(NodePath.join(wt, "node_modules", "left-pad"))).toBe(true)
+    expect(existsSync(NodePath.join(wt, "packages", "seller", "node_modules", "hono"))).toBe(true) // D73: per-workspace node_modules linked too
     expect(provisionDependencies(wt, repo)).toBeUndefined() // already there
     const plain = NodePath.join(base, "deps-plain")
     mkdirSync(plain)

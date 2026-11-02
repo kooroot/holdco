@@ -1,6 +1,6 @@
 /** Per-session git worktrees (D22). No two sessions ever share a checkout. */
 import { spawnSync } from "node:child_process"
-import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync } from "node:fs"
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync } from "node:fs"
 import * as NodePath from "node:path"
 
 export class WorktreeError extends Error {}
@@ -70,7 +70,10 @@ export const provisionDependencies = (worktree: string, repo: string, log: (line
     try {
       symlinkSync(shared, NodePath.join(worktree, "node_modules"), "dir")
       excludeFromGit(repo, "node_modules")
-      return `node_modules is shared from ${repo} (symlink); do not run the package installer here`
+      // A monorepo keeps per-workspace node_modules too (packages/*/node_modules with the workspace's own deps);
+      // without them tsc in a package cannot resolve 'hono' or '@scope/shared' (second live run). Link every one.
+      const nested = linkNestedModules(repo, worktree)
+      return `node_modules is shared from ${repo} (symlink${nested ? `, plus ${nested} workspace node_modules` : ""}); do not run the package installer here`
     } catch (e) {
       log(`could not link node_modules into ${worktree}: ${String(e)}`)
     }
@@ -82,6 +85,30 @@ export const provisionDependencies = (worktree: string, repo: string, log: (line
     return `dependency install (${cmd} ${args.join(" ")}) failed before the session; checks that need node_modules cannot run`
   }
   return `dependencies installed with ${cmd} ${args.join(" ")}`
+}
+
+/** Every `node_modules` below the main checkout (not inside another one, depth ≤ 4) linked at the same path in the worktree. */
+const linkNestedModules = (repo: string, worktree: string): number => {
+  let n = 0
+  const walk = (rel: string, depth: number) => {
+    if (depth > 4) return
+    let entries: Array<import("node:fs").Dirent>
+    try { entries = readdirSync(NodePath.join(repo, rel), { withFileTypes: true }) } catch { return }
+    for (const e of entries) {
+      if (!e.isDirectory() || e.name.startsWith(".")) continue
+      const childRel = NodePath.join(rel, e.name)
+      if (e.name === "node_modules") {
+        if (rel === "") continue // the root one is linked by the caller
+        const target = NodePath.join(worktree, childRel)
+        if (!existsSync(NodePath.dirname(target)) || existsSync(target)) continue
+        try { symlinkSync(NodePath.join(repo, childRel), target, "dir"); n++ } catch { /* leave it */ }
+        continue
+      }
+      walk(childRel, depth + 1)
+    }
+  }
+  walk("", 0)
+  return n
 }
 
 /** Keep the provisioned link out of `git status` in every worktree (info/exclude is shared by all of them). */
