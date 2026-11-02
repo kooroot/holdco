@@ -56,6 +56,9 @@ export const Release = Schema.Struct({ tag: Str, at: Num, watch_until: Num, chan
 export const ActionLogRow = Schema.Struct({ id: Num, at: Num, ticket_id: NullStr, action: Str, effective_tier: Str, rolled_back: Num, undo: Str, undoable: Bool })
 export const Activity = Schema.Struct({ ticket_id: Str, at: Num, actor: Str, from_state: NullStr, to_state: Str, note: NullStr, title: Str })
 
+/** D70: a registered project with what the Operator weighs it against — spend this month and open work. */
+export const ProjectClass = Schema.Literals(["core", "experiment", "maintenance", "brand"])
+export const ProjectRow = Schema.Struct({ id: Str, path: Str, class: ProjectClass, share: Num, merge: Str, verify: Schema.NullOr(Schema.Array(Str)), kill_criteria: NullStr, spent_month: Num, open: Num, running: Num, exists: Bool })
 export const Department = Schema.Struct({ id: Str, share: Num, open: Num, senior: Str, running: Num, actions: Schema.Array(Str) })
 export const Org = Schema.Struct({ executive: Str, improvement: Bool, juniors: Bool, departments: Schema.Array(Department), roles: Schema.Record(Str, Str), by_department: Schema.Record(Str, Str), engines: Schema.Array(Str), models: Schema.Record(Str, Schema.Array(Str)) })
 export const Settings = Schema.Struct({
@@ -73,7 +76,7 @@ export const Snapshot = Schema.Struct({
   interrupts: Schema.Array(Interrupt),
   departments: Schema.Array(Str),
   executive: Str,
-  projects: Schema.Array(Schema.Struct({ id: Str, class: Str, share: Num, merge: Str })),
+  projects: Schema.Array(ProjectRow),
   inbox: Schema.Array(InboxItem),
   inbox_timeout_ms: Num,
   tickets: Schema.Array(TicketListed),
@@ -138,6 +141,10 @@ export const Action = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("ticket_edit"), id: Str, title: Schema.optionalKey(Str), goal: Schema.optionalKey(Str), why: Schema.optionalKey(Str), criteria: Schema.optionalKey(Schema.Array(Str)), priority: Schema.optionalKey(Num), action: Schema.optionalKey(NullStr), project: Schema.optionalKey(NullStr), department: Schema.optionalKey(Str) }),
   Schema.Struct({ kind: Schema.Literal("comment"), id: Str, body: Str }),
   Schema.Struct({ kind: Schema.Literal("role_set"), role: Str, assignment: Str }),
+  Schema.Struct({ kind: Schema.Literal("project_add"), path: Str, id: Schema.optionalKey(Str), class: Schema.optionalKey(ProjectClass), share: Schema.optionalKey(Num), verify: Schema.optionalKey(Str) }),
+  Schema.Struct({ kind: Schema.Literal("project_set"), id: Str, share: Schema.optionalKey(Num), class: Schema.optionalKey(ProjectClass), verify: Schema.optionalKey(Str), kill_criteria: Schema.optionalKey(NullStr) }),
+  Schema.Struct({ kind: Schema.Literal("project_shares"), shares: Schema.Record(Str, Num) }),
+  Schema.Struct({ kind: Schema.Literal("project_remove"), id: Str, force: Schema.optionalKey(Bool) }),
   Schema.Struct({ kind: Schema.Literal("settings"), strategy: Schema.optionalKey(Str), budget: Schema.optionalKey(Schema.Struct({ monthly_usd: Schema.optionalKey(Num), session_max_usd: Schema.optionalKey(Num) })), inbox: Schema.optionalKey(Schema.Struct({ timeout: Schema.optionalKey(Str), batch_at: Schema.optionalKey(Str) })), audit_weekly_sample: Schema.optionalKey(Num), runtime: Schema.optionalKey(Schema.Struct({ max_concurrent_sessions: Schema.optionalKey(Num), max_attempts: Schema.optionalKey(Num) })) }),
 ])
 export type Action = typeof Action.Type

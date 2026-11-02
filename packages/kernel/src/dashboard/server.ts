@@ -45,7 +45,7 @@ export const clientDir = (log: (line: string) => void = () => {}): string | unde
   if (existsSync(NodePath.join(workspaceClient, "vite.config.ts"))) {
     const built = existsSync(NodePath.join(dist, "index.html")) ? statSync(NodePath.join(dist, "index.html")).mtimeMs : 0
     const stale = built < Math.max(newest(NodePath.join(workspaceClient, "src")), statSync(NodePath.join(workspaceClient, "index.html")).mtimeMs, statSync(NodePath.join(workspaceClient, "zyzz.config.ts")).mtimeMs)
-    if (stale) {
+    if (stale && process.env["NODE_ENV"] !== "test") { // tests serve whatever is built; a vite build inside a test is a timeout, not a check
       log("building the dashboard client (packages/dashboard)…")
       const r = spawnSync("bun", ["x", "vite", "build", "--logLevel", "error"], { cwd: workspaceClient, stdio: ["ignore", "inherit", "inherit"] })
       if (r.status !== 0) log("dashboard client build failed; the API still runs")

@@ -24,6 +24,8 @@ export interface ScaffoldOptions {
   /** First project: path to its git repository (absolute or relative to `dir`). */
   readonly projectPath?: string
   readonly projectId?: string
+  /** D70: several projects at once, with the Operator's allocation; takes precedence over `projectPath`. */
+  readonly projects?: ReadonlyArray<ScaffoldProject>
   /** Where the service will run; the wizard picks it from the platform. */
   readonly host?: "linux-systemd" | "macos-launchd"
   /** `false` skips git init / commit / tag (tests without git). */
@@ -36,6 +38,20 @@ export interface ScaffoldOptions {
    */
   readonly packagesDir?: string
 }
+
+export interface ScaffoldProject {
+  readonly path: string
+  readonly id?: string
+  readonly class?: "core" | "experiment" | "maintenance" | "brand"
+  /** Share of the company's effort, 0–1; the shares of all projects sum to at most 1. */
+  readonly share?: number
+  readonly verify?: ReadonlyArray<string>
+}
+
+/** The id a repository gets when none is given: its directory name as a slug. */
+export const projectIdFor = (path: string): string => NodePath.basename(NodePath.resolve(path)).toLowerCase().replace(/[^a-z0-9-]/g, "-")
+
+export const DEFAULT_LOCKED: ReadonlyArray<string> = ["AGENTS.md", "CLAUDE.md", ".github/**"]
 
 export interface ScaffoldResult {
   readonly dir: string
@@ -138,16 +154,25 @@ export const scaffold = (opts: ScaffoldOptions): ScaffoldResult => {
     throw new TemplateError(`${opts.dir} is not empty`)
   }
   const preset = loadPreset(opts.preset)
-  const projectRel = opts.projectPath === undefined ? undefined : NodePath.relative(opts.dir, NodePath.resolve(opts.projectPath))
-  const projectId = opts.projectId ?? (opts.projectPath === undefined ? undefined : NodePath.basename(NodePath.resolve(opts.projectPath)).toLowerCase().replace(/[^a-z0-9-]/g, "-"))
+  const list: ReadonlyArray<ScaffoldProject> = opts.projects ?? (opts.projectPath === undefined ? [] : [{ path: opts.projectPath, share: 1, ...(opts.projectId ? { id: opts.projectId } : {}) }])
+  // Projects without a share split what the others leave unallocated.
+  const unsized = list.filter((pr) => pr.share === undefined).length
+  const left = Math.max(0, 1 - list.reduce((a, pr) => a + (pr.share ?? 0), 0))
+  const projects = list.map((pr) => ({
+    id: pr.id ?? projectIdFor(pr.path),
+    path: NodePath.relative(opts.dir, NodePath.resolve(pr.path)),
+    class: pr.class ?? ("core" as const),
+    share: pr.share ?? (unsized ? Math.round((left / unsized) * 100) / 100 : 0),
+    locked: [...DEFAULT_LOCKED],
+    ...(pr.verify && pr.verify.length ? { verify: [...pr.verify] } : {}),
+    ...((pr.class ?? "core") === "experiment" ? { kill_criteria: "no progress in 4 weeks" } : {}),
+  }))
   const named = {
     ...preset,
     company: { ...preset.company, name: opts.companyName ?? preset.company.name, mission: opts.mission ?? preset.company.mission, timezone: opts.timezone ?? preset.company.timezone, ...(opts.language ? { language: opts.language } : {}) },
     operator: { ...preset.operator, github: opts.github ?? preset.operator.github },
     ...(opts.host ? { runtime: { ...preset.runtime, host: opts.host } } : {}),
-    ...(projectRel !== undefined && projectId !== undefined
-      ? { projects: [{ id: projectId, path: projectRel, class: "core" as const, share: 1, locked: ["AGENTS.md", "CLAUDE.md", ".github/**"] }] }
-      : {}),
+    ...(projects.length ? { projects } : {}),
   }
   const assembled = assemble(opts.autonomy === "autonomous" ? autonomous(named) : named)
   if (!assembled.ok) throw new TemplateError(assembled.errors.join("\n"))

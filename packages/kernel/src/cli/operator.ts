@@ -22,6 +22,7 @@ import { activeDecisions, ingestObservation, recordDecision, revokeDecision } fr
 import { dashboardToken, startDashboard } from "../dashboard/server.ts"
 import { discoverChatId, TelegramBridge, telegramConfig } from "../supervisor/telegram.ts"
 import { envFilePath } from "./env.ts"
+import { addProject, openTicketsFor, PROJECT_CLASSES, type ProjectClass, ProjectError, removeProject, setProject } from "../config/projects.ts"
 import type { Level } from "../schema/interrupts.ts"
 
 export class OperatorError extends Error {}
@@ -456,29 +457,75 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
       return true
     }
     case "project": {
+      // D70: list | add <path> [--id --class --share --verify "cmd"] | set <id> [--share --class --verify "cmd"|none --kill …] | remove <id> [--force] | verify <id> [cmd…]
       const config = loadConfig(dir)
-      if (sub === "verify") {
-        // holdco project verify <id> [cmd args…]   — the command that proves the project works (D65); none clears it
-        const id = args.positional[2] ?? (() => { throw new OperatorError("usage: holdco project verify <id> [command…]   (no command clears it)") })()
-        const argv = args.positional.slice(3)
-        if (!config.projects.some((p) => p.id === id)) throw new OperatorError(`no project '${id}' (${config.projects.map((p) => p.id).join(", ")})`)
-        const projects = config.projects.map((p) => (p.id === id ? (argv.length ? { ...p, verify: argv } : (({ verify: _v, verify_timeout: _t, ...rest }) => rest)(p)) : p))
-        saveConfig(dir, Schema.decodeUnknownSync(CompanyConfig)({ ...config, projects }), `project ${id}: verify ${argv.length ? argv.join(" ") : "cleared"}`)
-        console.log(argv.length ? `${id}: Verification runs \`${argv.join(" ")}\` before every judge; a failure rejects the ticket` : `${id}: verify command cleared`)
-        return true
+      const usage = "usage: holdco project list | add <path> [--id x] [--class core|experiment|maintenance|brand] [--share 0.3] [--verify \"bun test\"] | set <id> [--share 0.3] [--class …] [--verify \"cmd\"|none] [--kill \"…\"] | remove <id> [--force] | verify <id> [command…]"
+      const pct = (x: number) => `${Math.round(x * 100)}%`
+      const shareArg = (v: string | undefined): number | undefined => {
+        if (v === undefined) return undefined
+        const n = Number(v.replace(/%$/, ""))
+        if (!Number.isFinite(n) || n < 0) throw new OperatorError(`--share: a number between 0 and 1 (or a percent), not '${v}'`)
+        return v.endsWith("%") || n > 1 ? n / 100 : n
       }
-      if (sub !== "add") throw new OperatorError("usage: holdco project add <path> --id id [--class core|experiment|maintenance|brand] [--share 0.5]   |   holdco project verify <id> [command…]")
-      const path = args.positional[2] ?? (() => { throw new OperatorError("path is required") })()
-      const abs = NodePath.resolve(dir, path)
-      if (!existsSync(NodePath.join(abs, ".git"))) throw new OperatorError(`${abs} is not a git repository`)
-      const id = args.flag("id") ?? NodePath.basename(abs).toLowerCase().replace(/[^a-z0-9-]/g, "-")
-      const cls = (args.flag("class") ?? "core") as CompanyConfig["projects"][number]["class"]
-      const share = Number(args.flag("share") ?? (config.projects.length === 0 ? 1 : 0))
-      const project = { id, path: NodePath.relative(dir, abs), class: cls, share, locked: ["AGENTS.md", "CLAUDE.md", ".github/**"], ...(cls === "experiment" ? { kill_criteria: args.flag("kill") ?? "no progress in 4 weeks" } : {}) }
-      const next = Schema.decodeUnknownSync(CompanyConfig)({ ...config, projects: [...config.projects.filter((p) => p.id !== id), project] })
-      saveConfig(dir, next, `project add ${id}`)
-      console.log(`project ${id} registered at ${project.path} (${cls}, share ${share})`)
-      return true
+      const classArg = (v: string | undefined): ProjectClass | undefined => {
+        if (v === undefined) return undefined
+        if (!PROJECT_CLASSES.includes(v as ProjectClass)) throw new OperatorError(`--class: one of ${PROJECT_CLASSES.join(", ")}`)
+        return v as ProjectClass
+      }
+      try {
+        if (sub === undefined || sub === "list") {
+          if (!config.projects.length) { console.log("no projects registered: holdco project add <path>"); return true }
+          const store = Store.open(dir)
+          const since = new Date(); since.setUTCDate(1); since.setUTCHours(0, 0, 0, 0)
+          const spent = Object.fromEntries(store.spentByProject(since.getTime()).map((r) => [r.project ?? "", r.usd]))
+          console.log("id               class        share   spent (month)  open  path  ·  verify")
+          for (const pr of config.projects) console.log(`${pr.id.padEnd(16)} ${pr.class.padEnd(12)} ${pct(pr.share).padStart(5)}   ${`$${(spent[pr.id] ?? 0).toFixed(2)}`.padStart(13)}  ${String(openTicketsFor(store, pr.id).length).padStart(4)}  ${pr.path}${pr.verify ? `  ·  ${pr.verify.join(" ")}` : ""}`)
+          const total = config.projects.reduce((a, pr) => a + pr.share, 0)
+          if (total < 0.999) console.log(`${pct(1 - total)} of effort is unallocated (the CEO treats it as free)`)
+          store.close()
+          return true
+        }
+        if (sub === "verify") {
+          const id = args.positional[2] ?? (() => { throw new OperatorError("usage: holdco project verify <id> [command…]   (no command clears it)") })()
+          const argv = args.positional.slice(3)
+          saveConfig(dir, setProject(config, id, { verify: argv }), `project ${id}: verify ${argv.length ? argv.join(" ") : "cleared"}`)
+          console.log(argv.length ? `${id}: Verification runs \`${argv.join(" ")}\` before every judge; a failure rejects the ticket` : `${id}: verify command cleared`)
+          return true
+        }
+        if (sub === "add") {
+          const path = args.positional[2] ?? (() => { throw new OperatorError("path is required") })()
+          const verify = args.flag("verify")
+          const r = addProject(dir, config, { path, ...(args.flag("id") ? { id: args.flag("id") as string } : {}), ...(classArg(args.flag("class")) ? { class: classArg(args.flag("class")) as ProjectClass } : {}), ...(shareArg(args.flag("share")) !== undefined ? { share: shareArg(args.flag("share")) as number } : {}), ...(verify ? { verify: verify.split(/\s+/) } : {}), ...(args.flag("kill") ? { kill_criteria: args.flag("kill") as string } : {}) })
+          saveConfig(dir, r.config, `project add ${r.project.id}`)
+          console.log(`project ${r.project.id} registered at ${r.project.path} (${r.project.class}, ${pct(r.project.share)} of effort${r.project.verify ? `, verify: ${r.project.verify.join(" ")}` : ""})`)
+          return true
+        }
+        if (sub === "set") {
+          const id = args.positional[2] ?? (() => { throw new OperatorError(usage) })()
+          const verify = args.flag("verify")
+          const kill = args.flag("kill")
+          const patch = { ...(shareArg(args.flag("share")) !== undefined ? { share: shareArg(args.flag("share")) as number } : {}), ...(classArg(args.flag("class")) ? { class: classArg(args.flag("class")) as ProjectClass } : {}), ...(verify !== undefined ? { verify: verify === "none" ? [] : verify.split(/\s+/) } : {}), ...(kill !== undefined ? { kill_criteria: kill === "none" ? null : kill } : {}) }
+          if (!Object.keys(patch).length) throw new OperatorError(usage)
+          const next = setProject(config, id, patch)
+          saveConfig(dir, next, `project set ${id}`)
+          const pr = next.projects.find((x) => x.id === id) as CompanyConfig["projects"][number]
+          console.log(`${pr.id}: ${pr.class}, ${pct(pr.share)} of effort${pr.verify ? `, verify: ${pr.verify.join(" ")}` : ""}`)
+          return true
+        }
+        if (sub === "remove") {
+          const id = args.positional[2] ?? (() => { throw new OperatorError(usage) })()
+          const store = Store.open(dir)
+          const r = removeProject(config, store, id, { force: args.has("force") })
+          store.close()
+          saveConfig(dir, r.config, `project remove ${id}`)
+          console.log(`project ${id} removed${r.declined.length ? `; declined ${r.declined.join(", ")}` : ""} (its repository is untouched)`)
+          return true
+        }
+        throw new OperatorError(usage)
+      } catch (e) {
+        if (e instanceof ProjectError) throw new OperatorError(e.message)
+        throw e
+      }
     }
     case "roles":
     case "models": {

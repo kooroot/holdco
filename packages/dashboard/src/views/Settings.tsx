@@ -1,7 +1,65 @@
 import { useEffect, useState } from "react"
 import { useAct, useSnapshot } from "../hooks.ts"
-import { cn, Button, Card, Empty, Head, ui } from "../ui.tsx"
+import { cn, Button, Card, Empty, Head, Meter, Pill, Td, Th, ui } from "../ui.tsx"
 import { t, useLang, LANGS, setLang, type Lang } from "../i18n.ts"
+import { usd } from "../format.ts"
+import type { Snapshot } from "../api.ts"
+import { style } from "../../zyzz.config.ts"
+
+const overAllocated = style({ color: "bad", fontSize: "sm" })
+
+const CLASSES = ["core", "experiment", "maintenance", "brand"] as const
+type Cls = (typeof CLASSES)[number]
+const CLASS_LABEL: Record<Cls, string> = { core: "Core", experiment: "Experiment", maintenance: "Maintenance", brand: "Brand" }
+
+/** D70: the projects the company works on and the Operator's allocation — editable any time, each save committed. */
+const Projects = ({ S, act }: { S: Snapshot; act: ReturnType<typeof useAct> }) => {
+  const [shares, setShares] = useState<Record<string, string> | null>(null)
+  const [add, setAdd] = useState<{ path: string; cls: Cls; verify: string } | null>(null)
+  useEffect(() => { if (shares === null || Object.keys(shares).join() !== S.projects.map((p) => p.id).join()) setShares(Object.fromEntries(S.projects.map((p) => [p.id, String(Math.round(p.share * 100))]))) }, [S.projects, shares])
+  if (shares === null) return null
+  const pct = (id: string) => Number(shares[id] ?? 0)
+  const total = S.projects.reduce((a, p) => a + pct(p.id), 0)
+  const dirty = S.projects.some((p) => Math.round(p.share * 100) !== pct(p.id))
+  const spentTotal = S.projects.reduce((a, p) => a + p.spent_month, 0)
+  const bad = total > 100 || S.projects.some((p) => !Number.isFinite(pct(p.id)) || pct(p.id) < 0)
+  const remove = (p: Snapshot["projects"][number]) => {
+    if (p.open > 0) {
+      if (!confirm(t("{id} has {n} open tickets. Remove it anyway? They are declined; the repository is untouched.", { id: p.id, n: p.open }))) return
+      void act({ kind: "project_remove", id: p.id, force: true }, t("{id} removed", { id: p.id }))
+    } else if (confirm(t("Remove {id} from the company? The repository is untouched.", { id: p.id }))) void act({ kind: "project_remove", id: p.id }, t("{id} removed", { id: p.id }))
+  }
+  return (
+    <Card pad><div {...ui.stack()}>
+      <div><h3 {...ui.h3()}>{t("Projects & allocation")}</h3><p {...cn(ui.small(), ui.muted())} style={{ margin: "4px 0 0" }}>{t("Share of effort per project. The CEO opens the next ticket where actual spend is under its share; core is dispatched first. Change it whenever your priorities do.")}</p></div>
+      {S.projects.length ? <div style={{ overflowX: "auto" }}><table {...ui.table()}>
+        <thead><tr><Th>{t("Project")}</Th><Th>{t("Class")}</Th><Th style={{ width: 90 }}>{t("Share %")}</Th><Th>{t("This month")}</Th><Th>{t("Verify command")}</Th><Th /></tr></thead>
+        <tbody>{S.projects.map((p) => {
+          const actual = spentTotal > 0 ? p.spent_month / spentTotal : 0
+          return <tr key={p.id}>
+            <Td><div><strong>{p.id}</strong>{!p.exists ? <> <Pill tone="bad">{t("repository missing")}</Pill></> : null}</div><div {...cn(ui.small(), ui.muted(), ui.mono())}>{p.path}</div><div {...cn(ui.small(), ui.muted())}>{p.open ? t("{n} open", { n: p.open }) : t("nothing open")}{p.running ? ` · ${t("{n} running", { n: p.running })}` : ""}</div></Td>
+            <Td><select {...cn(ui.input(), ui.select())} value={p.class} onChange={(e) => void act({ kind: "project_set", id: p.id, class: e.target.value as Cls }, t("{id} saved", { id: p.id }))}>{CLASSES.map((c) => <option key={c} value={c}>{t(CLASS_LABEL[c])}</option>)}</select>{p.kill_criteria ? <div {...cn(ui.small(), ui.muted())} title={t("kill criteria")}>{p.kill_criteria}</div> : null}</Td>
+            <Td><input {...ui.input()} type="number" min={0} max={100} value={shares[p.id] ?? ""} onChange={(e) => setShares({ ...shares, [p.id]: e.target.value })} /></Td>
+            <Td><div {...ui.num()}>{usd(p.spent_month)} · {Math.round(actual * 100)}%</div><Meter ratio={p.share > 0 ? Math.min(1, actual / p.share) : actual > 0 ? 1 : 0} /><div {...cn(ui.small(), ui.muted())}>{spentTotal === 0 ? t("nothing spent yet") : actual > p.share + 0.1 ? t("over its share") : actual < p.share - 0.1 ? t("under its share") : t("on allocation")}</div></Td>
+            <Td><input {...ui.input()} defaultValue={p.verify?.join(" ") ?? ""} placeholder={t("none")} onBlur={(e) => { if (e.target.value.trim() !== (p.verify?.join(" ") ?? "")) void act({ kind: "project_set", id: p.id, verify: e.target.value }, t("{id} saved", { id: p.id })) }} /></Td>
+            <Td><Button sm tone="bad" onClick={() => remove(p)}>{t("Remove")}</Button></Td>
+          </tr>
+        })}</tbody>
+      </table></div> : <p {...ui.muted()}>{t("No projects yet. Departments cannot work without one.")}</p>}
+      <div {...ui.row()}>
+        <span {...(bad ? overAllocated() : cn(ui.small(), ui.muted()))}>{t("Allocated: {n}% of 100", { n: total })}{total < 100 && !bad ? ` · ${t("{n}% unallocated", { n: 100 - total })}` : ""}</span>
+        <Button tone="primary" disabled={!dirty || bad} onClick={() => void act({ kind: "project_shares", shares: Object.fromEntries(S.projects.map((p) => [p.id, pct(p.id) / 100])) }, t("Allocation saved and committed"))}>{t("Save allocation")}</Button>
+        <span style={{ marginLeft: "auto" }}><Button sm onClick={() => setAdd(add ? null : { path: "", cls: "core", verify: "" })}>{add ? t("Cancel") : t("Add a project")}</Button></span>
+      </div>
+      {add ? <div {...ui.grid2()} style={{ alignItems: "end" }}>
+        <div {...ui.field()}><label {...ui.label()}>{t("Path to a git repository")}<span {...ui.muted()}> · {t("absolute, or relative to the company directory")}</span></label><input {...ui.input()} autoFocus value={add.path} placeholder="../my-repo" onChange={(e) => setAdd({ ...add, path: e.target.value })} /></div>
+        <div {...ui.field()}><label {...ui.label()}>{t("Class")}</label><select {...cn(ui.input(), ui.select())} value={add.cls} onChange={(e) => setAdd({ ...add, cls: e.target.value as Cls })}>{CLASSES.map((c) => <option key={c} value={c}>{t(CLASS_LABEL[c])}</option>)}</select></div>
+        <div {...ui.field()}><label {...ui.label()}>{t("Verify command")}<span {...ui.muted()}> · {t("optional")}</span></label><input {...ui.input()} value={add.verify} placeholder="bun test" onChange={(e) => setAdd({ ...add, verify: e.target.value })} /></div>
+        <div {...ui.row()}><Button tone="primary" disabled={!add.path.trim()} onClick={() => void act({ kind: "project_add", path: add.path.trim(), class: add.cls, verify: add.verify }, (r) => t("{id} registered — set its share above", { id: String(r["id"]) })).then((r) => { if (r) setAdd(null) })}>{t("Register")}</Button></div>
+      </div> : null}
+    </div></Card>
+  )
+}
 
 export const Settings = () => {
   const q = useSnapshot()
@@ -20,6 +78,7 @@ export const Settings = () => {
   return (
     <>
       <Head title={t("Settings")} lead={t("What the company is for and how much it may spend. Every save is committed to company.yaml or docs/holdco/strategy.md.")} />
+      <div {...ui.stack()} style={{ marginBottom: 14 }}><Projects S={S} act={act} /></div>
       <div {...ui.grid2()}>
         <Card pad><div {...ui.stack()}>
           <div><h3 {...ui.h3()}>{t("Strategy")}</h3><p {...cn(ui.small(), ui.muted())} style={{ margin: "4px 0 0" }}>{t("The CEO reads this at every triage. Objectives, constraints, what not to do.")}</p></div>

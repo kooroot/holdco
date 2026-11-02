@@ -15,7 +15,7 @@ bunx holdco init              # interactive: answers become the company (bunx cr
 
 Until `@holdco/*` is on npm, run it from a checkout: `git clone https://github.com/kooroot/holdco && cd holdco && bun install && bunx holdco init`; the company is linked to the checkout's packages, so `git pull` in the checkout updates it.
 
-The wizard asks for the directory, your GitHub handle (guessed from `gh`), the first project (git repositories near you are listed, or a new one), the command that proves it works (guessed from the repository; Verification runs it before every judge), the organization (full company or solo), how much it does on its own (autonomous by default: code merges need only Verification; you decide deploys, spend and anything irreversible), the models (Claude + Codex when both logins are found), a mission, the first objective, the voice of public posts (full preset), the language, and optionally a Telegram bot token. Then it scaffolds the company, registers the project, installs dependencies, compiles the guard, applies the models, writes the objective and the voice, saves the token to `~/.config/holdco/<company>.env` (mode 600; every `holdco` command loads it), pairs the bot with your chat, and runs `holdco doctor`. A company that passes doctor is one `bunx holdco smoke --cap 1` away from its first real ticket.
+The wizard asks for the directory, your GitHub handle (guessed from `gh`), the projects it works on (pick several from the git repositories near you, add paths, or have it create a new one), per project the command that proves it works (guessed from the repository; Verification runs it before every judge) and, with more than one, its class (core / experiment / maintenance / brand) and the effort split in percent, the organization (full company or solo), how much it does on its own (autonomous by default: code merges need only Verification; you decide deploys, spend and anything irreversible), the models (Claude + Codex when both logins are found), a mission, the first objective, the voice of public posts (full preset), the language, and optionally a Telegram bot token. Then it scaffolds the company, registers the projects with their allocation, installs dependencies, compiles the guard, applies the models, writes the objective and the voice, saves the token to `~/.config/holdco/<company>.env` (mode 600; every `holdco` command loads it), pairs the bot with your chat, and runs `holdco doctor`. A company that passes doctor is one `bunx holdco smoke --cap 1` away from its first real ticket.
 
 Scripted: `bunx holdco init <dir> --github <you> --project ../your-repo [--preset solo-dev|solo-codex|full] [--name n] [--mission "…"] [--timezone tz]` (or `create-holdco` with the same flags) does the scaffold, install, guard and doctor, and prints what is left:
 
@@ -61,6 +61,17 @@ bunx holdco ticket new --title "Add CSV export" --goal "users can download their
 ```
 
 Or write objectives into `governance/strategy.md` and let the CEO open tickets. A ticket's life: `triaged → in_progress (senior, 0..N juniors in their own worktrees) → ready_for_verification → verified → executed` or `awaiting_approval → your inbox`. Merges into your repository happen only after an independent Verification verdict and, until an action graduates, after approval (COO for T2, you for T3; without a COO every T2 comes to you).
+
+**Several projects, one company.** A company works on as many repositories as you register; one subscription login is one rate limit, so one company that allocates beats several that compete. Each project carries a class (core is dispatched first; experiments have kill criteria), a share of effort, its own verify command and locks. The CEO sees share against actual spend every cycle and opens the next ticket where a project is under its share. Change any of it whenever your priorities do — Settings → Projects in the dashboard (add a path, re-weight, change class or verify, remove) or:
+
+```bash
+bunx holdco project list                                  # class, share, spend this month, open tickets
+bunx holdco project add ../other-repo --class experiment --share 20% --verify "bun test"
+bunx holdco project set gap-trade --share 0.4 --class core
+bunx holdco project remove old-repo                       # refused while it has open tickets; --force declines them
+```
+
+Every change is one commit to `company.yaml`. Removing a project never touches its repository.
 
 ### 5. Your weekly ten minutes
 
@@ -110,7 +121,7 @@ bunx holdco init              # 대화형: 답한 대로 회사가 만들어짐 
 
 `@holdco/*`가 npm에 올라가기 전에는 체크아웃에서: `git clone https://github.com/kooroot/holdco && cd holdco && bun install && bunx holdco init`. 회사는 체크아웃의 패키지에 링크되므로 체크아웃에서 `git pull`하면 갱신됩니다.
 
-마법사가 묻는 것: 디렉토리, GitHub 핸들(`gh`에서 추측), 첫 프로젝트(근처 git 저장소 또는 새 저장소), 그 프로젝트가 동작함을 증명하는 명령(저장소에서 추측; 검증이 심판 전에 실행), 조직(풀 컴퍼니 / 솔로), 자율 수준(기본 자율: 코드 머지는 검증만 통과하면 됨, 배포·지출·되돌릴 수 없는 건 당신이 결정), 모델(두 로그인이 다 있으면 Claude + Codex), 미션, 첫 목표, 공개 글의 목소리(풀 프리셋), 언어, 선택으로 Telegram 봇 토큰. 그다음 스캐폴드 → 프로젝트 등록 → 의존성 설치 → 가드 빌드 → 모델 적용 → 목표·목소리 기록 → 토큰을 `~/.config/holdco/<회사>.env`(mode 600, 모든 `holdco` 명령이 읽음)에 저장 → 봇과 채팅 짝 맺기 → `holdco doctor`까지 한 번에 합니다. doctor를 통과한 회사는 `bunx holdco smoke --cap 1` 한 줄이면 첫 실제 티켓을 돕니다.
+마법사가 묻는 것: 디렉토리, GitHub 핸들(`gh`에서 추측), 작업할 프로젝트들(근처 git 저장소에서 여러 개 선택, 경로 추가, 또는 새 저장소 생성), 프로젝트마다 동작을 증명하는 명령(저장소에서 추측; 검증이 심판 전에 실행)과 — 둘 이상이면 — 구분(core / experiment / maintenance / brand)과 노력 배분(%), 조직(풀 컴퍼니 / 솔로), 자율 수준(기본 자율: 코드 머지는 검증만 통과하면 됨, 배포·지출·되돌릴 수 없는 건 당신이 결정), 모델(두 로그인이 다 있으면 Claude + Codex), 미션, 첫 목표, 공개 글의 목소리(풀 프리셋), 언어, 선택으로 Telegram 봇 토큰. 그다음 스캐폴드 → 프로젝트 등록 → 의존성 설치 → 가드 빌드 → 모델 적용 → 목표·목소리 기록 → 토큰을 `~/.config/holdco/<회사>.env`(mode 600, 모든 `holdco` 명령이 읽음)에 저장 → 봇과 채팅 짝 맺기 → `holdco doctor`까지 한 번에 합니다. doctor를 통과한 회사는 `bunx holdco smoke --cap 1` 한 줄이면 첫 실제 티켓을 돕니다.
 
 스크립트용: `bunx holdco init <dir> --github <you> --project ../your-repo [--preset …]`(또는 같은 플래그의 `create-holdco`)는 스캐폴드·설치·가드·doctor만 하고 남은 일을 출력합니다.
 
@@ -127,6 +138,17 @@ bunx holdco init              # 대화형: 답한 대로 회사가 만들어짐 
 ### 4. 일 주기
 
 `holdco ticket new --title … --criteria "a; b" --action code.merge.app`로 직접 열거나, `governance/strategy.md`에 목표를 적고 CEO가 열게 둡니다. 티켓은 `triaged → in_progress(시니어 + 주니어 0~N명, 각자 워크트리) → ready_for_verification → verified → 실행` 또는 `awaiting_approval → 인박스`로 흐릅니다. 내 레포로의 머지는 독립된 검증 판정 뒤에만, 그리고 행동이 승격되기 전까지는 승인(T2는 COO, T3는 운영자, COO가 없으면 T2도 운영자) 뒤에만 일어납니다.
+
+**프로젝트 여러 개, 회사 하나.** 회사는 등록한 만큼의 저장소에서 일합니다. 구독 로그인 하나가 레이트 리밋 하나이므로, 배분하는 회사 하나가 경쟁하는 회사 여럿보다 낫습니다. 프로젝트마다 구분(core가 먼저 배정되고 experiment는 중단 기준을 가짐), 노력 배분, 자체 검증 명령과 잠금이 있습니다. CEO는 매 사이클 배분 대비 실제 지출을 보고 배분에 못 미치는 프로젝트의 다음 티켓부터 엽니다. 우선순위가 바뀌면 언제든 바꾸세요 — 대시보드 설정 → 프로젝트(경로 추가, 재배분, 구분·검증 변경, 제거) 또는:
+
+```bash
+bunx holdco project list                                  # 구분, 배분, 이번 달 지출, 열린 티켓
+bunx holdco project add ../other-repo --class experiment --share 20% --verify "bun test"
+bunx holdco project set gap-trade --share 0.4 --class core
+bunx holdco project remove old-repo                       # 열린 티켓이 있으면 거부; --force는 전부 거절 처리
+```
+
+모든 변경은 `company.yaml`에 커밋 하나입니다. 프로젝트 제거는 저장소를 건드리지 않습니다.
 
 ### 5. 매주 10분
 

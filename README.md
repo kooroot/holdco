@@ -77,7 +77,7 @@ git clone https://github.com/kooroot/holdco && cd holdco && bun install
 bunx holdco init                                     # the wizard: nine answers, then a company that passes doctor
 ```
 
-The wizard asks for the directory, your GitHub handle, the first project (a repository near you, or a new one it creates), the organization, the models (Claude + Codex when both logins are found — no API keys needed), a mission, the first objective, the voice of public posts, the language, and optionally a Telegram bot token. It scaffolds, installs, compiles the guard, applies the models, pairs the bot and runs `holdco doctor`. Then:
+The wizard asks for the directory, your GitHub handle, the projects it works on (several repositories near you, or a new one it creates) with their effort split, the organization, the models (Claude + Codex when both logins are found — no API keys needed), a mission, the first objective, the voice of public posts, the language, and optionally a Telegram bot token. It scaffolds, installs, compiles the guard, applies the models, pairs the bot and runs `holdco doctor`. Then:
 
 ```bash
 cd ../my-co

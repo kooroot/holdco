@@ -94,6 +94,15 @@ describe("operator commands", () => {
     expect(r.status).toBe(0)
     expect(readFileSync(NodePath.join(co, "company.yaml"), "utf8")).toContain("id: other")
     expect(holdco("config", "check", "company.yaml").status).toBe(0)
+    // D70: list, re-weight, remove — percent or ratio, refusals in plain words
+    expect(holdco("project", "list").stdout).toMatch(/other\s+experiment\s+0%/)
+    expect(holdco("project", "set", "other", "--share", "30%").stderr).toContain("sum") // 100% + 30%
+    expect(holdco("project", "set", "app", "--share", "0.7").status).toBe(0)
+    expect(holdco("project", "set", "other", "--share", "30%", "--verify", "bun test").stdout).toContain("30% of effort, verify: bun test")
+    expect(holdco("project", "list").stdout).toMatch(/app\s+core\s+70%/)
+    expect(holdco("project", "remove", "app").stderr).toContain("open ticket") // ENG-1 is open
+    expect(holdco("project", "remove", "other").stdout).toContain("other removed")
+    expect(readFileSync(NodePath.join(co, "company.yaml"), "utf8")).not.toContain("id: other")
   })
   test("service prints a unit for the configured host; status names the dashboard link and log", () => {
     const r = holdco("service")

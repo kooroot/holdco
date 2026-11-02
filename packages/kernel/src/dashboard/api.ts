@@ -11,6 +11,7 @@ import { Exit, Schema } from "effect"
 import { assignmentFor, CompanyConfig, type RoleKind, ROLE_KINDS, type Tier } from "../config/company.ts"
 import { durationMs } from "../config/company.ts"
 import { formatAssignment, parseAssignment } from "../config/models.ts"
+import { addProject, openTicketsFor, type ProjectClass, ProjectError, removeProject, setProject, setShares } from "../config/projects.ts"
 import { graduationCheck } from "../policy/graduation.ts"
 import type { Level } from "../schema/interrupts.ts"
 import { Store, type Ticket } from "../store/store.ts"
@@ -97,6 +98,7 @@ export const snapshot = (ctx: DashboardContext) => {
   const running = store.openSessions().map((s) => ({ id: s.id, ticket_id: s.ticket_id, role: s.role, kind: s.kind, engine: s.engine, model: s.model, started_at: s.started_at }))
   const recentSessions = store.allSessionsSince(now - 7 * DAY).slice(-50).reverse()
   const spentMonth = store.spentAll(month)
+  const spentByProject: Record<string, number> = Object.fromEntries(store.spentByProject(month).map((r) => [r.project ?? "", r.usd]))
   const shares = Object.entries(config.budget.shares).map(([department, share]) => {
     const cap = share * config.budget.monthly_usd
     const used = store.spent(department, month)
@@ -193,7 +195,10 @@ export const snapshot = (ctx: DashboardContext) => {
     roles: Object.fromEntries(Object.entries(config.roles).filter(([k]) => k !== "by_department").map(([k, v]) => [k, v])),
     departments: config.modules.departments,
     executive: config.modules.executive,
-    projects: config.projects.map((p) => ({ id: p.id, class: p.class, share: p.share, merge: p.merge ?? "local" })),
+    projects: config.projects.map((p) => ({
+      id: p.id, path: p.path, class: p.class, share: p.share, merge: p.merge ?? "local", verify: p.verify ? [...p.verify] : null, kill_criteria: p.kill_criteria ?? null,
+      spent_month: spentByProject[p.id] ?? 0, open: openTicketsFor(store, p.id).length, running: running.filter((r) => store.ticket(r.ticket_id)?.project === p.id).length, exists: existsSync(NodePath.join(ctx.root, p.path, ".git")),
+    })),
     inbox,
     inbox_timeout_ms: timeout,
     tickets,
@@ -308,6 +313,10 @@ export type Action =
   | { kind: "ticket_edit"; id: string; title?: string; goal?: string; why?: string; criteria?: ReadonlyArray<string>; priority?: number; action?: string | null; project?: string | null; department?: string }
   | { kind: "comment"; id: string; body: string }
   | { kind: "role_set"; role: string; assignment: string }
+  | { kind: "project_add"; path: string; id?: string; class?: ProjectClass; share?: number; verify?: string }
+  | { kind: "project_set"; id: string; share?: number; class?: ProjectClass; verify?: string; kill_criteria?: string | null }
+  | { kind: "project_shares"; shares: Readonly<Record<string, number>> }
+  | { kind: "project_remove"; id: string; force?: boolean }
   | { kind: "settings"; strategy?: string; budget?: { monthly_usd?: number; session_max_usd?: number }; inbox?: { timeout?: string; batch_at?: string }; audit_weekly_sample?: number; runtime?: { max_concurrent_sessions?: number; max_attempts?: number } }
 
 export const act = async (ctx: DashboardContext, a: Action): Promise<Record<string, unknown>> => {
@@ -453,6 +462,32 @@ export const act = async (ctx: DashboardContext, a: Action): Promise<Record<stri
       if (Exit.isFailure(exit)) throw new ActionError(`refused: ${String(exit.cause).split("\n").filter((l) => l.includes("may not") || l.includes("must") || l.includes("unknown")).join("; ") || String(exit.cause).slice(0, 300)}`)
       ctx.saveConfig(exit.value, `roles: ${a.role} → ${a.assignment}`)
       return { ok: true }
+    }
+    case "project_add": case "project_set": case "project_shares": case "project_remove": {
+      // D70: projects and their allocation change at any time; the rules live in config/projects.ts, shared with the CLI.
+      const config = ctx.config()
+      const argv = (v: string | undefined) => (v === undefined ? undefined : v.trim() ? v.trim().split(/\s+/) : [])
+      try {
+        if (a.kind === "project_add") {
+          const r = addProject(ctx.root, config, { path: a.path, ...(a.id ? { id: a.id } : {}), ...(a.class ? { class: a.class } : {}), ...(a.share !== undefined ? { share: a.share } : {}), ...(argv(a.verify)?.length ? { verify: argv(a.verify) as Array<string> } : {}) })
+          ctx.saveConfig(r.config, `project add ${r.project.id}`)
+          return { ok: true, id: r.project.id }
+        }
+        if (a.kind === "project_set") {
+          ctx.saveConfig(setProject(config, a.id, { ...(a.share !== undefined ? { share: a.share } : {}), ...(a.class ? { class: a.class } : {}), ...(a.verify !== undefined ? { verify: argv(a.verify) as Array<string> } : {}), ...(a.kill_criteria !== undefined ? { kill_criteria: a.kill_criteria } : {}) }), `project set ${a.id}`)
+          return { ok: true }
+        }
+        if (a.kind === "project_shares") {
+          ctx.saveConfig(setShares(config, a.shares), "project shares edited from the dashboard")
+          return { ok: true }
+        }
+        const r = removeProject(config, store, a.id, { force: a.force ?? false })
+        ctx.saveConfig(r.config, `project remove ${a.id}`)
+        return { ok: true, declined: r.declined }
+      } catch (e) {
+        if (e instanceof ProjectError) throw new ActionError(e.message)
+        throw e
+      }
     }
     case "settings": {
       const config = ctx.config()

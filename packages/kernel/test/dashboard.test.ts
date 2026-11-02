@@ -203,6 +203,24 @@ describe("dashboard", () => {
     expect(c.body.content).toBe("the feature\nline two\n")
     expect((await call("/api/ticket/ENG-1/file?path=../secret")).status).toBe(400)
   })
+  test("projects (D70): add, re-weight, class/verify, remove — each through the shared rules and committed", async () => {
+    const second = NodePath.join(base, "second")
+    mkdirSync(second); git(second, "init", "-q")
+    const added = await act({ kind: "project_add", path: "../second", class: "experiment", verify: "bun test" })
+    expect(added.body.id).toBe("second")
+    let rows = (await call("/api/state")).body.projects as Array<Record<string, unknown>>
+    expect(rows.map((p) => [p["id"], p["class"], p["share"], p["verify"]])).toEqual([["app", "core", 1, null], ["second", "experiment", 0, ["bun", "test"]]])
+    expect(rows[0]).toMatchObject({ exists: true, spent_month: 0.42 }); expect(Number(rows[0]?.["open"])).toBeGreaterThan(0)
+    expect((await act({ kind: "project_shares", shares: { app: 0.8, second: 0.3 } })).status).toBe(400) // 1.1
+    expect((await act({ kind: "project_shares", shares: { app: 0.7, second: 0.3 } })).body.ok).toBe(true)
+    expect((await act({ kind: "project_set", id: "second", class: "maintenance", verify: "" })).body.ok).toBe(true)
+    rows = (await call("/api/state")).body.projects as Array<Record<string, unknown>>
+    expect(rows[1]).toMatchObject({ share: 0.3, class: "maintenance", verify: null })
+    expect(readFileSync(NodePath.join(dir, "company.yaml"), "utf8")).toMatch(/id: second/)
+    expect((await act({ kind: "project_remove", id: "app" })).status).toBe(400) // open tickets
+    expect((await act({ kind: "project_remove", id: "second" })).body.ok).toBe(true)
+    expect(((await call("/api/state")).body.projects as Array<unknown>).length).toBe(1)
+  })
   test("roles and settings are edited through the same validation as the CLI", async () => {
     expect((await act({ kind: "role_set", role: "senior", assignment: "claude:sonnet" })).body.ok).toBe(true)
     expect(readFileSync(NodePath.join(dir, "company.yaml"), "utf8")).toMatch(/senior:\n\s+engine: claude\n\s+model: sonnet/)

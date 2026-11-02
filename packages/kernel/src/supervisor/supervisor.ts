@@ -816,7 +816,8 @@ export class Supervisor {
     const role = this.org.role("ceo")
     const prompt = [
       `# CEO cycle at ${new Date(now).toISOString()}`,
-      `Projects: ${this.config.projects.map((p) => `${p.id} (${p.class}, share ${p.share})`).join(", ") || "none registered"}`,
+      `Projects and the Operator's allocation (D70) — share of effort vs. share of this month's project spend, open tickets:`,
+      ...this.projectAllocation(now),
       `Budget this month: ${this.store.spentAll(this.monthStart(now)).toFixed(2)} of ${this.config.budget.monthly_usd} USD spent.`,
       "",
       `## New tickets to triage (${news.length}) — use ticket_triage for each`,
@@ -972,6 +973,23 @@ export class Supervisor {
     this.org = Org.load(this.root)
     void this.notifier.send("info", `release ${tag}: ${note}`)
     return tag
+  }
+
+  /** One line per project for the CEO: share vs. actual spend this month, so allocation is a fact, not a hint. */
+  private projectAllocation(now: number): Array<string> {
+    if (!this.config.projects.length) return ["- none registered (the Operator adds one in Settings → Projects or `holdco project add`)"]
+    const month = this.monthStart(now)
+    const spent = Object.fromEntries(this.store.spentByProject(month).map((r) => [r.project ?? "", r.usd]))
+    const total = this.config.projects.reduce((a, p) => a + (spent[p.id] ?? 0), 0)
+    const open = this.store.ticketsIn(["new", "triaged", "in_progress", "ready_for_verification", "verified", "awaiting_approval", "rejected", "blocked"])
+    const lines = this.config.projects.map((p) => {
+      const actual = total > 0 ? (spent[p.id] ?? 0) / total : 0
+      const gap = p.share - actual
+      const verdict = p.share === 0 ? "no share: open nothing new here" : total === 0 ? "nothing spent yet" : gap > 0.1 ? "UNDER its share — open its next ticket first" : gap < -0.1 ? "over its share — do not open more here until others catch up" : "on allocation"
+      return `- ${p.id} (${p.class}${p.kill_criteria ? `, kill: ${p.kill_criteria}` : ""}): share ${Math.round(p.share * 100)}%, actual ${Math.round(actual * 100)}% ($${(spent[p.id] ?? 0).toFixed(2)}), open ${open.filter((t) => t.project === p.id).length} — ${verdict}`
+    })
+    const allocated = this.config.projects.reduce((a, p) => a + p.share, 0)
+    return allocated < 0.999 ? [...lines, `- ${Math.round((1 - allocated) * 100)}% of effort is unallocated; the Operator has not committed it.`] : lines
   }
 
   // ── dispatch ─────────────────────────────────────────────────────────────

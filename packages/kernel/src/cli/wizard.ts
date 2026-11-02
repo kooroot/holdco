@@ -1,5 +1,5 @@
 /**
- * The interactive path of `holdco init` and `create-holdco`: seven questions, then everything the flags path does plus
+ * The interactive path of `holdco init` and `create-holdco`: a few questions, then everything the flags path does plus
  * the follow-ups the Operator used to do by hand (models preset, first objective, env file,
  * Telegram pairing). Ends with a company that passes doctor and the one command to run next.
  */
@@ -9,20 +9,15 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, wri
 import { homedir } from "node:os"
 import { basename, dirname, join, relative, resolve } from "node:path"
 import { loadPreset } from "../scaffold/templates.ts"
-import { renderCompanyYaml, scaffold } from "../scaffold/scaffold.ts"
-import { CompanyConfig } from "../config/company.ts"
-import { Schema } from "effect"
+import { scaffold } from "../scaffold/scaffold.ts"
 import { KERNEL_VERSION } from "../version.ts"
 import { writeOperatorEnv } from "./env.ts"
 
 export interface WizardAnswers {
   readonly dir: string
   readonly github: string
-  readonly project: string
-  /** Set when the wizard is to `git init` the project itself. */
-  readonly newRepo: string | undefined
-  /** D65: the command that proves the project works, run by the kernel before every judge. */
-  readonly verify: Array<string> | undefined
+  /** D70: the projects the company works on, with the Operator's allocation; shares sum to at most 1. */
+  readonly projects: ReadonlyArray<WizardProject>
   readonly preset: string
   readonly models: "claude" | "codex" | "dual"
   readonly mission: string
@@ -35,6 +30,35 @@ export interface WizardAnswers {
   /** GTM voice (full preset only): the two placeholders doctor checks in evals/rubrics/gtm-voice.md. */
   readonly voice: { tone: string; languages: string } | undefined
   readonly telegramToken: string | undefined
+}
+
+export interface WizardProject {
+  readonly path: string
+  /** Set when the wizard is to `git init` the repository itself. */
+  readonly create: boolean
+  readonly class: "core" | "experiment" | "maintenance" | "brand"
+  /** Share of effort, 0–1. */
+  readonly share: number
+  /** D65: the command that proves the project works, run by the kernel before every judge. */
+  readonly verify: Array<string> | undefined
+}
+
+/** The verify command a repository's files suggest (D65), or "" when nothing is recognizable. */
+export const guessVerify = (project: string): string => {
+  try {
+    const pkg = JSON.parse(readFileSync(join(project, "package.json"), "utf8")) as { scripts?: Record<string, string> }
+    if (pkg.scripts?.["test"]) return existsSync(join(project, "bun.lock")) || existsSync(join(project, "bun.lockb")) ? "bun test" : "npm test"
+  } catch { /* no package.json */ }
+  return existsSync(join(project, "Cargo.toml")) ? "cargo test" : existsSync(join(project, "go.mod")) ? "go test ./..." : existsSync(join(project, "pyproject.toml")) ? "pytest" : ""
+}
+
+/** "50 30 20" → [0.5, 0.3, 0.2]; undefined when it is not `n` percentages summing to at most 100. */
+export const parseSplit = (text: string, n: number): Array<number> | undefined => {
+  const parts = text.trim().split(/[\s,/]+/).filter(Boolean).map(Number)
+  if (parts.length !== n || parts.some((x) => !Number.isFinite(x) || x < 0)) return undefined
+  const sum = parts.reduce((a, b) => a + b, 0)
+  if (sum > 100 + 1e-9 || sum === 0) return undefined
+  return parts.map((x) => Math.round(x) / 100)
 }
 
 /** `~/x` → `$HOME/x`; everything else resolved against the current directory. */
@@ -87,7 +111,6 @@ export const runWizard = async (checkoutPackages: string | undefined): Promise<W
   p.intro("Holdco — a new company")
   const repos = nearbyRepos(checkoutPackages ? dirname(checkoutPackages) : "")
   const claude = claudeInstalled(), codex = codexLoggedIn()
-  let newRepo: string | undefined
 
   // Default: next to the checkout (a company inside the Holdco repository would nest two git repositories).
   const insideCheckout = checkoutPackages !== undefined && (process.cwd() + "/").startsWith(dirname(checkoutPackages) + "/")
@@ -104,31 +127,60 @@ export const runWizard = async (checkoutPackages: string | undefined): Promise<W
   const githubGuess = guessGithub()
   const github = await ask(p.text({ message: "Your GitHub handle (CODEOWNERS and the approval path are built on it)", ...(githubGuess ? { defaultValue: githubGuess, placeholder: githubGuess } : { placeholder: "octocat" }), validate: (v) => (!(v || githubGuess) ? "needed" : undefined) }))
 
-  // A company needs at least one project (company.yaml:projects is non-empty); a new repository is made on the spot.
-  const projectChoice = await ask(p.select({
-    message: "The first project the company works on (a git repository)",
-    options: [...repos.slice(0, 8).map((r) => ({ value: r, label: basename(r), hint: relative(process.cwd(), r) || "." })), { value: "__path", label: "Another path…" }, { value: "__new", label: "A new, empty repository", hint: "git init next to the company" }],
-  }))
-  let project: string
-  if (projectChoice === "__path") project = expandPath(await ask(p.text({ message: "Path to the repository", validate: (v) => (!v || !existsSync(join(expandPath(v), ".git")) ? "not a git repository" : undefined) })))
-  else if (projectChoice === "__new") {
+  // Projects (D70): a company works on several repositories at once and the Operator sets the allocation up
+  // front; both are changed later from the dashboard (Settings → Projects) or `holdco project …`.
+  const picked = await ask(p.multiselect({
+    message: "Projects the company works on (space selects, enter confirms; the allocation comes next)",
+    required: true,
+    options: [...repos.slice(0, 10).map((r) => ({ value: r, label: basename(r), hint: relative(process.cwd(), r) || "." })), { value: "__path", label: "Another path…" }, { value: "__new", label: "A new, empty repository", hint: "git init next to the company" }],
+  })) as Array<string>
+  const paths: Array<{ path: string; create: boolean }> = picked.filter((v) => !v.startsWith("__")).map((path) => ({ path, create: false }))
+  if (picked.includes("__path")) {
+    while (true) {
+      const v = await ask(p.text({ message: paths.length ? "Path to another repository (blank when done)" : "Path to the repository", validate: (x) => (x && !existsSync(join(expandPath(x), ".git")) ? "not a git repository" : !x && !paths.length ? "needed" : undefined) }))
+      if (!v) break
+      const path = expandPath(v)
+      if (!paths.some((x) => x.path === path)) paths.push({ path, create: false })
+    }
+  }
+  if (picked.includes("__new")) {
     const name = await ask(p.text({
       message: `Repository name (created in ${dirname(dir)})`, placeholder: "my-product",
       validate: (v) => (!/^[a-z0-9][a-z0-9._-]*$/i.test(v ?? "") ? "letters, digits, . _ -" : join(dirname(dir), v) === dir ? "that is the company's own directory; pick another name" : existsSync(join(dirname(dir), v)) ? "already exists" : undefined),
     }))
-    project = join(dirname(dir), name)
-    newRepo = project
-  } else project = projectChoice
+    paths.push({ path: join(dirname(dir), name), create: true })
+  }
+  const ids = paths.map((x) => basename(x.path).toLowerCase().replace(/[^a-z0-9-]/g, "-"))
+  if (new Set(ids).size !== ids.length) { p.log.error(`two repositories would get the same project id (${ids.join(", ")}); rename one or register it later with --id`); bail(undefined) }
 
-  const verifyGuess = (() => {
-    try {
-      const pkg = JSON.parse(readFileSync(join(project, "package.json"), "utf8")) as { scripts?: Record<string, string> }
-      if (pkg.scripts?.["test"]) return existsSync(join(project, "bun.lock")) || existsSync(join(project, "bun.lockb")) ? "bun test" : "npm test"
-    } catch { /* no package.json */ }
-    return existsSync(join(project, "Cargo.toml")) ? "cargo test" : existsSync(join(project, "go.mod")) ? "go test ./..." : existsSync(join(project, "pyproject.toml")) ? "pytest" : ""
-  })()
-  const verifyInput = await ask(p.text({ message: "Command that proves the project works (Verification runs it; a failure rejects the ticket). Leave blank for none", ...(verifyGuess ? { defaultValue: verifyGuess, placeholder: verifyGuess } : { placeholder: "bun test" }) }))
-  const verify = (verifyInput || verifyGuess).trim() ? (verifyInput || verifyGuess).trim().split(/\s+/) : undefined
+  const details: Array<{ verify: Array<string> | undefined; cls: WizardProject["class"] }> = []
+  for (const x of paths) {
+    const name = basename(x.path)
+    const verifyGuess = x.create ? "" : guessVerify(x.path)
+    const verifyInput = await ask(p.text({ message: `${name}: command that proves it works (Verification runs it; a failure rejects the ticket). Blank for none`, ...(verifyGuess ? { defaultValue: verifyGuess, placeholder: verifyGuess } : { placeholder: "bun test" }) }))
+    const verify = (verifyInput || verifyGuess).trim() ? (verifyInput || verifyGuess).trim().split(/\s+/) : undefined
+    const cls = paths.length === 1 ? "core" : await ask(p.select({
+      message: `${name}: what kind of bet is it?`, initialValue: "core",
+      options: [
+        { value: "core", label: "Core", hint: "the main product; dispatched first; stricter locks" },
+        { value: "experiment", label: "Experiment", hint: "has kill criteria; the CEO may propose stopping it" },
+        { value: "maintenance", label: "Maintenance", hint: "keep it working; lowest priority for new work" },
+        { value: "brand", label: "Brand", hint: "site, docs, content" },
+      ],
+    })) as WizardProject["class"]
+    details.push({ verify, cls })
+  }
+  let shares: Array<number> = paths.map(() => 1 / paths.length)
+  if (paths.length > 1) {
+    const equal = paths.map(() => Math.floor(100 / paths.length)).map((v, i) => (i === 0 ? v + (100 - Math.floor(100 / paths.length) * paths.length) : v))
+    const text = await ask(p.text({
+      message: `Effort split in percent, in this order: ${ids.join(" / ")} (the CEO allocates by it; change it any time in Settings)`,
+      placeholder: equal.join(" "), defaultValue: equal.join(" "),
+      validate: (v) => (parseSplit(v || equal.join(" "), paths.length) ? undefined : `${paths.length} numbers summing to at most 100`),
+    }))
+    shares = parseSplit(text || equal.join(" "), paths.length) as Array<number>
+  }
+  const projects: Array<WizardProject> = paths.map((x, i) => ({ path: x.path, create: x.create, class: details[i]!.cls, share: shares[i]!, verify: details[i]!.verify }))
 
   const preset = await ask(p.select({
     message: "Organization",
@@ -174,7 +226,7 @@ export const runWizard = async (checkoutPackages: string | undefined): Promise<W
     ? await ask(p.password({ message: "Bot token from @BotFather (kept in ~/.config/holdco/, never in the repo)", validate: (v) => (!/^\d+:[\w-]{30,}$/.test(v ?? "") ? "does not look like a bot token (123456:ABC…)" : undefined) }))
     : undefined
 
-  return { dir, github: github || (githubGuess as string), project, newRepo, verify, preset, models, mission: mission || loadPreset(preset).company.mission, timezone, language, autonomy, objective: objective || undefined, voice, telegramToken }
+  return { dir, github: github || (githubGuess as string), projects, preset, models, mission: mission || loadPreset(preset).company.mission, timezone, language, autonomy, objective: objective || undefined, voice, telegramToken }
 }
 
 /** Replace the example objective row in governance/strategy.md. */
@@ -215,14 +267,14 @@ export class WizardFailed extends Error {
 
 const build = async (a: WizardAnswers, checkoutPackages: string | undefined, target: string, created: Array<string>) => {
   const s = p.spinner()
-  if (a.newRepo) {
-    created.push(a.newRepo)
-    mkdirSync(a.newRepo, { recursive: true })
-    writeFileSync(join(a.newRepo, "README.md"), `# ${basename(a.newRepo)}\n\nStarted by Holdco; the company's first project.\n`)
-    spawnSync("git", ["init", "-q"], { cwd: a.newRepo })
-    spawnSync("git", ["add", "-A"], { cwd: a.newRepo })
-    spawnSync("git", ["-c", "user.name=holdco", "-c", "user.email=holdco@localhost", "commit", "-qm", "initial"], { cwd: a.newRepo })
-    p.log.success(`Repository created: ${a.newRepo}`)
+  for (const pr of a.projects.filter((x) => x.create)) {
+    created.push(pr.path)
+    mkdirSync(pr.path, { recursive: true })
+    writeFileSync(join(pr.path, "README.md"), `# ${basename(pr.path)}\n\nStarted by Holdco.\n`)
+    spawnSync("git", ["init", "-q"], { cwd: pr.path })
+    spawnSync("git", ["add", "-A"], { cwd: pr.path })
+    spawnSync("git", ["-c", "user.name=holdco", "-c", "user.email=holdco@localhost", "commit", "-qm", "initial"], { cwd: pr.path })
+    p.log.success(`Repository created: ${pr.path}`)
   }
   s.start("Scaffolding the company")
   if (!existsSync(target)) created.push(target)
@@ -231,18 +283,10 @@ const build = async (a: WizardAnswers, checkoutPackages: string | undefined, tar
     companyName: basename(target).toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "my-co", // a non-ASCII directory name still yields a usable id
     host: process.platform === "darwin" ? "macos-launchd" : "linux-systemd",
     ...(checkoutPackages ? { packagesDir: checkoutPackages } : {}),
-    projectPath: resolve(a.project),
+    projects: a.projects.map((pr) => ({ path: resolve(pr.path), class: pr.class, share: pr.share, ...(pr.verify ? { verify: pr.verify } : {}) })),
   })
   s.stop(`Company ${r.config.company.name} in ${target} (${r.modules.length} modules)`)
-  if (a.verify && r.config.projects[0]) {
-    const yaml = join(target, "company.yaml")
-    const verify: ReadonlyArray<string> = a.verify
-    const cfg = Schema.decodeUnknownSync(CompanyConfig)(Bun.YAML.parse(readFileSync(yaml, "utf8")))
-    const projects = cfg.projects.map((pr, i) => (i === 0 ? { ...pr, verify } : pr))
-    writeFileSync(yaml, renderCompanyYaml({ ...cfg, projects }, a.preset))
-    spawnSync("git", ["commit", "-qam", `project ${r.config.projects[0].id}: verify ${a.verify.join(" ")}`], { cwd: target })
-    p.log.success(`Verification runs \`${a.verify.join(" ")}\` before every judge`)
-  }
+  for (const pr of r.config.projects) p.log.success(`${pr.id}: ${pr.class}, ${Math.round(pr.share * 100)}% of effort${pr.verify ? `, Verification runs \`${pr.verify.join(" ")}\`` : ""}`)
 
   const step = (label: string, cmd: string, args: Array<string>, extraEnv: Record<string, string> = {}) => {
     s.start(label)

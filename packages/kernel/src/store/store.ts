@@ -411,6 +411,9 @@ export class Store {
   spentAll(since: number): number {
     return this.db.query<{ s: number | null }, [number]>("SELECT SUM(usd) AS s FROM ledger WHERE at >= ?").get(since)?.s ?? 0
   }
+  spentByProject(since: number): Array<{ project: string | null; usd: number }> {
+    return this.db.query<{ project: string | null; usd: number }, [number]>("SELECT project, SUM(usd) AS usd FROM ledger WHERE at >= ? GROUP BY project").all(since)
+  }
   spentByDepartment(since: number): Array<{ department: string; usd: number }> {
     return this.db.query<{ department: string; usd: number }, [number]>("SELECT department, SUM(usd) AS usd FROM ledger WHERE at >= ? GROUP BY department").all(since)
   }

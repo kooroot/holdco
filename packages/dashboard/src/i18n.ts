@@ -89,6 +89,14 @@ const KO: Record<string, string> = {
   "Raise {l} on {t}?": "{t}에 {l}을 올릴까요?", " The organization is restored from the previous release.": " 조직이 이전 릴리스로 복원됩니다.", " Everything stops.": " 모든 것이 멈춥니다.", "{l} raised on {t}": "{t}에 {l} 올림",
   // settings
   "What the company is for and how much it may spend. Every save is committed to company.yaml or docs/holdco/strategy.md.": "회사가 무엇을 위한 것이고 얼마나 쓸 수 있는지. 저장할 때마다 company.yaml 또는 전략 문서에 커밋됩니다.",
+  // Settings → Projects (D70)
+  "Projects & allocation": "프로젝트·배분", "Share of effort per project. The CEO opens the next ticket where actual spend is under its share; core is dispatched first. Change it whenever your priorities do.": "프로젝트별 노력 배분입니다. CEO는 실제 지출이 배분보다 적은 프로젝트의 다음 티켓부터 열고, core가 먼저 배정됩니다. 우선순위가 바뀌면 언제든 바꾸세요.",
+  "Class": "구분", "Share %": "배분 %", "This month": "이번 달", "Verify command": "검증 명령", "Core": "핵심", "Experiment": "실험", "Maintenance": "유지보수", "Brand": "브랜드", "kill criteria": "중단 기준",
+  "repository missing": "리포지토리 없음", "{n} open": "열림 {n}", "nothing open": "열린 티켓 없음", "{n} running": "실행 중 {n}", "nothing spent yet": "아직 지출 없음", "over its share": "배분 초과", "under its share": "배분 미달", "on allocation": "배분대로",
+  "{id} saved": "{id} 저장됨", "none": "없음", "Remove": "제거", "No projects yet. Departments cannot work without one.": "프로젝트가 없습니다. 프로젝트 없이는 부서가 일할 수 없습니다.",
+  "Allocated: {n}% of 100": "배분 합계: {n}% / 100", "{n}% unallocated": "{n}% 미배분", "Save allocation": "배분 저장", "Allocation saved and committed": "배분 저장·커밋됨", "Add a project": "프로젝트 추가",
+  "Path to a git repository": "git 리포지토리 경로", "absolute, or relative to the company directory": "절대 경로 또는 회사 디렉터리 기준 상대 경로", "optional": "선택", "Register": "등록", "{id} registered — set its share above": "{id} 등록됨 — 위에서 배분을 정하세요",
+  "{id} has {n} open tickets. Remove it anyway? They are declined; the repository is untouched.": "{id}에 열린 티켓이 {n}개 있습니다. 그래도 제거할까요? 티켓은 거절 처리되고 리포지토리는 그대로입니다.", "Remove {id} from the company? The repository is untouched.": "{id}를 회사에서 제거할까요? 리포지토리는 그대로입니다.", "{id} removed": "{id} 제거됨",
   "Strategy": "전략", "The CEO reads this at every triage. Objectives, constraints, what not to do.": "CEO가 분류할 때마다 읽습니다. 목표, 제약, 하지 말 것.", "Save strategy": "전략 저장", "Strategy saved and committed": "전략 저장·커밋됨",
   "Budget & limits": "예산·한도", "Monthly budget (USD)": "월 예산 (USD)", "Per-session cap (USD)": "세션당 상한 (USD)", "Max concurrent sessions": "최대 동시 세션", "Max attempts per ticket": "티켓당 최대 시도", "Inbox timeout": "인박스 시한", "e.g. 48h": "예: 48h", "Routine digest at": "정기 다이제스트 시각", "Audit sample per week": "주간 감사 샘플", "Save limits": "한도 저장", "Limits saved and committed": "한도 저장·커밋됨",
   "Dashboard": "대시보드", "Shown in this browser only.": "이 브라우저에만 적용됩니다.",
