@@ -285,6 +285,7 @@ export class Store {
     if (!TRANSITIONS[t.state].includes(to)) throw new IllegalTransition(id, t.state, to)
     const sets = ["state = ?", "updated_at = ?", "lease_holder = NULL", "lease_expires = NULL", "note = ?"]
     const vals: Array<unknown> = [to, now, note]
+    if (t.state === "blocked" && to === "triaged" && actor === "operator") sets.push("attempts = 0") // the Operator fixed something: the ticket gets its attempts back
     for (const [k, v] of Object.entries(patch)) {
       sets.push(`${k} = ?`)
       vals.push(v)

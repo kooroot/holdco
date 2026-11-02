@@ -11,7 +11,7 @@ import { Exit, Schema } from "effect"
 import { assignmentFor, CompanyConfig, type RoleKind, ROLE_KINDS, type Tier } from "../config/company.ts"
 import { durationMs } from "../config/company.ts"
 import { formatAssignment, parseAssignment } from "../config/models.ts"
-import { addProject, openTicketsFor, type ProjectClass, ProjectError, removeProject, setProject, setShares } from "../config/projects.ts"
+import { addProject, openTicketsFor, parseVerify, type ProjectClass, ProjectError, removeProject, renderVerify, setProject, setShares } from "../config/projects.ts"
 import { graduationCheck } from "../policy/graduation.ts"
 import type { Level } from "../schema/interrupts.ts"
 import { Store, type Ticket } from "../store/store.ts"
@@ -203,7 +203,7 @@ export const snapshot = (ctx: DashboardContext) => {
       return [{ engine: q.engine, plan: q.plan, fetched_at: q.fetched_at, source: q.source, error: q.error ?? null, windows: q.windows.map((w) => ({ id: w.id, label: w.label, used_pct: w.used_pct, resets_at: w.resets_at, ahead: w.id === "7d" ? aheadOfWeek(q, now) : null })), verdict: { kind: v.kind, reason: v.kind === "ok" ? null : v.reason } }]
     }),
     projects: config.projects.map((p) => ({
-      id: p.id, path: p.path, class: p.class, share: p.share, merge: p.merge ?? "local", verify: p.verify ? [...p.verify] : null, kill_criteria: p.kill_criteria ?? null, min_tier: p.min_tier ?? null,
+      id: p.id, path: p.path, class: p.class, share: p.share, merge: p.merge ?? "local", verify: p.verify ? [...p.verify] : null, verify_text: renderVerify(p.verify), kill_criteria: p.kill_criteria ?? null, min_tier: p.min_tier ?? null,
       spent_month: spentByProject[p.id] ?? 0, cap_month: p.share * config.budget.monthly_usd, capped: (config.budget.project_shares ?? "hard") === "hard" && p.share * config.budget.monthly_usd - (spentByProject[p.id] ?? 0) < 0.05, open: openTicketsFor(store, p.id).length, running: running.filter((r) => store.ticket(r.ticket_id)?.project === p.id).length, exists: existsSync(NodePath.join(ctx.root, p.path, ".git")),
     })),
     inbox,
@@ -473,7 +473,7 @@ export const act = async (ctx: DashboardContext, a: Action): Promise<Record<stri
     case "project_add": case "project_set": case "project_shares": case "project_remove": {
       // D70: projects and their allocation change at any time; the rules live in config/projects.ts, shared with the CLI.
       const config = ctx.config()
-      const argv = (v: string | undefined) => (v === undefined ? undefined : v.trim() ? v.trim().split(/\s+/) : [])
+      const argv = (v: string | undefined) => (v === undefined ? undefined : parseVerify(v) ?? [])
       try {
         if (a.kind === "project_add") {
           const r = addProject(ctx.root, config, { path: a.path, ...(a.id ? { id: a.id } : {}), ...(a.class ? { class: a.class } : {}), ...(a.share !== undefined ? { share: a.share } : {}), ...(argv(a.verify)?.length ? { verify: argv(a.verify) as Array<string> } : {}) })

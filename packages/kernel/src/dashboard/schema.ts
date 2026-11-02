@@ -58,7 +58,7 @@ export const Activity = Schema.Struct({ ticket_id: Str, at: Num, actor: Str, fro
 
 /** D70: a registered project with what the Operator weighs it against — spend this month and open work. */
 export const ProjectClass = Schema.Literals(["core", "experiment", "maintenance", "brand"])
-export const ProjectRow = Schema.Struct({ id: Str, path: Str, class: ProjectClass, share: Num, merge: Str, verify: Schema.NullOr(Schema.Array(Str)), kill_criteria: NullStr, min_tier: Schema.NullOr(Tier), spent_month: Num, cap_month: Num, capped: Bool, open: Num, running: Num, exists: Bool })
+export const ProjectRow = Schema.Struct({ id: Str, path: Str, class: ProjectClass, share: Num, merge: Str, verify: Schema.NullOr(Schema.Array(Str)), verify_text: Str, kill_criteria: NullStr, min_tier: Schema.NullOr(Tier), spent_month: Num, cap_month: Num, capped: Bool, open: Num, running: Num, exists: Bool })
 /** D72: an engine's plan rate-limit windows and what the kernel does about them right now. */
 export const QuotaView = Schema.Struct({
   engine: Str, plan: NullStr, fetched_at: Num, source: Schema.Literals(["endpoint", "session"]), error: NullStr,

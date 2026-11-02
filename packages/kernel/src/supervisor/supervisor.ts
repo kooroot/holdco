@@ -21,6 +21,7 @@ import { evaluateGuard } from "../hooks/guard.ts"
 import { evaluateInterrupts } from "../hooks/interrupts.ts"
 import type { Engine, Outcome, RoleDefinition, SessionEvent, SessionSpec } from "../engine/types.ts"
 import { appendSessionEvent } from "./journal.ts"
+import { renderVerify } from "../config/projects.ts"
 import { fmtReset, mergeSessionWindow, quotaPolicy, quotaVerdict, readQuota, renderQuota, WINDOW_LENGTH, writeQuota } from "./quota.ts"
 import { collectSignals, renderSignals } from "./signals.ts"
 import { feedbackContext } from "./feedback.ts"
@@ -1172,7 +1173,7 @@ export class Supervisor {
       t.action ? `Registry action the result needs: ${t.action}` : "Registry action: choose the right one from governance/policy.md and pass it to ticket_update.",
       `Attempt ${t.attempts + 1} of ${this.config.runtime.max_attempts}. Your worktree is ${cwd} on branch ${branch}; commit there. Inspect the branch first: earlier attempts may have left work.${deps ? ` ${deps}.` : ""}`,
       t.state === "in_progress" && t.note ? `Last note on this ticket: ${t.note}` : "",
-      project?.verify ? `The project's verify command is \`${project.verify.join(" ")}\`: run it in your worktree before returning; Verification runs the same command and the kernel rejects the ticket if it fails.` : project ? "This project has no verify command yet. If your change adds tests or a check script, say in the report what command proves the project works, so the Operator can register it (projects[].verify)." : "",
+      project?.verify ? `The project's verify command is \`${renderVerify(project.verify)}\`: run it in your worktree before returning; Verification runs the same command and the kernel rejects the ticket if it fails.` : project ? "This project has no verify command yet. If your change adds tests or a check script, say in the report what command proves the project works, so the Operator can register it (projects[].verify)." : "",
       this.operatorNotes(t.id),
       prior.length ? `Earlier session reports:\n${prior.map((s) => s.report).join("\n")}` : "",
       "",

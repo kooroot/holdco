@@ -10,6 +10,7 @@ import { homedir } from "node:os"
 import { basename, dirname, join, relative, resolve } from "node:path"
 import { loadPreset } from "../scaffold/templates.ts"
 import { scaffold } from "../scaffold/scaffold.ts"
+import { parseVerify, renderVerify } from "../config/projects.ts"
 import { KERNEL_VERSION } from "../version.ts"
 import { writeOperatorEnv } from "./env.ts"
 
@@ -159,8 +160,12 @@ export const runWizard = async (checkoutPackages: string | undefined): Promise<W
   for (const x of paths) {
     const name = basename(x.path)
     const verifyGuess = x.create ? "" : guessVerify(x.path)
-    const verifyInput = await ask(p.text({ message: `${name}: command that proves it works (Verification runs it; a failure rejects the ticket). Blank for none`, ...(verifyGuess ? { defaultValue: verifyGuess, placeholder: verifyGuess } : { placeholder: "bun test" }) }))
-    const verify = (verifyInput || verifyGuess).trim() ? (verifyInput || verifyGuess).trim().split(/\s+/) : undefined
+    const verifyInput = await ask(p.text({
+      message: `${name}: command that proves it works — offline, on a fresh checkout; chain with && (Verification runs it; a failure rejects the ticket). Blank for none`,
+      ...(verifyGuess ? { defaultValue: verifyGuess, placeholder: verifyGuess } : { placeholder: "bun test" }),
+      validate: (v) => (/,\s*[A-Za-z]/.test(v ?? "") ? "separate commands with && (a comma is not a separator)" : undefined),
+    }))
+    const verify = parseVerify(verifyInput || verifyGuess)
     const cls = paths.length === 1 ? "core" : await ask(p.select({
       message: `${name}: what kind of bet is it?`, initialValue: "core",
       options: [
@@ -322,7 +327,7 @@ const build = async (a: WizardAnswers, checkoutPackages: string | undefined, tar
     ...(a.quota ? { quota: a.quota } : {}),
   })
   s.stop(`Company ${r.config.company.name} in ${target} (${r.modules.length} modules)`)
-  for (const pr of r.config.projects) p.log.success(`${pr.id}: ${pr.class}, ${Math.round(pr.share * 100)}% of effort${pr.verify ? `, Verification runs \`${pr.verify.join(" ")}\`` : ""}`)
+  for (const pr of r.config.projects) p.log.success(`${pr.id}: ${pr.class}, ${Math.round(pr.share * 100)}% of effort${pr.verify ? `, Verification runs \`${renderVerify(pr.verify)}\`` : ""}`)
 
   const step = (label: string, cmd: string, args: Array<string>, extraEnv: Record<string, string> = {}) => {
     s.start(label)

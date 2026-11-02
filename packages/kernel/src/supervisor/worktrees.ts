@@ -28,7 +28,14 @@ export const createWorktree = (repo: string, name: string, branch: string, base:
   if (existsSync(dir)) return dir
   const exists = spawnSync("git", ["rev-parse", "--verify", "--quiet", branch], { cwd: repo }).status === 0
   git(repo, exists ? ["worktree", "add", dir, branch] : ["worktree", "add", "-b", branch, dir, base])
+  initSubmodules(dir)
   return dir
+}
+
+/** A worktree starts with empty submodule directories; checks that need them fail for no reason of the change. Local, no network when the main checkout has them. */
+const initSubmodules = (dir: string) => {
+  if (!existsSync(NodePath.join(dir, ".gitmodules"))) return
+  spawnSync("git", ["submodule", "update", "--init", "--recursive"], { cwd: dir, stdio: "ignore", timeout: 120_000 })
 }
 
 /** A detached, read-only-by-policy checkout of a branch head (Verification). */
@@ -36,6 +43,7 @@ export const createDetachedWorktree = (repo: string, name: string, ref: string):
   const dir = worktreeDir(repo, name)
   if (existsSync(dir)) return dir
   git(repo, ["worktree", "add", "--detach", dir, ref])
+  initSubmodules(dir)
   return dir
 }
 

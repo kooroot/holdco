@@ -6,7 +6,7 @@ import { tmpdir } from "node:os"
 import * as NodePath from "node:path"
 import { Schema } from "effect"
 import { CompanyConfig } from "../src/config/company.ts"
-import { addProject, openTicketsFor, ProjectError, removeProject, setProject, setShares } from "../src/config/projects.ts"
+import { addProject, openTicketsFor, parseVerify, ProjectError, removeProject, renderVerify, setProject, setShares } from "../src/config/projects.ts"
 import { scaffold } from "../src/scaffold/scaffold.ts"
 import { guessVerify, parseSplit } from "../src/cli/wizard.ts"
 import { Store } from "../src/store/store.ts"
@@ -30,6 +30,17 @@ describe("scaffold with several projects", () => {
     const one = scaffold({ dir: NodePath.join(base, "co-one"), preset: "solo-dev", github: "t", kernelVersion: "0.0.0-test", git: false, projectPath: a, quota: { pause_at: 75, pace: false } })
     expect(one.config.projects.map((p) => [p.id, p.share])).toEqual([["alpha", 1]])
     expect(one.config.budget.quota).toEqual({ pause_at: 75, pace: false }) // D72: the wizard's answer lands in budget.quota
+  })
+  test("verify as the Operator types it: one command → argv; shell syntax → sh -c; a comma between commands means && (the first live run's mistake)", () => {
+    expect(parseVerify("bun test")).toEqual(["bun", "test"])
+    expect(parseVerify("  ")).toBeUndefined()
+    expect(parseVerify("bun run check, bun scripts/ops/check.ts")).toEqual(["sh", "-c", "bun run check && bun scripts/ops/check.ts"])
+    expect(parseVerify("bun run typecheck && bun run check:docs")).toEqual(["sh", "-c", "bun run typecheck && bun run check:docs"])
+    expect(parseVerify("sha256sum -c SHA256SUMS, bun test")).toEqual(["sh", "-c", "sha256sum -c SHA256SUMS && bun test"])
+    expect(parseVerify("sh -c 'bun test && bun lint'")).toEqual(["sh", "-c", "bun test && bun lint"])
+    expect(renderVerify(["sh", "-c", "a && b"])).toBe("a && b")
+    expect(renderVerify(["bun", "test"])).toBe("bun test")
+    expect(renderVerify(undefined)).toBe("")
   })
   test("the wizard's helpers: a percent split and the verify guess", () => {
     expect(parseSplit("50 30 20", 3)).toEqual([0.5, 0.3, 0.2])

@@ -443,7 +443,7 @@ describe("the project's verify command (D65)", () => {
     expect(rejectedByKernel?.note).toContain("checking")
     expect(engine.runs.some((r) => r.role.kind === "verification")).toBe(false) // no judge was paid for a red build
     const senior = engine.runs.find((r) => r.role.kind === "senior")!
-    expect(senior.prompt).toContain("verify command is `sh -c echo checking; test -f passes.txt`")
+    expect(senior.prompt).toContain("verify command is `echo checking; test -f passes.txt`")
     // now the branch satisfies the check: the judge runs and sees the kernel's evidence
     writeFileSync(NodePath.join(c.app, "passes.txt"), "")
     git(c.app, "add", "-A"); git(c.app, "commit", "-qm", "passes")

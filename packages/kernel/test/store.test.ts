@@ -93,4 +93,13 @@ describe("migrations", () => {
     store.close()
     require("node:fs").rmSync(path, { force: true })
   })
+  test("an Operator unblock gives the ticket its attempts back (the Operator fixed something)", () => {
+    const s = new Store(":memory:")
+    const t = s.createTicket({ department: "engineering", title: "x", goal: "g", why: "w", done_criteria: ["d"], opened_by: "operator", project: "app", state: "triaged", now: 1 })
+    s.db.run("UPDATE tickets SET attempts = 3, state = 'blocked' WHERE id = ?", [t.id])
+    s.transition(t.id, "triaged", "operator", "fixed the verify command", 2)
+    expect(s.ticket(t.id)?.attempts).toBe(0)
+    s.close()
+  })
+
 })

@@ -23,7 +23,7 @@ import { dashboardToken, startDashboard } from "../dashboard/server.ts"
 import { discoverChatId, TelegramBridge, telegramConfig } from "../supervisor/telegram.ts"
 import { envFilePath } from "./env.ts"
 import { quotaPolicy, quotaVerdict, readQuota, renderQuota, writeQuota } from "../supervisor/quota.ts"
-import { addProject, openTicketsFor, PROJECT_CLASSES, type ProjectClass, ProjectError, removeProject, setProject } from "../config/projects.ts"
+import { addProject, openTicketsFor, parseVerify, PROJECT_CLASSES, type ProjectClass, ProjectError, removeProject, renderVerify, setProject } from "../config/projects.ts"
 import type { Level } from "../schema/interrupts.ts"
 
 export class OperatorError extends Error {}
@@ -508,7 +508,7 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
           const since = new Date(); since.setUTCDate(1); since.setUTCHours(0, 0, 0, 0)
           const spent = Object.fromEntries(store.spentByProject(since.getTime()).map((r) => [r.project ?? "", r.usd]))
           console.log("id               class        share   spent / cap (month)   open  path  ·  verify  ·  min tier")
-          for (const pr of config.projects) console.log(`${pr.id.padEnd(16)} ${pr.class.padEnd(12)} ${pct(pr.share).padStart(5)}   ${`$${(spent[pr.id] ?? 0).toFixed(2)} / $${(pr.share * config.budget.monthly_usd).toFixed(2)}`.padStart(19)}  ${String(openTicketsFor(store, pr.id).length).padStart(4)}  ${pr.path}${pr.verify ? `  ·  ${pr.verify.join(" ")}` : ""}${pr.min_tier ? `  ·  ≥${pr.min_tier}` : ""}`)
+          for (const pr of config.projects) console.log(`${pr.id.padEnd(16)} ${pr.class.padEnd(12)} ${pct(pr.share).padStart(5)}   ${`$${(spent[pr.id] ?? 0).toFixed(2)} / $${(pr.share * config.budget.monthly_usd).toFixed(2)}`.padStart(19)}  ${String(openTicketsFor(store, pr.id).length).padStart(4)}  ${pr.path}${pr.verify ? `  ·  ${renderVerify(pr.verify)}` : ""}${pr.min_tier ? `  ·  ≥${pr.min_tier}` : ""}`)
           const total = config.projects.reduce((a, pr) => a + pr.share, 0)
           if (total < 0.999) console.log(`${pct(1 - total)} of effort is unallocated (the CEO treats it as free)`)
           store.close()
@@ -516,17 +516,17 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
         }
         if (sub === "verify") {
           const id = args.positional[2] ?? (() => { throw new OperatorError("usage: holdco project verify <id> [command…]   (no command clears it)") })()
-          const argv = args.positional.slice(3)
-          saveConfig(dir, setProject(config, id, { verify: argv }), `project ${id}: verify ${argv.length ? argv.join(" ") : "cleared"}`)
-          console.log(argv.length ? `${id}: Verification runs \`${argv.join(" ")}\` before every judge; a failure rejects the ticket` : `${id}: verify command cleared`)
+          const argv = parseVerify(args.positional.slice(3).join(" ")) ?? []
+          saveConfig(dir, setProject(config, id, { verify: argv }), `project ${id}: verify ${argv.length ? renderVerify(argv) : "cleared"}`)
+          console.log(argv.length ? `${id}: Verification runs \`${renderVerify(argv)}\` before every judge; a failure rejects the ticket` : `${id}: verify command cleared`)
           return true
         }
         if (sub === "add") {
           const path = args.positional[2] ?? (() => { throw new OperatorError("path is required") })()
           const verify = args.flag("verify")
-          const r = addProject(dir, config, { path, ...(args.flag("id") ? { id: args.flag("id") as string } : {}), ...(classArg(args.flag("class")) ? { class: classArg(args.flag("class")) as ProjectClass } : {}), ...(shareArg(args.flag("share")) !== undefined ? { share: shareArg(args.flag("share")) as number } : {}), ...(verify ? { verify: verify.split(/\s+/) } : {}), ...(args.flag("kill") ? { kill_criteria: args.flag("kill") as string } : {}) })
+          const r = addProject(dir, config, { path, ...(args.flag("id") ? { id: args.flag("id") as string } : {}), ...(classArg(args.flag("class")) ? { class: classArg(args.flag("class")) as ProjectClass } : {}), ...(shareArg(args.flag("share")) !== undefined ? { share: shareArg(args.flag("share")) as number } : {}), ...(parseVerify(verify ?? "") ? { verify: parseVerify(verify ?? "") as Array<string> } : {}), ...(args.flag("kill") ? { kill_criteria: args.flag("kill") as string } : {}) })
           saveConfig(dir, r.config, `project add ${r.project.id}`)
-          console.log(`project ${r.project.id} registered at ${r.project.path} (${r.project.class}, ${pct(r.project.share)} of effort${r.project.verify ? `, verify: ${r.project.verify.join(" ")}` : ""})`)
+          console.log(`project ${r.project.id} registered at ${r.project.path} (${r.project.class}, ${pct(r.project.share)} of effort${r.project.verify ? `, verify: ${renderVerify(r.project.verify)}` : ""})`)
           return true
         }
         if (sub === "set") {
@@ -535,12 +535,12 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
           const kill = args.flag("kill")
           const minTier = args.flag("min-tier")
           if (minTier !== undefined && !["T0", "T1", "T2", "T3", "none"].includes(minTier)) throw new OperatorError("--min-tier: T0, T1, T2, T3 or none")
-          const patch = { ...(minTier !== undefined ? { min_tier: minTier === "none" ? null : (minTier as "T0" | "T1" | "T2" | "T3") } : {}), ...(shareArg(args.flag("share")) !== undefined ? { share: shareArg(args.flag("share")) as number } : {}), ...(classArg(args.flag("class")) ? { class: classArg(args.flag("class")) as ProjectClass } : {}), ...(verify !== undefined ? { verify: verify === "none" ? [] : verify.split(/\s+/) } : {}), ...(kill !== undefined ? { kill_criteria: kill === "none" ? null : kill } : {}) }
+          const patch = { ...(minTier !== undefined ? { min_tier: minTier === "none" ? null : (minTier as "T0" | "T1" | "T2" | "T3") } : {}), ...(shareArg(args.flag("share")) !== undefined ? { share: shareArg(args.flag("share")) as number } : {}), ...(classArg(args.flag("class")) ? { class: classArg(args.flag("class")) as ProjectClass } : {}), ...(verify !== undefined ? { verify: verify === "none" ? [] : (parseVerify(verify) ?? []) } : {}), ...(kill !== undefined ? { kill_criteria: kill === "none" ? null : kill } : {}) }
           if (!Object.keys(patch).length) throw new OperatorError(usage)
           const next = setProject(config, id, patch)
           saveConfig(dir, next, `project set ${id}`)
           const pr = next.projects.find((x) => x.id === id) as CompanyConfig["projects"][number]
-          console.log(`${pr.id}: ${pr.class}, ${pct(pr.share)} of effort${pr.verify ? `, verify: ${pr.verify.join(" ")}` : ""}${pr.min_tier ? `, every action at least ${pr.min_tier}` : ""}`)
+          console.log(`${pr.id}: ${pr.class}, ${pct(pr.share)} of effort${pr.verify ? `, verify: ${renderVerify(pr.verify)}` : ""}${pr.min_tier ? `, every action at least ${pr.min_tier}` : ""}`)
           return true
         }
         if (sub === "remove") {

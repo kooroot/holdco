@@ -20,6 +20,22 @@ export const OPEN_TICKET_STATES: ReadonlyArray<Ticket["state"]> = ["new", "triag
 
 export class ProjectError extends Error {}
 
+/**
+ * The verify command as the Operator types it → argv the kernel runs without a shell (D65). One command
+ * splits on whitespace; anything with shell syntax (`&&`, `||`, `;`, `|`, redirects, `$`, quotes, globs) runs
+ * through `sh -c`; a comma between commands — the first live run's mistake — means `&&`. Empty → undefined.
+ */
+export const parseVerify = (text: string): Array<string> | undefined => {
+  const raw = text.trim()
+  if (!raw) return undefined
+  if (raw.startsWith("sh -c ") || raw.startsWith("bash -c ")) { const [sh, , ...rest] = raw.split(/\s+/) as [string, string, ...Array<string>]; return [sh, "-c", rest.join(" ").replace(/^(['"])(.*)\1$/s, "$2")] }
+  const joined = raw.replace(/\s*,\s*(?=[A-Za-z0-9_./])/g, " && ").replace(/\s*\n+\s*/g, " && ")
+  return /[&|;<>$'"`*?()]/.test(joined) ? ["sh", "-c", joined] : joined.split(/\s+/)
+}
+
+/** What a stored verify argv looks like to the Operator. */
+export const renderVerify = (argv: ReadonlyArray<string> | undefined): string => (!argv ? "" : argv.length === 3 && (argv[0] === "sh" || argv[0] === "bash") && argv[1] === "-c" ? String(argv[2]) : argv.join(" "))
+
 const validated = (config: CompanyConfig, projects: ReadonlyArray<Project>): CompanyConfig => {
   const exit = Schema.decodeUnknownExit(CompanyConfig, { errors: "all" })({ ...config, projects })
   if (Exit.isFailure(exit)) throw new ProjectError(String(exit.cause).replace(/^.*Error: /s, "").slice(0, 400))
