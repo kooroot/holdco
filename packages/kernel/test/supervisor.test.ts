@@ -450,7 +450,7 @@ describe("the project's verify command (D65)", () => {
     const id2 = store.createTicket({ department: "engineering", title: "Second", goal: "g", why: "w", done_criteria: ["feature.md exists"], opened_by: "operator", project: "app", state: "triaged", action: "code.merge.app", now: clock.now }).id
     await cycle(sup, clock, 10)
     const judge = engine.runs.filter((r) => r.role.kind === "verification").find((r) => r.prompt.includes(id2))
-    expect(judge?.prompt).toContain("verify command `sh -c echo checking; test -f passes.txt` in this worktree: exit 0")
+    expect(judge?.prompt).toContain("verify command `echo checking; test -f passes.txt` in this worktree: exit 0")
     await sup.stop()
   })
 })
@@ -555,6 +555,10 @@ describe("worktree dependencies", () => {
     expect(existsSync(NodePath.join(wt, "node_modules", "left-pad"))).toBe(true)
     expect(existsSync(NodePath.join(wt, "packages", "seller", "node_modules", "hono"))).toBe(true) // D73: per-workspace node_modules linked too
     expect(provisionDependencies(wt, repo)).toBeUndefined() // already there
+    // a worktree an older kernel provisioned with only the root link gets its workspace links on the next provisioning
+    rmSync(NodePath.join(wt, "packages", "seller", "node_modules"))
+    expect(provisionDependencies(wt, repo)).toContain("plus 1 workspace node_modules")
+    expect(existsSync(NodePath.join(wt, "packages", "seller", "node_modules", "hono"))).toBe(true)
     const plain = NodePath.join(base, "deps-plain")
     mkdirSync(plain)
     expect(provisionDependencies(plain, plain)).toBeUndefined()

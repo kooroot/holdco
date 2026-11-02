@@ -41,7 +41,12 @@ const initSubmodules = (dir: string) => {
 /** A detached, read-only-by-policy checkout of a branch head (Verification). */
 export const createDetachedWorktree = (repo: string, name: string, ref: string): string => {
   const dir = worktreeDir(repo, name)
-  if (existsSync(dir)) return dir
+  if (existsSync(dir)) {
+    // Reused (a retry): move it to the ref's current head instead of judging a stale checkout.
+    spawnSync("git", ["checkout", "--detach", "--force", ref], { cwd: dir, stdio: "ignore" })
+    initSubmodules(dir)
+    return dir
+  }
   git(repo, ["worktree", "add", "--detach", dir, ref])
   initSubmodules(dir)
   return dir
@@ -55,7 +60,11 @@ export const createDetachedWorktree = (repo: string, name: string, ref: string):
  * lockfile's installer runs once. Returns what it did, for the session's prompt.
  */
 export const provisionDependencies = (worktree: string, repo: string, log: (line: string) => void = () => {}): string | undefined => {
-  if (existsSync(NodePath.join(worktree, "node_modules"))) return undefined
+  if (existsSync(NodePath.join(worktree, "node_modules"))) {
+    // Provisioned earlier (a reused worktree, or by an older kernel that linked only the root): workspace links are idempotent.
+    const nested = existsSync(NodePath.join(repo, "node_modules")) ? linkNestedModules(repo, worktree) : 0
+    return nested ? `node_modules is shared from ${repo} (symlink, plus ${nested} workspace node_modules); do not run the package installer here` : undefined
+  }
   const installers: ReadonlyArray<[lock: string, cmd: Array<string>]> = [
     ["bun.lock", ["bun", "install", "--frozen-lockfile"]],
     ["bun.lockb", ["bun", "install", "--frozen-lockfile"]],

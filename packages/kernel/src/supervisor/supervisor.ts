@@ -1233,13 +1233,14 @@ export class Supervisor {
         if (r.status !== 0 || r.error) {
           const end = this.now()
           this.log(`${t.id}: verify command failed (exit ${r.status ?? "none"}); rejected by the kernel`)
-          this.store.transition(t.id, "rejected", "kernel", `verify failed: \`${argv.join(" ")}\` exited ${r.status ?? "with an error"}${r.error ? ` (${r.error})` : ""}\n${tail}`, end)
+          this.store.transition(t.id, "rejected", "kernel", `verify failed: \`${renderVerify(argv)}\` exited ${r.status ?? "with an error"}${r.error ? ` (${r.error})` : ""}\n${tail}`, end)
           this.store.bumpAttempts(t.id, this.config.runtime.max_attempts, "kernel", "verify command failed", end)
           this.store.releaseLease(t.id, sessionId)
           this.running.delete(sessionId)
+          removeWorktree(repo, `v-${t.id}`) // the next attempt gets a fresh checkout of the branch head
           return
         }
-        this.launchJudge(t, sessionId, cap, cwd, repo, base, paths, rubricRef, deps, gates, project, `The kernel ran the project's verify command \`${argv.join(" ")}\` in this worktree: exit 0. Count it as the ci-green gate with this evidence; do not re-run it unless a changed file could not have been covered.\nOutput tail:\n${tail || "(none)"}`)
+        this.launchJudge(t, sessionId, cap, cwd, repo, base, paths, rubricRef, deps, gates, project, `The kernel ran the project's verify command \`${renderVerify(argv)}\` in this worktree: exit 0. Count it as the ci-green gate with this evidence; do not re-run it unless a changed file could not have been covered.\nOutput tail:\n${tail || "(none)"}`)
       })
       return
     }
