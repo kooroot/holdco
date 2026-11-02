@@ -235,7 +235,7 @@ describe("urgent inbox (D52)", () => {
     expect(sent.filter((s) => s.startsWith("critical: inbox #") && s.includes("needs you now")).length).toBe(1)
     await cycle(sup, clock, 1)
     expect(sent.filter((s) => s.includes("needs you now")).length).toBe(1) // alerted once
-    const batch = sent.filter((s) => s.startsWith("info: inbox: "))
+    const batch = sent.filter((s) => s.startsWith("info: daily: ")) // the daily brief carries the routine items (D72)
     expect(batch.length).toBe(1)
     expect(batch[0]).toContain("[graduation]")
     expect(batch[0]).not.toContain("[blocked]")

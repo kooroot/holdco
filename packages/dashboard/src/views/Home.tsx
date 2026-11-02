@@ -5,7 +5,7 @@ import { ago, left, locale, STATE_LABEL, usd } from "../format.ts"
 import { useSnapshot } from "../hooks.ts"
 import { useNewTicket, useOpenTicket } from "../nav.ts"
 import { etaText, waitingText } from "../ticket/Waiting.tsx"
-import { cn, Button, Card, Code, Empty, Head, Pill, Td, ui } from "../ui.tsx"
+import { cn, Button, Card, Code, Empty, Head, Meter, Pill, Td, ui } from "../ui.tsx"
 import { t, useLang } from "../i18n.ts"
 
 const st = {
@@ -60,6 +60,7 @@ export const Home = () => {
           if (first) moves.push({ to: "/inbox", main: S.inbox.length === 1 ? t("Decide: {t}", { t: String(first.payload["title"] ?? first.kind) }) : t("{n} decisions waiting; first: {t}", { n: S.inbox.length, t: String(first.payload["title"] ?? first.kind) }), sub: t("Approve or reject; a and r work from the inbox"), hot: first.urgency === "urgent" })
           if (stalled.length) moves.push({ to: "/tickets", main: t("{n} tickets are stuck", { n: stalled.length }), sub: `${stalled[0]!.ticket_id}: ${stalled[0]!.stall!.reason}`, hot: true })
           if (S.interrupts.length && !S.interrupts.some((i) => i.level === "L5")) moves.push({ to: "/controls", main: t("{n} interrupts active", { n: S.interrupts.length }), sub: t("Resume them when the reason is gone") })
+          for (const q of S.quotas) if (q.verdict.kind !== "ok") moves.push({ to: "/spend", main: q.verdict.kind === "pause" ? t("{e} is paused: {w}", { e: q.engine, w: q.windows.map((w) => `${w.label} ${Math.round(w.used_pct)}%`).join(" · ") }) : t("{e} is pacing the week: core projects only", { e: q.engine }), sub: q.verdict.reason ?? "", hot: false })
           if (S.audit.due && S.audit.sample.length) moves.push({ to: "/audit", main: t("Weekly audit due: grade {n} tickets", { n: S.audit.sample.length }), sub: t("Ten minutes; it keeps the judge calibrated") })
           const hot = moves.some((m) => m.hot)
           return (
@@ -70,6 +71,13 @@ export const Home = () => {
             </div>
           )
         })()}
+        {S.quotas.length ? <Card pad><div {...ui.row()} style={{ alignItems: "stretch", gap: 18 }}>
+          <div style={{ minWidth: 120 }}><h3 {...ui.h3()}>{t("Plan limits")}</h3><div {...cn(ui.small(), ui.muted())}>{t("what the company really runs on")}</div></div>
+          {S.quotas.map((q) => <div key={q.engine} style={{ flex: "1 1 220px", minWidth: 0 }}>
+            <div {...ui.row()} style={{ gap: 8 }}><strong>{q.engine}</strong>{q.verdict.kind === "pause" ? <Pill tone="bad">{t("paused")}</Pill> : q.verdict.kind === "pace" ? <Pill tone="warn">{t("pacing")}</Pill> : null}<span {...cn(ui.small(), ui.muted())} style={{ marginLeft: "auto" }}>{t("{t} ago", { t: ago(S.now - q.fetched_at) })}</span></div>
+            {q.windows.map((w) => <div key={w.id} {...ui.row()} style={{ gap: 8, flexWrap: "nowrap", marginTop: 4 }}><span {...cn(ui.small(), ui.muted())} style={{ minWidth: 56 }}>{w.label.replace("-hour", "h").replace("-day", "d")}</span><div style={{ flex: 1 }}><Meter ratio={w.used_pct / 100} /></div><span {...cn(ui.num(), ui.small())} style={{ minWidth: 34, textAlign: "right" }}>{Math.round(w.used_pct)}%</span><span {...cn(ui.small(), ui.muted())} style={{ minWidth: 70 }}>{w.resets_at ? t("↻ {r}", { r: left(w.resets_at - S.now) }) : ""}</span></div>)}
+          </div>)}
+        </div></Card> : null}
         <div {...st.tiles()}>{tiles.map(([to, v, l, hot], i) => <Link key={i} to={to} search={(p: Record<string, unknown>) => p} {...cx(st.tile(), hot && st.tileHot())}><span {...cx(st.v(), hot && st.vHot())}>{v}</span><span {...st.l()}>{l}</span></Link>)}</div>
         <div {...ui.grid2()}>
           <Card><div {...cn(st.sect(), ui.row())}><h3 {...ui.h3()}>{t("Activity")}</h3><span {...cn(ui.small(), ui.muted())}>{t("what the company did, newest first")}</span></div>

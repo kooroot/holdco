@@ -27,6 +27,8 @@ export interface WizardAnswers {
   /** D62: how much rope on day one. */
   readonly autonomy: "supervised" | "autonomous"
   readonly objective: string | undefined
+  /** D72: how the subscription limits run the company; undefined keeps the defaults (pause at 90%, pace on). */
+  readonly quota: { pause_at: number; pace: boolean } | undefined
   /** GTM voice (full preset only): the two placeholders doctor checks in evals/rubrics/gtm-voice.md. */
   readonly voice: { tone: string; languages: string } | undefined
   readonly telegramToken: string | undefined
@@ -208,6 +210,20 @@ export const runWizard = async (checkoutPackages: string | undefined): Promise<W
     ],
   })) as WizardAnswers["models"]
 
+  // D72: the subscription limits are the real budget — show them now and ask how hard to lean on them.
+  const limits = await currentLimits(checkoutPackages, models)
+  if (limits.length) p.note(limits.join("\n"), "Your plans right now")
+  const quotaChoice = await ask(p.select({
+    message: "When a plan window fills up",
+    initialValue: "default",
+    options: [
+      { value: "default", label: "Pause at 90%, pace the week", hint: "no new session on an engine past 90% of a window; when the 7-day window runs ahead of the clock, only core projects" },
+      { value: "cautious", label: "Pause at 75%, pace the week", hint: "leaves a quarter of every window for your own use" },
+      { value: "all-in", label: "Pause at 95%, no pacing", hint: "the company uses the whole plan; you share what is left" },
+    ],
+  }))
+  const quota = quotaChoice === "cautious" ? { pause_at: 75, pace: true } : quotaChoice === "all-in" ? { pause_at: 95, pace: false } : undefined
+
   const mission = await ask(p.text({ message: "Mission, one line (every ticket must serve it)", placeholder: loadPreset(preset).company.mission, defaultValue: loadPreset(preset).company.mission }))
   const objective = await ask(p.text({ message: "First objective for this period (the CEO opens tickets only for objectives)", placeholder: "Ship the first usable version — a user completes the main flow without help" }))
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"
@@ -226,7 +242,26 @@ export const runWizard = async (checkoutPackages: string | undefined): Promise<W
     ? await ask(p.password({ message: "Bot token from @BotFather (kept in ~/.config/holdco/, never in the repo)", validate: (v) => (!/^\d+:[\w-]{30,}$/.test(v ?? "") ? "does not look like a bot token (123456:ABC…)" : undefined) }))
     : undefined
 
-  return { dir, github: github || (githubGuess as string), projects, preset, models, mission: mission || loadPreset(preset).company.mission, timezone, language, autonomy, objective: objective || undefined, voice, telegramToken }
+  return { dir, github: github || (githubGuess as string), projects, preset, quota, models, mission: mission || loadPreset(preset).company.mission, timezone, language, autonomy, objective: objective || undefined, voice, telegramToken }
+}
+
+/** D72: the plans' rate-limit windows as the engines read them, one line per engine; empty when nothing is readable. */
+const currentLimits = async (checkoutPackages: string | undefined, models: WizardAnswers["models"]): Promise<Array<string>> => {
+  const out: Array<string> = []
+  for (const id of models === "dual" ? ["claude", "codex"] : [models]) {
+    try {
+      const path = checkoutPackages ? join(checkoutPackages, `engine-${id}`, "src", "index.ts") : Bun.resolveSync(`@holdco/engine-${id}`, process.cwd())
+      const mod = (await import(path)) as { quota?: (env: Record<string, string | undefined>) => Promise<{ plan: string | null; windows: ReadonlyArray<{ label: string; usedPct: number; resetsAt: number | null }> } | undefined> }
+      const q = mod.quota ? await mod.quota(process.env) : undefined
+      if (!q) { out.push(`${id}: no subscription login found (the company can still run; limits are then read from sessions)`); continue }
+      const now = Date.now()
+      const reset = (t: number | null) => (t === null ? "" : ` (resets in ${Math.max(0, Math.round((t - now) / 3_600_000))}h)`)
+      out.push(`${id}${q.plan ? ` (${q.plan})` : ""}: ${q.windows.map((w) => `${w.label} ${Math.round(w.usedPct)}%${reset(w.resetsAt)}`).join(", ") || "no windows reported"}`)
+    } catch (e) {
+      out.push(`${id}: could not read the plan's usage (${String(e).slice(0, 80)})`)
+    }
+  }
+  return out
 }
 
 /** Replace the example objective row in governance/strategy.md. */
@@ -284,6 +319,7 @@ const build = async (a: WizardAnswers, checkoutPackages: string | undefined, tar
     host: process.platform === "darwin" ? "macos-launchd" : "linux-systemd",
     ...(checkoutPackages ? { packagesDir: checkoutPackages } : {}),
     projects: a.projects.map((pr) => ({ path: resolve(pr.path), class: pr.class, share: pr.share, ...(pr.verify ? { verify: pr.verify } : {}) })),
+    ...(a.quota ? { quota: a.quota } : {}),
   })
   s.stop(`Company ${r.config.company.name} in ${target} (${r.modules.length} modules)`)
   for (const pr of r.config.projects) p.log.success(`${pr.id}: ${pr.class}, ${Math.round(pr.share * 100)}% of effort${pr.verify ? `, Verification runs \`${pr.verify.join(" ")}\`` : ""}`)

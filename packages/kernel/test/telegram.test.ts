@@ -90,6 +90,16 @@ describe("telegram bridge", () => {
     expect(store.inboxItem(2)?.status).toBe("open")
     expect(sent().length).toBe(before)
   })
+  test("/quota (D72): the plans' windows as meters, with the kernel's verdict; before any reading it says so", async () => {
+    const b = bridge()
+    expect(await b.command("/quota")).toContain("no reading yet")
+    const H = 3_600_000
+    store.setMeta("quota:claude", JSON.stringify({ engine: "claude", plan: "max", fetched_at: now - 60_000, source: "endpoint", windows: [{ id: "5h", label: "5-hour", used_pct: 93, resets_at: now + 40 * 60_000, length_ms: 5 * H }, { id: "7d", label: "7-day", used_pct: 20, resets_at: now + 3 * 24 * H, length_ms: 7 * 24 * H }] }))
+    const text = await b.command("/quota")
+    expect(text).toContain("<b>claude</b> (max) — ⏸ paused")
+    expect(text).toContain("▰▰▰▰▰▰▰▰▰▱ 93% 5-hour · resets in 40m")
+    expect(text).toContain("Policy: pause at 90%, pace the week")
+  })
   test("commands: status, tickets, note, unblock, new, pause/resume", async () => {
     const b = bridge()
     expect(await b.command("/status")).toContain("Inbox: 1")

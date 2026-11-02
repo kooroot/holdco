@@ -24,6 +24,8 @@ export interface ScaffoldOptions {
   /** First project: path to its git repository (absolute or relative to `dir`). */
   readonly projectPath?: string
   readonly projectId?: string
+  /** D72: budget.quota — how the subscription limits run the company. */
+  readonly quota?: { readonly pause_at: number; readonly pace: boolean }
   /** D70: several projects at once, with the Operator's allocation; takes precedence over `projectPath`. */
   readonly projects?: ReadonlyArray<ScaffoldProject>
   /** Where the service will run; the wizard picks it from the platform. */
@@ -171,6 +173,7 @@ export const scaffold = (opts: ScaffoldOptions): ScaffoldResult => {
     ...preset,
     company: { ...preset.company, name: opts.companyName ?? preset.company.name, mission: opts.mission ?? preset.company.mission, timezone: opts.timezone ?? preset.company.timezone, ...(opts.language ? { language: opts.language } : {}) },
     operator: { ...preset.operator, github: opts.github ?? preset.operator.github },
+    ...(opts.quota ? { budget: { ...preset.budget, quota: opts.quota } } : {}),
     ...(opts.host ? { runtime: { ...preset.runtime, host: opts.host } } : {}),
     ...(projects.length ? { projects } : {}),
   }

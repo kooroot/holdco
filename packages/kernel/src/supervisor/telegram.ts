@@ -8,6 +8,7 @@
 import type { CompanyConfig } from "../config/company.ts"
 import { act, ActionError, type DashboardContext } from "../dashboard/api.ts"
 import { readControl } from "./control.ts"
+import { quotaPolicy, quotaVerdict, readQuota, fmtReset } from "./quota.ts"
 
 type Fetch = typeof fetch
 
@@ -19,6 +20,8 @@ interface Update {
 
 const KIND_LABEL: Record<string, [string, string]> = { t3: ["Approval needed", "승인 필요"], t2_objection: ["COO objected", "COO 반대"], coo_timeout: ["COO did not answer", "COO 무응답"], triage: ["Triage", "분류"], blocked: ["Blocked ticket", "막힌 티켓"], graduation: ["Graduation proposal", "승격 제안"], issue: ["Issue from an agent", "에이전트 이슈"], manual_action: ["Run by hand", "수동 실행"], candidate_withdrawn: ["Candidate withdrawn", "후보 철회"], recovery: ["Recovery needed", "복구 필요"] }
 
+/** A ten-cell meter for a percentage. */
+const bar = (pct: number): string => { const n = Math.max(0, Math.min(10, Math.round(pct / 10))); return "▰".repeat(n) + "▱".repeat(10 - n) }
 const esc = (s: unknown) => String(s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c] as string))
 const left = (ms: number) => { if (ms <= 0) return "expired"; const h = Math.floor(ms / 3_600_000); const m = Math.floor((ms % 3_600_000) / 60_000); return h > 0 ? `${h}h ${m}m` : `${m}m` }
 
@@ -121,6 +124,28 @@ export class TelegramBridge {
     ].join("\n")
   }
 
+  /** D72: the plans' windows as percentages, with the kernel's verdict, in the Operator's language. */
+  private quota(): string {
+    const { store } = this.o.ctx
+    const config = this.o.ctx.config()
+    const now = this.o.ctx.now()
+    const L = this.L()
+    const policy = quotaPolicy(config)
+    const lines: Array<string> = []
+    for (const id of Object.keys(config.engines) as Array<"claude" | "codex">) {
+      const q = readQuota(store, id)
+      if (!q) { lines.push(`<b>${id}</b>: ${L("no reading yet (the supervisor polls every 5 minutes)", "아직 읽은 값 없음 (슈퍼바이저가 5분마다 폴링)")}`); continue }
+      const v = quotaVerdict(q, policy, now)
+      const state = v.kind === "pause" ? L("⏸ paused", "⏸ 일시정지") : v.kind === "pace" ? L("🐢 pacing: core only", "🐢 속도 조절: core만") : L("✅ ok", "✅ 정상")
+      lines.push(`<b>${id}</b>${q.plan ? ` (${esc(q.plan)})` : ""} — ${state}`)
+      for (const w of q.windows) lines.push(`  ${bar(w.used_pct)} ${Math.round(w.used_pct)}% ${esc(w.label)}${w.resets_at ? ` · ${L("resets in", "리셋까지")} ${fmtReset(w.resets_at, now)}` : ""}`)
+      if (v.kind !== "ok") lines.push(`  ${esc(v.reason)}`)
+      lines.push(`  <i>${L(`${Math.round((now - q.fetched_at) / 60_000)}m ago · ${q.source === "endpoint" ? "usage endpoint" : "last session"}`, `${Math.round((now - q.fetched_at) / 60_000)}분 전 · ${q.source === "endpoint" ? "사용량 엔드포인트" : "마지막 세션"}`)}</i>`)
+    }
+    lines.push(L(`Policy: pause at ${policy.pause_at}%${policy.pace ? `, pace the week (margin ${policy.pace_margin} pts)` : ""}`, `정책: ${policy.pause_at}%에서 일시정지${policy.pace ? `, 주간 페이스 조절 (여유 ${policy.pace_margin}p)` : ""}`))
+    return lines.join("\n")
+  }
+
   private monthStart(config: CompanyConfig): number {
     const now = this.o.ctx.now()
     const parts = new Intl.DateTimeFormat("en-US", { timeZone: config.company.timezone, year: "numeric", month: "numeric" }).formatToParts(new Date(now))
@@ -156,6 +181,7 @@ export class TelegramBridge {
           "/new [부서:] &lt;제목&gt; — 티켓 열기 (기본: 첫 부서)",
           "/pause &lt;부서|*&gt; &lt;사유&gt; · /resume &lt;부서|*&gt;",
           "/halt &lt;사유&gt; — 전부 정지 (L5) · /resume * — 해제",
+          "/quota — Claude·Codex 구독 한도(%)와 지금 회사가 그걸로 뭘 하는지",
           "/lang en|ko — 메시지 언어",
         ] : [
           "<b>Holdco</b> — your company in your pocket.",
@@ -168,6 +194,7 @@ export class TelegramBridge {
           "/new [department:] &lt;title&gt; — open a ticket (default: the first department)",
           "/pause &lt;department|*&gt; &lt;reason&gt; · /resume &lt;department|*&gt;",
           "/halt &lt;reason&gt; — stop everything (L5) · /resume * — lift it",
+          "/quota — Claude/Codex plan limits (%) and what the company does about them now",
           "/lang en|ko — message language",
         ]).join("\n")
       case "/lang": {
@@ -178,6 +205,9 @@ export class TelegramBridge {
       }
       case "/status":
         return this.status()
+      case "/quota":
+      case "/limits":
+        return this.quota()
       case "/inbox": {
         const items = store.inboxOpen()
         if (items.length === 0) return L("Inbox is empty.", "인박스가 비었습니다.")

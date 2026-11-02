@@ -710,11 +710,18 @@ export class Supervisor {
     }
   }
 
+  /** The daily brief at policy.inbox.batch_at: routine inbox items, what finished, and (D72) where the plans stand. */
   private inboxBatch(now: number) {
     const items = this.store.inboxUnbatched(now).filter((i) => i.urgency === "routine")
-    if (items.length === 0) return
     const lines = items.map((i) => `#${i.id} [${i.kind}] ${String(i.payload["title"] ?? "")}`)
-    void this.notifier.send("info", `inbox: ${items.length} item(s) waiting\n${lines.join("\n")}`)
+    const done = this.store.allTickets().filter((t) => t.state === "done" && t.updated_at >= now - DAY)
+    const quota = this.quotaLines(now)
+    if (items.length === 0 && done.length === 0 && quota.length === 0) return
+    void this.notifier.send("info", [
+      `daily: ${done.length} done in 24h · ${items.length} routine item(s) waiting · $${this.store.spentAll(now - DAY).toFixed(2)} spent`,
+      ...lines,
+      ...(quota.length ? ["limits:", ...quota] : []),
+    ].join("\n"))
   }
 
   private finalizeWindows(now: number) {

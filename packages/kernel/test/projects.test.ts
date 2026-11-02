@@ -27,8 +27,9 @@ describe("scaffold with several projects", () => {
     expect(yaml).toContain("id: beta")
     expect(readFileSync(NodePath.join(dir, "governance", "strategy.md"), "utf8")).toContain("| beta | experiment | 30% |")
     // the single-project path is unchanged
-    const one = scaffold({ dir: NodePath.join(base, "co-one"), preset: "solo-dev", github: "t", kernelVersion: "0.0.0-test", git: false, projectPath: a })
+    const one = scaffold({ dir: NodePath.join(base, "co-one"), preset: "solo-dev", github: "t", kernelVersion: "0.0.0-test", git: false, projectPath: a, quota: { pause_at: 75, pace: false } })
     expect(one.config.projects.map((p) => [p.id, p.share])).toEqual([["alpha", 1]])
+    expect(one.config.budget.quota).toEqual({ pause_at: 75, pace: false }) // D72: the wizard's answer lands in budget.quota
   })
   test("the wizard's helpers: a percent split and the verify guess", () => {
     expect(parseSplit("50 30 20", 3)).toEqual([0.5, 0.3, 0.2])

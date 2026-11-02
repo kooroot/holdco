@@ -2,6 +2,7 @@
 import type { CompanyConfig } from "../config/company.ts"
 import type { Store } from "../store/store.ts"
 import type { Interrupt } from "../schema/interrupts.ts"
+import { quotaPolicy, quotaVerdict, readQuota, renderQuota } from "./quota.ts"
 
 const WEEK = 7 * 86_400_000
 const usd = (n: number) => `$${n.toFixed(2)}`
@@ -34,6 +35,7 @@ export const renderDigest = (config: CompanyConfig, store: Store, now: number, r
     "## Spend",
     `- Week: ${usd(spend.reduce((a, d) => a + d.usd, 0))} — ${spend.map((d) => `${d.department} ${usd(d.usd)}`).join(", ") || "nothing"}`,
     `- Month to date: ${usd(store.spentAll(now - 30 * 86_400_000))} of ${usd(config.budget.monthly_usd)}`,
+    ...(Object.keys(config.engines) as Array<"claude" | "codex">).flatMap((id) => { const q = readQuota(store, id); if (!q) return []; const v = quotaVerdict(q, quotaPolicy(config), now); return [`- Plan limits: ${renderQuota(q, now)}${v.kind === "ok" ? "" : ` — ${v.reason}`}`] }),
     "",
     "## Verification and calibration",
     `- Verdicts: ${verdicts.length} (approve ${verdicts.filter((v) => v.verdict === "approve").length}, reject ${verdicts.filter((v) => v.verdict === "reject").length}, cannot-score ${verdicts.filter((v) => v.verdict === "cannot-score").length}); low confidence: ${verdicts.filter((v) => v.confidence === "low").length}`,
