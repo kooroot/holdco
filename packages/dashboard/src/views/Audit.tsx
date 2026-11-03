@@ -7,7 +7,7 @@ import type { Snapshot } from "../api.ts"
 import { Diff } from "../ticket/Diff.tsx"
 import { Files } from "../ticket/Files.tsx"
 import { cn, Button, Card, Code, Empty, Head, Kv, Pill, Tabs, ui } from "../ui.tsx"
-import { t, useLang } from "../i18n.ts"
+import { t, useLang, tx } from "../i18n.ts"
 
 const st = {
   grid: style({ display: "grid", gridTemplateColumns: "300px 1fr", gap: "lg", alignItems: "start", "@media (max-width: 900px)": { gridTemplateColumns: "1fr" } }),
@@ -46,8 +46,8 @@ const Pane = ({ id, graded, onGrade }: { id: string; graded: Graded | undefined;
   return (
     <>
       <div {...st.pane()}>
-        <div><div {...ui.row()} style={{ gap: 8 }}><Code>{tk.id}</Code><Pill>{tk.department}</Pill>{tk.action ? <Pill mono>{tk.action}</Pill> : null}<span {...cn(ui.muted(), ui.small())}>{t("{n} sessions, {c}", { n: d.sessions.length, c: usd(d.cost) })}</span></div><h3 {...ui.h3()} style={{ marginTop: 6 }}>{tk.title}</h3></div>
-        <Kv rows={[[t("Goal"), tk.goal], [t("Done when"), <ul {...ui.criteria()}>{tk.done_criteria.map((c, i) => <li key={i}>{c}</li>)}</ul>], [t("Senior said"), <span {...ui.small()}>{d.events.filter((e) => e.to_state === "ready_for_verification").at(-1)?.note || "—"}</span>]]} />
+        <div><div {...ui.row()} style={{ gap: 8 }}><Code>{tk.id}</Code><Pill>{tk.department}</Pill>{tk.action ? <Pill mono>{tk.action}</Pill> : null}<span {...cn(ui.muted(), ui.small())}>{t("{n} sessions, {c}", { n: d.sessions.length, c: usd(d.cost) })}</span></div><h3 {...ui.h3()} style={{ marginTop: 6 }} title={tk.title}>{tx(tk.title)}</h3></div>
+        <Kv rows={[[t("Goal"), tx(tk.goal)], [t("Done when"), <ul {...ui.criteria()}>{tk.done_criteria.map((c, i) => <li key={i}>{tx(c)}</li>)}</ul>], [t("Senior said"), <span {...ui.small()}>{tx(d.events.filter((e) => e.to_state === "ready_for_verification").at(-1)?.note) || "—"}</span>]]} />
         <Tabs tabs={[["diff", t("Diff")], ["files", t("Files")]]} value={tab} onChange={setTab} />
         {tab === "diff" ? (d.diff ? <Diff diff={d.diff} /> : <Empty>{t("No branch to diff.")}</Empty>) : <Files id={id} />}
       </div>
@@ -55,7 +55,7 @@ const Pane = ({ id, graded, onGrade }: { id: string; graded: Graded | undefined;
         {judge ? (
           <div {...cx(st.reveal(), agreement === true && st.agree(), agreement === false && st.disagree())}>
             <div {...ui.row()}><b>{t(graded ? (graded.agreement ? "You and the judge agree" : "You disagree with the judge") : "Already graded")}</b><Pill tone={judge === "approve" ? "ok" : "bad"}>{t("judge: {v}", { v: judge })}</Pill>{mine ? <Pill>{t("you: {v}", { v: mine })}</Pill> : null}</div>
-            <p {...ui.small()} style={{ margin: 0 }}>{summary}</p>
+            <p {...ui.small()} style={{ margin: 0 }}>{tx(summary)}</p>
           </div>
         ) : (
           <>
@@ -106,7 +106,7 @@ export const Audit = () => {
     <>
       <Head title={t("Weekly audit")} lead={t("Grade the sample before you see the judge's verdict. Your grades calibrate Verification; skipping two weeks freezes graduation and improvement.")} right={<><Pill tone={S.audit.due ? "signal" : "ok"}>{t("{g} of {n} graded · {l} labels total", { g: gradedN, n: sample.length, l: S.audit.labels_total })}{S.audit.agreement !== null ? t(" · agreement {a}", { a: S.audit.agreement.toFixed(2) }) : ""}</Pill><Button tone="primary" disabled={!allGraded} title={S.audit.last_audit_at ? t("last audit {t}", { t: clock(S.audit.last_audit_at) }) : t("no audit recorded yet")} onClick={() => void act({ kind: "audit_done" }, t("Audit recorded for this week")).then((r) => { if (r) { setGraded({}); setRows([]) } })}>{t("Finish this week's audit")}</Button></>} />
       <div {...st.grid()}>
-        <Card>{sample.length ? sample.map((x) => <a key={x.id} href="#" {...cx(st.item(), x.id === current && st.active(), graded[x.id] && st.done())} onClick={(e) => { e.preventDefault(); setSel(x.id) }}><span {...st.id()}><span>{x.id}</span><span>{graded[x.id] ? t(graded[x.id]!.agreement ? "agree" : "disagree") : x.confidence === "low" ? t("low confidence") : ""}</span></span><span>{x.title}</span><span {...cn(ui.small(), ui.muted())}>{x.department}{x.action ? ` · ${x.action}` : ""}</span></a>) : <Empty title={t("Nothing to grade")}>{t(S.audit.labels_total ? "Every recent verdict is graded. Record the audit so the week counts." : "Verdicts appear here once tickets have been judged.")}</Empty>}</Card>
+        <Card>{sample.length ? sample.map((x) => <a key={x.id} href="#" {...cx(st.item(), x.id === current && st.active(), graded[x.id] && st.done())} onClick={(e) => { e.preventDefault(); setSel(x.id) }}><span {...st.id()}><span>{x.id}</span><span>{graded[x.id] ? t(graded[x.id]!.agreement ? "agree" : "disagree") : x.confidence === "low" ? t("low confidence") : ""}</span></span><span>{tx(x.title)}</span><span {...cn(ui.small(), ui.muted())}>{x.department}{x.action ? ` · ${x.action}` : ""}</span></a>) : <Empty title={t("Nothing to grade")}>{t(S.audit.labels_total ? "Every recent verdict is graded. Record the audit so the week counts." : "Verdicts appear here once tickets have been judged.")}</Empty>}</Card>
         <Card>{current ? <Pane id={current} graded={graded[current]} onGrade={onGrade} /> : <Empty title={t("Pick a ticket")}>{t("The branch diff, the goal and the done criteria appear here.")}</Empty>}</Card>
       </div>
     </>

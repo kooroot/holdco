@@ -8,10 +8,10 @@ import { spawnSync } from "node:child_process"
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { Codex } from "@openai/codex-sdk"
-import type { Engine, EngineCapabilities, EngineQuota, EngineQuotaWindow, Outcome, ProbeContext, ProbeResult, SessionEvent, SessionSpec } from "@holdco/kernel/engine"
+import type { Engine, EngineCapabilities, EngineQuota, EngineQuotaWindow, Outcome, ProbeContext, ProbeResult, SessionEvent, SessionSpec, TranslateRequest, TranslateResult } from "@holdco/kernel/engine"
 import { type CodexBinary, resolveCodexBinary } from "./binary.ts"
 import { type CodexPlan, toCodexOptions } from "./options.ts"
-import { CodexRunState } from "./outcome.ts"
+import { CodexRunState, costUsd } from "./outcome.ts"
 
 export const capabilities: EngineCapabilities = {
   abort: true,
@@ -195,7 +195,20 @@ const accountIdFromJwt = (idToken: string | undefined): string | undefined => {
   } catch { return undefined }
 }
 
-export const engine: Engine = { id: "codex", capabilities, run, probe: (ctx) => probe(ctx), loginStatus, quota }
+/** D75: one read-only Codex turn on the cheapest model with the Operator's own login; the answer is a JSON array. */
+export const translate = async (req: TranslateRequest): Promise<TranslateResult> => {
+  const binary = resolveCodexBinary()
+  const codex = new Codex({ codexPathOverride: binary.path, env: { ...req.env, PATH: req.env["PATH"] ?? process.env["PATH"] ?? "" } as Record<string, string> })
+  const thread = codex.startThread({ model: req.model, sandboxMode: "read-only", workingDirectory: req.cwd, skipGitRepoCheck: true, networkAccessEnabled: false, modelReasoningEffort: "low" })
+  const prompt = `Translate each string of this JSON array into ${req.to} for an AI company's human owner. Keep ticket ids (ENG-1), file paths, commands, code, URLs, product and model names and numbers exactly. Plain, terse; keep line breaks. Reply with exactly one JSON array of ${req.texts.length} strings in the same order and nothing else.\n\n${JSON.stringify(req.texts)}`
+  const r = await thread.run(prompt, { outputSchema: { type: "array", items: { type: "string" } } })
+  const m = /\[[\s\S]*\]/.exec(r.finalResponse)
+  const out = m ? (JSON.parse(m[0]) as Array<string>) : undefined
+  if (!out || out.length !== req.texts.length) throw new Error(`translate: expected ${req.texts.length} texts, got ${out?.length ?? 0}`)
+  return { texts: out, costUsd: r.usage && req.price ? costUsd(r.usage, req.price) : 0 }
+}
+
+export const engine: Engine = { id: "codex", capabilities, run, probe: (ctx) => probe(ctx), loginStatus, quota, translate }
 export { type CodexBinary, resolveCodexBinary, wrapperScript } from "./binary.ts"
 export { codexConfig, codexHome, codexHooks, DISABLED_FEATURES, toCodexOptions, workspaceAccess } from "./options.ts"
 export { CodexRunState, costUsd } from "./outcome.ts"

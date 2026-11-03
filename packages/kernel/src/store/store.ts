@@ -91,6 +91,7 @@ export interface LabelRow {
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS translations (hash TEXT NOT NULL, lang TEXT NOT NULL, text TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (hash, lang));
 CREATE TABLE IF NOT EXISTS product_observations (
   project TEXT NOT NULL, source TEXT NOT NULL, event_id TEXT NOT NULL, fingerprint TEXT NOT NULL,
   ticket_id TEXT NOT NULL REFERENCES tickets(id), observed_at INTEGER NOT NULL, received_at INTEGER NOT NULL,
@@ -464,6 +465,13 @@ export class Store {
     return action === undefined
       ? this.db.query<LabelRow, []>("SELECT ticket_id, action, at, agreement FROM labels ORDER BY at").all()
       : this.db.query<LabelRow, [string]>("SELECT ticket_id, action, at, agreement FROM labels WHERE action = ? ORDER BY at").all(action)
+  }
+  /** D75: a cached translation of the text with this content hash, in `lang`. */
+  translation(hash: string, lang: string): string | undefined {
+    return this.db.query<{ text: string }, [string, string]>("SELECT text FROM translations WHERE hash = ? AND lang = ?").get(hash, lang)?.text
+  }
+  setTranslation(hash: string, lang: string, text: string, now: number) {
+    this.db.run("INSERT OR REPLACE INTO translations(hash, lang, text, at) VALUES (?, ?, ?, ?)", [hash, lang, text, now])
   }
   labeledTicketIds(): Set<string> {
     return new Set(this.db.query<{ ticket_id: string }, []>("SELECT DISTINCT ticket_id FROM labels").all().map((r) => r.ticket_id))

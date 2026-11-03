@@ -77,6 +77,8 @@ Every change is one commit to `company.yaml`. Removing a project never touches i
 
 **The real budget is your subscription.** Dollars are metered for comparability, but what actually runs out is the plans' rate-limit windows — Claude Code's 5-hour and 7-day, Codex's 5-hour and weekly. The kernel reads them from the same usage endpoints `/usage` and `/status` use (with your login on this host; Claude: `CLAUDE_CODE_OAUTH_TOKEN`, the keychain, or `~/.claude/.credentials.json`; Codex: `~/.codex/auth.json`), polls every five minutes, and also takes the rate-limit events sessions themselves report. They show as percentages on Home and in the dashboard's sidebar, on Sessions & spend, in `holdco status`, in Telegram's `/quota` and the daily brief (the weekly audit is there too: `/audit` sends the sample as blind cards with Pass / Fail buttons), and `holdco quota` reads them on demand. Policy (`budget.quota`): an engine past `pause_at` (default 90%) starts no new session until the window resets — the Operator is told once, and the stall line says so instead of going quiet; with `pace` (default on), when the 7-day window is more than `pace_margin` (15) points ahead of the clock, only core projects, Verification and the executive run until the week is back on pace. The CEO sees the same lines every cycle.
 
+**Reading it in your language.** With `company.language: ko`, everything an agent wrote that you see — titles, goals, done criteria, the senior's and the judge's words, inbox items — is translated once by the cheapest model you have (Claude haiku, or the cheapest Codex model), cached, and shown translated on the dashboard (hover for the original) and in Telegram. Agents still work in English; the records stay English. It costs cents (capped at $1 a day, charged to a `translator` role).
+
 ### 5. Your weekly ten minutes
 
 | Command | What it is |
@@ -157,6 +159,8 @@ bunx holdco project remove old-repo                       # 열린 티켓이 있
 모든 변경은 `company.yaml`에 커밋 하나입니다. 프로젝트 제거는 저장소를 건드리지 않습니다.
 
 **진짜 예산은 구독입니다.** 달러는 비교를 위해 계량하지만 실제로 바닥나는 건 구독의 레이트 리밋 창 — Claude Code의 5시간·7일, Codex의 5시간·주간 — 입니다. 커널은 `/usage`·`/status`가 쓰는 사용량 엔드포인트를 이 호스트의 로그인으로 읽고(Claude: `CLAUDE_CODE_OAUTH_TOKEN`, 키체인, 또는 `~/.claude/.credentials.json`; Codex: `~/.codex/auth.json`), 5분마다 폴링하며, 세션 자체가 보고하는 레이트 리밋 이벤트도 반영합니다. 홈과 대시보드 사이드바, 세션·지출 화면, `holdco status`, 텔레그램 `/quota`와 일일 브리핑(주간 감사도 거기서: `/audit`이 샘플을 통과/반려 버튼이 달린 블라인드 카드로 보냄)에 퍼센트로 보이고 `holdco quota`로 즉시 읽을 수 있습니다. 정책(`budget.quota`): `pause_at`(기본 90%)을 넘긴 엔진은 창이 리셋될 때까지 새 세션을 시작하지 않고 — 운영자에게 한 번 알리고 정체 진단이 이유를 말함 — `pace`(기본 켜짐)는 7일 창이 시계보다 `pace_margin`(15)p 이상 앞서면 주간 페이스로 돌아올 때까지 core 프로젝트·검증·경영진만 돌립니다. CEO도 매 사이클 같은 줄을 봅니다.
+
+**당신의 언어로 읽기.** `company.language: ko`면 에이전트가 쓴 글 중 당신이 보는 것 — 제목, 목표, 완료 조건, 시니어와 심판의 말, 인박스 항목 — 은 가장 싼 모델(Claude haiku 또는 가장 싼 Codex 모델)이 한 번 번역해 캐시하고, 대시보드(원문은 호버)와 텔레그램에 번역으로 보입니다. 에이전트는 여전히 영어로 일하고 기록도 영어입니다. 비용은 몇 센트(하루 $1 상한, `translator` 역할에 과금).
 
 ### 5. 매주 10분
 

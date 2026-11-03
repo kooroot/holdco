@@ -144,6 +144,26 @@ export interface Engine {
    * this host. Returns undefined when there is no subscription login; throws when the endpoint fails.
    */
   quota?(env: Record<string, string | undefined>): Promise<EngineQuota | undefined>
+  /**
+   * D75: translate Operator-facing text with the engine's cheapest model — one short model call, no tools,
+   * no sandbox needed (nothing is written). Returns the texts in order and what the call cost.
+   */
+  translate?(req: TranslateRequest): Promise<TranslateResult>
+}
+
+export interface TranslateRequest {
+  readonly texts: ReadonlyArray<string>
+  /** Target language, BCP-47-ish (`ko`, `en`). */
+  readonly to: string
+  /** The model to use; the kernel picks the engine's cheapest. */
+  readonly model: string
+  readonly price?: Price
+  readonly env: Record<string, string | undefined>
+  readonly cwd: string
+}
+export interface TranslateResult {
+  readonly texts: ReadonlyArray<string>
+  readonly costUsd: number
 }
 
 export interface EngineQuota {

@@ -16,6 +16,7 @@ import { Store } from "../src/store/store.ts"
 import { Supervisor } from "../src/supervisor/supervisor.ts"
 import { raise, readControl, clear } from "../src/supervisor/control.ts"
 import { FakeEngine } from "./fake-engine.ts"
+import { hashText } from "../src/supervisor/i18n.ts"
 import { ingestObservation, recordDecision } from "../src/supervisor/feedback.ts"
 
 const base = mkdtempSync(NodePath.join(tmpdir(), "holdco-sup-"))
@@ -362,6 +363,45 @@ describe("subscription limits run the company (D72)", () => {
     expect(sup.quotaLines(clock.now)[0]).toContain("points ahead of the week")
     // the session's rate_limit_event landed as the 5-hour window
     expect(sup.quotaLines(clock.now)[0]).toContain("5-hour 41%")
+    await sup.stop()
+  })
+})
+
+describe("the Operator reads the company in Korean (D75)", () => {
+  test("agent text is translated in batches by the cheapest model, cached, charged to the translator, and shown on every surface", async () => {
+    const c = company("i18n", (raw) => { ;(raw["company"] as Record<string, unknown>)["language"] = "ko" })
+    const clock = { now: Date.UTC(2026, 10, 3, 9) }
+    const engine = new FakeEngine({}, 0.1)
+    const { sup, store } = makeSupervisor(c, engine, clock)
+    await sup.boot()
+    const t = store.createTicket({ department: "engineering", title: "Add CSV export for the settings page", goal: "Users can download their data as CSV", why: "objective 1 asks for it", done_criteria: ["an export button exists on the settings page"], opened_by: "operator", project: "app", state: "new", now: clock.now })
+    await cycle(sup, clock, 2)
+    expect(engine.translateCalls.length).toBeGreaterThanOrEqual(1)
+    expect(engine.translateCalls[0]).toContain("Add CSV export for the settings page")
+    expect(store.translation(hashText("Add CSV export for the settings page"), "ko")).toBe("[ko] Add CSV export for the settings page")
+    expect(store.translation(hashText("an export button exists on the settings page"), "ko")).toBe("[ko] an export button exists on the settings page")
+    expect(store.db.query<{ s: number }, []>("SELECT SUM(usd) AS s FROM ledger WHERE role = 'translator'").get()?.s).toBeGreaterThan(0)
+    // later batches carry only new text (the senior's note, the verdict…): no text is ever sent twice; the record keeps its English
+    await cycle(sup, clock, 4)
+    const all = engine.translateCalls.flat()
+    expect(new Set(all).size).toBe(all.length)
+    expect(store.ticket(t.id)?.title).toBe("Add CSV export for the settings page")
+    // the dashboard snapshot carries the map, keyed by the original
+    const { snapshot } = await import("../src/dashboard/api.ts")
+    const snap = snapshot({ root: c.dir, config: () => c.config, store, now: () => clock.now, supervisor: sup, saveConfig: () => {} })
+    expect(snap.company.language).toBe("ko")
+    expect(snap.translations["Add CSV export for the settings page"]).toBe("[ko] Add CSV export for the settings page")
+    await sup.stop()
+  })
+  test("an English company translates nothing", async () => {
+    const c = company("i18n-en")
+    const clock = { now: Date.UTC(2026, 10, 3, 9) }
+    const engine = new FakeEngine({}, 0.1)
+    const { sup, store } = makeSupervisor(c, engine, clock)
+    await sup.boot()
+    store.createTicket({ department: "engineering", title: "Add CSV export for the settings page", goal: "g", why: "w", done_criteria: ["d"], opened_by: "operator", project: "app", state: "new", now: clock.now })
+    await cycle(sup, clock, 2)
+    expect(engine.translateCalls.length).toBe(0)
     await sup.stop()
   })
 })

@@ -5,7 +5,7 @@ import { ago, KIND_LABEL, left } from "../format.ts"
 import { useAct, useSnapshot } from "../hooks.ts"
 import { useOpenTicket } from "../nav.ts"
 import { cn, Button, Card, Code, Empty, Head, Kv, Pill, VerdictPill, ui } from "../ui.tsx"
-import { t, useLang } from "../i18n.ts"
+import { t, useLang, tx } from "../i18n.ts"
 
 const st = {
   item: style({ display: "grid", gridTemplateColumns: "1fr auto", gap: "10px 16px !custom", padding: "14px 16px 14px 18px !custom", borderLeft: "3px solid transparent !custom", borderBottom: `1px solid ${vars.color.line} !custom`, backgroundColor: "surface", cursor: "pointer", ":last-child": { borderBottom: "none !custom" } }),
@@ -54,14 +54,14 @@ export const Inbox = () => {
           const openIt = idx === sel
           return (
             <div key={i.id} {...cx(st.item(), i.urgency === "urgent" && st.urgent(), openIt && st.sel())} onClick={(e) => { if ((e.target as HTMLElement).closest("button, a, input")) return; setSel(idx) }}>
-              <div><div {...st.title()}>{String(i.payload["title"] ?? t(KIND_LABEL[i.kind] ?? i.kind))}</div><div {...st.meta()}><Pill tone={i.urgency === "urgent" ? "signal" : undefined}>{t(KIND_LABEL[i.kind] ?? i.kind)}</Pill><span>{t("{t} ago", { t: ago(S.now - i.created_at) })}</span>{exp !== null ? <span {...cn(ui.num(), exp < 6 * 3600000 && st.soon())}>{t("rejects itself in {t}", { t: left(exp) })}</span> : null}</div></div>
+              <div><div {...st.title()}>{tx(String(i.payload["title"] ?? t(KIND_LABEL[i.kind] ?? i.kind)))}</div><div {...st.meta()}><Pill tone={i.urgency === "urgent" ? "signal" : undefined}>{t(KIND_LABEL[i.kind] ?? i.kind)}</Pill><span>{t("{t} ago", { t: ago(S.now - i.created_at) })}</span>{exp !== null ? <span {...cn(ui.num(), exp < 6 * 3600000 && st.soon())}>{t("rejects itself in {t}", { t: left(exp) })}</span> : null}</div></div>
               <div {...st.acts()}><Button tone="ok" sm kbd="a" onClick={() => decide(i.id, "approved")}>{t("Approve")}</Button><Button tone="bad" sm kbd="r" onClick={() => decide(i.id, "rejected")}>{t("Reject")}</Button></div>
               {openIt ? (
                 <div {...st.body()}>
-                  {tk ? <Kv rows={[[t("Ticket"), <><a href="#" {...ui.link()} onClick={(e) => { e.preventDefault(); open(tk.id) }}><Code>{tk.id}</Code></a> {tk.title} <Pill>{tk.department}</Pill>{tk.action ? <> <Pill mono>{tk.action}</Pill></> : null}</>], [t("Goal"), tk.goal], ...(tk.branch ? [[t("Branch"), <Code>{tk.branch}</Code>] as [string, React.ReactNode]] : []), ...(v ? [[t("Verdict"), <><VerdictPill verdict={v.verdict} /> {t("{o}/4, {c} confidence — {s}", { o: v.overall, c: v.confidence, s: v.summary })}</>] as [string, React.ReactNode]] : [])]} /> : null}
+                  {tk ? <Kv rows={[[t("Ticket"), <><a href="#" {...ui.link()} onClick={(e) => { e.preventDefault(); open(tk.id) }}><Code>{tk.id}</Code></a> {tx(tk.title)} <Pill>{tk.department}</Pill>{tk.action ? <> <Pill mono>{tk.action}</Pill></> : null}</>], [t("Goal"), tx(tk.goal)], ...(tk.branch ? [[t("Branch"), <Code>{tk.branch}</Code>] as [string, React.ReactNode]] : []), ...(v ? [[t("Verdict"), <><VerdictPill verdict={v.verdict} /> {t("{o}/4, {c} confidence — {s}", { o: v.overall, c: v.confidence, s: v.summary })}</>] as [string, React.ReactNode]] : [])]} /> : null}
                   {p ? <div {...st.proposal()}><b>{t("CEO proposes:")}</b> {p.decision}<br /><span {...ui.muted()}>{t("Why now:")}</span> {p.why_now}<br /><span {...ui.muted()}>{t("Cost:")}</span> {p.expected_cost} · <span {...ui.muted()}>{t("Rollback:")}</span> {p.rollback_plan} · <span {...ui.muted()}>{t("Risk:")}</span> {p.risk}{p.alternatives_rejected?.length ? <><br /><span {...ui.muted()}>{t("Rejected alternatives:")}</span> {p.alternatives_rejected.join("; ")}</> : null}</div> : null}
                   {r ? <div {...st.proposal()}><b>{t("COO {d}s:", { d: r.decision ?? "" })}</b> {r.reasoning}</div> : null}
-                  {Object.entries(i.payload).filter(([k]) => !["title", "proposal", "review"].includes(k)).map(([k, val]) => <div key={k} {...ui.small()}><span {...ui.muted()}>{k}:</span> {typeof val === "string" ? val : JSON.stringify(val)}</div>)}
+                  {Object.entries(i.payload).filter(([k]) => !["title", "proposal", "review"].includes(k)).map(([k, val]) => <div key={k} {...ui.small()}><span {...ui.muted()}>{k}:</span> {typeof val === "string" ? tx(val) : JSON.stringify(val)}</div>)}
                   <input {...ui.input()} value={notes[i.id] ?? ""} onChange={(e) => setNotes((n) => ({ ...n, [i.id]: e.target.value }))} placeholder={t("note (optional; goes to the ticket and the digest)")} />
                 </div>
               ) : null}

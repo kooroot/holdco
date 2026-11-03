@@ -22,6 +22,7 @@ import { evaluateInterrupts } from "../hooks/interrupts.ts"
 import type { Engine, Outcome, RoleDefinition, SessionEvent, SessionSpec } from "../engine/types.ts"
 import { appendSessionEvent } from "./journal.ts"
 import { renderVerify } from "../config/projects.ts"
+import { hashText, pendingTexts, TRANSLATION_DAILY_USD, translatorFor } from "./i18n.ts"
 import { fmtReset, mergeSessionWindow, quotaPolicy, quotaVerdict, readQuota, renderQuota, WINDOW_LENGTH, writeQuota } from "./quota.ts"
 import { collectSignals, renderSignals } from "./signals.ts"
 import { feedbackContext } from "./feedback.ts"
@@ -787,6 +788,7 @@ export class Supervisor {
     if (this.config.modules.executive === "ceo+coo") this.cooReviews(now)
     if (this.due("tripwires", durationMs(this.config.runtime.tick), now)) this.tripwires(now)
     if (this.due("quota", QUOTA_POLL_MS, now)) void this.pollQuota(now)
+    if ((this.config.company.language ?? "en") !== "en" && this.due("translate", 30_000, now)) void this.translatePending(now)
     this.stallWatch(now, active, lastCeo)
     if (this.due("audit", DAY, now)) this.auditWatch(now)
     if (this.due("graduation", DAY, now)) this.graduationProposals(now, frozen)
@@ -1026,6 +1028,34 @@ export class Supervisor {
           void this.notifier.send("warning", `${id} is at ${Math.round(w.used_pct)}% of its ${w.label} limit${w.resets_at ? ` (resets in ${fmtReset(w.resets_at, now)})` : ""}; no new sessions on it until then. ${renderQuota(q, now)}`)
         }
       }
+    }
+  }
+
+  /** D75: translate what the Operator is looking at, in one cheap call per batch, under a daily cap; never twice. */
+  private translating = false
+  private translateFailures = 0
+  async translatePending(now: number) {
+    if (this.translating) return
+    const lang = this.config.company.language ?? "en"
+    const texts = pendingTexts(this.store, now, lang)
+    if (texts.length === 0) return
+    const t = translatorFor(this.config, this.engines)
+    if (!t) return
+    const spentToday = this.store.db.query<{ s: number | null }, [number]>("SELECT SUM(usd) AS s FROM ledger WHERE role = 'translator' AND at >= ?").get(now - DAY)?.s ?? 0
+    if (spentToday >= TRANSLATION_DAILY_USD) return
+    if (this.translateFailures >= 3 && now - Number(this.store.getMeta("translate_failed_at") ?? 0) < 3_600_000) return
+    this.translating = true
+    try {
+      const r = await (t.engine.translate as NonNullable<Engine["translate"]>)({ texts, to: lang, model: t.model, ...(t.price ? { price: t.price } : {}), env: this.engineEnv(t.engine.id), cwd: this.root })
+      r.texts.forEach((out, i) => { const src = texts[i] as string; if (out.trim()) this.store.setTranslation(hashText(src), lang, out, now) })
+      this.store.charge({ at: now, role: "translator", department: "executive", project: null, session_id: null, usd: r.costUsd, source: "engine" })
+      this.translateFailures = 0
+    } catch (e) {
+      this.translateFailures++
+      this.store.setMeta("translate_failed_at", String(now))
+      this.log(`translate (${t.engine.id}:${t.model}): ${String(e).slice(0, 200)}`)
+    } finally {
+      this.translating = false
     }
   }
 

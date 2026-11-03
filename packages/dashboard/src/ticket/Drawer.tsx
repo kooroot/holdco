@@ -9,7 +9,7 @@ import { Diff } from "./Diff.tsx"
 import { Files } from "./Files.tsx"
 import { Live } from "./Live.tsx"
 import { etaText, waitingText } from "./Waiting.tsx"
-import { t as tr, useLang } from "../i18n.ts"
+import { t as tr, useLang, tx } from "../i18n.ts"
 
 const st = {
   scrim: style({ position: "fixed", inset: "0 !custom", backgroundColor: "rgba(0,0,0,.25) !custom", zIndex: 39 }),
@@ -45,7 +45,7 @@ export const Drawer = ({ id, onClose }: { id: string; onClose: () => void }) => 
         <div {...st.dh()}>
           <div>
             <div {...ui.row()} style={{ gap: 8 }}><Code>{id}</Code>{t ? <><Pill tone={t.state === "blocked" ? "signal" : t.state === "done" ? "ok" : undefined}>{tr(STATE_LABEL[t.state] ?? t.state)}</Pill><Pill>{t.department}</Pill>{t.action ? <Pill mono>{t.action}</Pill> : null}</> : null}</div>
-            {t ? <h3 {...ui.h3()} style={{ marginTop: 6 }}>{t.title}</h3> : null}
+            {t ? <h3 {...ui.h3()} style={{ marginTop: 6 }} title={t.title}>{tx(t.title)}</h3> : null}
           </div>
           <Button sm kbd="esc" onClick={onClose}>{tr("Close")}</Button>
         </div>
@@ -55,20 +55,20 @@ export const Drawer = ({ id, onClose }: { id: string; onClose: () => void }) => 
               <Tabs tabs={[["overview", tr("Overview")], ["live", tr(d.sessions.some((x) => x.ended_at === null) ? "Live ●" : "Log")], ["files", tr("Files")], ["diff", tr("Diff")]]} value={tab} onChange={setTab} right={canEdit ? <Button sm onClick={() => { snap.data; setNew(true); sessionStorage.setItem("holdco.edit", id) }}>{tr("Edit")}</Button> : null} />
               {tab === "overview" ? (
                 <div {...ui.stack()}>
-                  <Kv rows={[[tr("Goal"), t.goal], [tr("Why"), t.why], [tr("Done when"), <ul {...ui.criteria()}>{t.done_criteria.map((c) => <li key={c}>{c}</li>)}</ul>], ...(t.branch ? [[tr("Branch"), <Code>{t.branch}</Code>] as [string, React.ReactNode]] : []), [tr("Cost"), tr("{c} across {n} sessions", { c: usd(d.cost), n: d.sessions.length })], [tr("Attempts"), String(t.attempts)], ...(wait ? [[tr("Waiting on"), `${waitingText(wait)}${etaText(wait, snap.data?.now ?? Date.now()) ? ` · ${etaText(wait, snap.data?.now ?? Date.now())}` : ""}`] as [string, React.ReactNode]] : [])]} />
+                  <Kv rows={[[tr("Goal"), tx(t.goal)], [tr("Why"), tx(t.why)], [tr("Done when"), <ul {...ui.criteria()}>{t.done_criteria.map((c) => <li key={c}>{tx(c)}</li>)}</ul>], ...(t.branch ? [[tr("Branch"), <Code>{t.branch}</Code>] as [string, React.ReactNode]] : []), [tr("Cost"), tr("{c} across {n} sessions", { c: usd(d.cost), n: d.sessions.length })], [tr("Attempts"), String(t.attempts)], ...(wait ? [[tr("Waiting on"), `${waitingText(wait)}${etaText(wait, snap.data?.now ?? Date.now()) ? ` · ${etaText(wait, snap.data?.now ?? Date.now())}` : ""}`] as [string, React.ReactNode]] : [])]} />
                   {t.state === "blocked" ? (
-                    <Card pad><div {...ui.stack()}><b>{tr("Decision needed")}</b><p {...ui.small()} style={{ whiteSpace: "pre-wrap", margin: 0 }}>{t.note}</p>
+                    <Card pad><div {...ui.stack()}><b>{tr("Decision needed")}</b><p {...ui.small()} style={{ whiteSpace: "pre-wrap", margin: 0 }}>{tx(t.note)}</p>
                       <input {...ui.input()} value={decision} onChange={(e) => setDecision(e.target.value)} placeholder={tr("your decision, in one line (the senior reads it)")} />
                       <div {...ui.row()}><Button tone="primary" onClick={() => { if (!decision.trim()) return toast(tr("Write the decision first"), true); void act({ kind: "unblock", id, note: decision.trim() }, tr("Unblocked")).then((r) => r && onClose()) }}>{tr("Unblock with this decision")}</Button><Button tone="bad" onClick={() => { if (confirm(tr("Decline {id}?", { id }))) void act({ kind: "decline", id }, tr("Declined!")).then((r) => r && onClose()) }}>{tr("Decline the ticket")}</Button></div></div></Card>
                   ) : null}
                   {v ? (
-                    <Card pad><div {...ui.stack()}><div {...ui.row()}><b>{tr("Verdict")}</b><VerdictPill verdict={v.verdict} /><span {...cn(ui.muted(), ui.small())}>{tr("{o}/4 · {c} confidence", { o: v.overall, c: v.confidence })}</span></div><p {...ui.small()} style={{ margin: 0 }}>{v.payload.summary}</p>
+                    <Card pad><div {...ui.stack()}><div {...ui.row()}><b>{tr("Verdict")}</b><VerdictPill verdict={v.verdict} /><span {...cn(ui.muted(), ui.small())}>{tr("{o}/4 · {c} confidence", { o: v.overall, c: v.confidence })}</span></div><p {...ui.small()} style={{ margin: 0 }}>{tx(v.payload.summary)}</p>
                       {v.payload.failures?.length ? <ul {...cn(ui.criteria(), ui.small())}>{v.payload.failures.map((f) => <li key={f.criterion}><b>{f.criterion}</b>: {f.evidence}</li>)}</ul> : null}
                       {v.payload.gates?.length ? <div {...ui.row()} style={{ gap: 4 }}>{v.payload.gates.map((g) => <Pill key={g.gate} tone={g.passed ? "ok" : "bad"} mono>{g.gate}</Pill>)}</div> : null}
                       {d.label ? <div {...cn(ui.small(), ui.muted())}>{tr("You graded it {v} on {t}", { v: d.label.operator_verdict, t: clock(d.label.at) })}</div> : null}</div></Card>
                   ) : d.verdict_hidden ? <div {...cn(ui.small(), ui.muted())}>{tr("Verdict withheld until you grade this ticket in the audit.")}</div> : null}
                   <div><h3 {...ui.h3()} style={{ marginBottom: 8 }}>{tr("Timeline")}</h3>
-                    {d.events.map((e, i) => <div key={i} {...st.ev()}><span {...st.at()}>{clock(e.at)}</span><div><span style={{ fontWeight: 500 }}>{tr(STATE_LABEL[e.to_state] ?? e.to_state)}</span> <span {...cn(ui.muted(), ui.small())}>{e.actor}</span>{e.note ? <div {...cn(st.nt(), ui.small())}>{e.note}</div> : null}</div></div>)}
+                    {d.events.map((e, i) => <div key={i} {...st.ev()}><span {...st.at()}>{clock(e.at)}</span><div><span style={{ fontWeight: 500 }}>{tr(STATE_LABEL[e.to_state] ?? e.to_state)}</span> <span {...cn(ui.muted(), ui.small())}>{e.actor}</span>{e.note ? <div {...cn(st.nt(), ui.small())} title={e.note}>{tx(e.note)}</div> : null}</div></div>)}
                   </div>
                   {d.sessions.length ? <div><h3 {...ui.h3()} style={{ marginBottom: 8 }}>{tr("Sessions")}</h3><table {...ui.table()}><tbody>{d.sessions.map((x) => <tr key={x.id}><Td><Code>{x.role}</Code><div {...cn(ui.small(), ui.muted())}>{x.engine}:{x.model}</div></Td><Td><Pill tone={x.status === "success" ? "ok" : x.status ? "bad" : "kernel"}>{x.status ?? tr("running")}</Pill></Td><Td className={ui.num().className}>{tr("{n} turns", { n: x.turns })}</Td><Td className={ui.num().className}>{usd(x.cost_usd)}</Td><Td className={cn(ui.small(), ui.muted()).className}>{tr("{t} ago", { t: ago(Date.now() - x.started_at) })}</Td></tr>)}</tbody></table></div> : null}
                   <div><h3 {...ui.h3()} style={{ marginBottom: 8 }}>{tr("Notes to the next session")}</h3>

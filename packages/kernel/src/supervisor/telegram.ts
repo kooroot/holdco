@@ -9,6 +9,7 @@ import type { CompanyConfig } from "../config/company.ts"
 import { act, ActionError, auditSample, type DashboardContext, ticketFiles } from "../dashboard/api.ts"
 import { readControl } from "./control.ts"
 import { quotaPolicy, quotaVerdict, readQuota, fmtReset } from "./quota.ts"
+import { tr as translated } from "./i18n.ts"
 
 type Fetch = typeof fetch
 
@@ -82,6 +83,9 @@ export class TelegramBridge {
     return { inline_keyboard: [[{ text: L("✅ Approve", "✅ 승인"), callback_data: `a:${id}` }, { text: L("❌ Reject", "❌ 거절"), callback_data: `r:${id}` }]] }
   }
 
+  /** D75: agent-written text in the Operator's language when a translation exists; the original otherwise. */
+  private tx(text: string | null | undefined): string { return text ? translated(this.o.ctx.store, this.lang(), text) : "" }
+
   private renderItem(id: number): string | undefined {
     const { store } = this.o.ctx
     const i = store.inboxItem(id)
@@ -94,11 +98,11 @@ export class TelegramBridge {
     const kind = KIND_LABEL[i.kind]
     const lines = [
       `${i.urgency === "urgent" ? "🔴 " : ""}<b>#${i.id} · ${esc(kind ? L(kind[0], kind[1]) : i.kind)}</b>`,
-      esc(i.payload["title"] ?? ""),
-      t ? `<code>${esc(t.id)}</code> ${esc(t.department)}${t.action ? ` · <code>${esc(t.action)}</code>` : ""}\n${esc(t.goal)}` : "",
-      v ? `${L("Verdict", "판정")}: <b>${esc(v.verdict)}</b> ${v.overall}/4, ${esc(v.confidence)} — ${esc((JSON.parse(v.payload) as { summary?: string }).summary ?? "")}` : "",
-      p ? `CEO: ${esc(p.decision)}\n${L("Why now", "왜 지금")}: ${esc(p.why_now)}\n${L("Cost", "비용")}: ${esc(p.expected_cost)} · ${L("Rollback", "롤백")}: ${esc(p.rollback_plan)}` : "",
-      typeof i.payload["note"] === "string" ? esc(i.payload["note"]) : "",
+      esc(this.tx(String(i.payload["title"] ?? ""))),
+      t ? `<code>${esc(t.id)}</code> ${esc(t.department)}${t.action ? ` · <code>${esc(t.action)}</code>` : ""}\n${esc(this.tx(t.goal))}` : "",
+      v ? `${L("Verdict", "판정")}: <b>${esc(v.verdict)}</b> ${v.overall}/4, ${esc(v.confidence)} — ${esc(this.tx((JSON.parse(v.payload) as { summary?: string }).summary ?? ""))}` : "",
+      p ? `CEO: ${esc(this.tx(p.decision))}\n${L("Why now", "왜 지금")}: ${esc(this.tx(p.why_now))}\n${L("Cost", "비용")}: ${esc(p.expected_cost)} · ${L("Rollback", "롤백")}: ${esc(this.tx(p.rollback_plan))}` : "",
+      typeof i.payload["note"] === "string" ? esc(this.tx(i.payload["note"])) : "",
       expires ? L(`⏱ rejects itself in ${left(expires - this.o.ctx.now())}`, `⏱ ${left(expires - this.o.ctx.now())} 후 자동 거절`) : "",
     ].filter((l) => l.length > 0)
     return lines.join("\n")
@@ -161,11 +165,11 @@ export class TelegramBridge {
     const { files } = ticketFiles(this.o.ctx, t.id)
     const senior = [...this.o.ctx.store.events(t.id)].reverse().find((e) => e.to_state === "ready_for_verification" && e.note)?.note ?? t.note ?? ""
     return [
-      `🧾 <b>${L("Audit", "감사")}</b> <code>${esc(t.id)}</code> — ${esc(t.title)}`,
+      `🧾 <b>${L("Audit", "감사")}</b> <code>${esc(t.id)}</code> — ${esc(this.tx(t.title))}`,
       `${esc(t.department)}${t.action ? ` · <code>${esc(t.action)}</code>` : ""}`,
-      `<b>${L("Goal", "목표")}:</b> ${esc(t.goal.slice(0, 400))}`,
-      `<b>${L("Done criteria", "완료 조건")}:</b>\n${t.done_criteria.slice(0, 6).map((c) => `• ${esc(c.slice(0, 160))}`).join("\n")}`,
-      senior ? `<b>${L("Senior's note", "시니어의 말")}:</b> ${esc(senior.slice(0, 500))}` : "",
+      `<b>${L("Goal", "목표")}:</b> ${esc(this.tx(t.goal).slice(0, 400))}`,
+      `<b>${L("Done criteria", "완료 조건")}:</b>\n${t.done_criteria.slice(0, 6).map((c) => `• ${esc(this.tx(c).slice(0, 160))}`).join("\n")}`,
+      senior ? `<b>${L("Senior's note", "시니어의 말")}:</b> ${esc(this.tx(senior).slice(0, 500))}` : "",
       files.length ? `<b>${L("Changed", "변경")}:</b> ${files.slice(0, 8).map((f) => `${f.status} ${esc(f.path)}`).join(", ")}${files.length > 8 ? ` +${files.length - 8}` : ""}` : "",
     ].filter(Boolean).join("\n")
   }
@@ -253,7 +257,7 @@ export class TelegramBridge {
       case "/tickets": {
         const open = store.allTickets().filter((t) => !["done", "declined", "rolled_back"].includes(t.state)).sort((a, b) => a.priority - b.priority || b.updated_at - a.updated_at)
         if (open.length === 0) return L("No open tickets.", "열린 티켓이 없습니다.")
-        return open.slice(0, 25).map((t) => `${t.state === "blocked" ? "⛔ " : ""}<code>${esc(t.id)}</code> ${esc(t.state)} — ${esc(t.title)}`).join("\n")
+        return open.slice(0, 25).map((t) => `${t.state === "blocked" ? "⛔ " : ""}<code>${esc(t.id)}</code> ${esc(t.state)} — ${esc(this.tx(t.title))}`).join("\n")
       }
       case "/ticket": {
         const t = store.ticket(arg.toUpperCase())
@@ -262,8 +266,8 @@ export class TelegramBridge {
         const notes = store.comments(t.id)
         return [
           `<b>${esc(t.id)}</b> ${esc(t.state)} · ${esc(t.department)}${t.action ? ` · <code>${esc(t.action)}</code>` : ""}`,
-          esc(t.title), `${L("Goal", "목표")}: ${esc(t.goal)}`, `${L("Done when", "완료 조건")}: ${t.done_criteria.map((c) => esc(c)).join("; ")}`,
-          t.branch ? `${L("Branch", "브랜치")}: <code>${esc(t.branch)}</code>` : "", t.note ? `${L("Last note", "마지막 메모")}: ${esc(t.note)}` : "",
+          esc(this.tx(t.title)), `${L("Goal", "목표")}: ${esc(this.tx(t.goal))}`, `${L("Done when", "완료 조건")}: ${t.done_criteria.map((c) => esc(this.tx(c))).join("; ")}`,
+          t.branch ? `${L("Branch", "브랜치")}: <code>${esc(t.branch)}</code>` : "", t.note ? `${L("Last note", "마지막 메모")}: ${esc(this.tx(t.note))}` : "",
           v ? `${L("Verdict", "판정")}: ${esc(v.verdict)} ${v.overall}/4` : "", notes.length ? `${L("Your notes", "당신의 메모")}: ${notes.map((n) => esc(n.body)).join(" | ")}` : "",
           `${L("Cost", "비용")}: $${store.sessionsForTicket(t.id).reduce((a, s) => a + s.cost_usd, 0).toFixed(2)}`,
         ].filter(Boolean).join("\n")

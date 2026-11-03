@@ -23,6 +23,15 @@ export const t = (en: string, vars?: Record<string, string | number>): string =>
 }
 
 /** Plural helper: `n(count, "session", "sessions")` → "1 session" / "3 sessions" (Korean has no plural). */
+/**
+ * D75: translations of agent-written text (titles, goals, notes, verdicts) into the company language, filled from
+ * every snapshot and ticket detail. `tx(text)` is the view the Operator reads when the dashboard is not in English;
+ * the original stays available on hover (callers pass it as a title).
+ */
+const translations = new Map<string, string>()
+export const addTranslations = (map: Record<string, string> | undefined) => { if (map) for (const [k, v] of Object.entries(map)) translations.set(k, v) }
+export const tx = (text: string | null | undefined): string => (text == null ? "" : current === "en" ? text : translations.get(text) ?? text)
+
 export const n = (count: number, one: string, many: string) => `${count} ${t(count === 1 ? one : many)}`
 
 const KO: Record<string, string> = {

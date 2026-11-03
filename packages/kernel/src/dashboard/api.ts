@@ -21,6 +21,7 @@ import { latestReleaseTag } from "../supervisor/org.ts"
 import { idleWakeMs, Supervisor, WORK_WAKE_MS } from "../supervisor/supervisor.ts"
 import { defaultBranch } from "../supervisor/worktrees.ts"
 import { aheadOfWeek, quotaPolicy, quotaVerdict, readQuota } from "../supervisor/quota.ts"
+import { translationsFor } from "../supervisor/i18n.ts"
 
 const DAY = 86_400_000
 
@@ -190,7 +191,15 @@ export const snapshot = (ctx: DashboardContext) => {
   const actions = store.db.query<{ id: number; at: number; ticket_id: string | null; action: string; effective_tier: string; rolled_back: number; undo: string }, []>("SELECT id, at, ticket_id, action, effective_tier, rolled_back, undo FROM action_log ORDER BY at DESC LIMIT 30").all().map((a) => ({ ...a, undoable: (() => { try { return Object.keys(JSON.parse(a.undo) as object).length > 0 } catch { return false } })() }))
   return {
     now,
-    company: { name: config.company.name, mission: config.company.mission, timezone: config.company.timezone, preset: undefined },
+    company: { name: config.company.name, mission: config.company.mission, timezone: config.company.timezone, language: config.company.language ?? "en", preset: undefined },
+    translations: translationsFor(store, config.company.language ?? "en", [
+      ...tickets.flatMap((t) => [t.title, t.goal, t.note]),
+      ...inbox.flatMap((i) => [String(i.payload["title"] ?? ""), String(i.payload["note"] ?? ""), String(i.payload["why_now"] ?? "")]),
+      ...activity.map((e) => e.note),
+      ...waiting.map((w) => w.title),
+      ...done24h.map((t) => t.title),
+      ...sample.map((t) => t.title),
+    ]),
     supervisor: { alive: sup.alive, pid: sup.pid, release, candidate: candidate?.tag ?? null, boot_at: Number(store.getMeta("boot_at") ?? 0) || null },
     interrupts,
     roles: Object.fromEntries(Object.entries(config.roles).filter(([k]) => k !== "by_department").map(([k, v]) => [k, v])),
@@ -296,6 +305,7 @@ export const ticketDetail = (ctx: DashboardContext, id: string, opts: { blind?: 
     comments: ctx.store.comments(id),
     diff: diffOf(ctx, t),
     cost: ctx.store.sessionsForTicket(id).reduce((a, s) => a + s.cost_usd, 0),
+    translations: translationsFor(ctx.store, ctx.config().company.language ?? "en", [t.title, t.goal, t.why, t.note, ...t.done_criteria, ...ctx.store.events(id).map((e) => e.note), ...ctx.store.comments(id).map((c) => c.body), v && reveal ? (JSON.parse(v.payload) as { summary?: string }).summary : null]),
   }
 }
 

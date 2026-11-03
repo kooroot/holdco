@@ -6,7 +6,7 @@ import { useSnapshot } from "../hooks.ts"
 import { useNewTicket, useOpenTicket } from "../nav.ts"
 import { etaText, waitingText } from "../ticket/Waiting.tsx"
 import { cn, Button, Card, Code, Empty, Head, Meter, Pill, Td, ui } from "../ui.tsx"
-import { t, useLang } from "../i18n.ts"
+import { t, useLang, tx } from "../i18n.ts"
 
 const st = {
   tiles: style({ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "md", "@media (min-width: 1100px)": { gridTemplateColumns: "repeat(6, 1fr)" } }),
@@ -81,17 +81,17 @@ export const Home = () => {
         <div {...st.tiles()}>{tiles.map(([to, v, l, hot], i) => <Link key={i} to={to} search={(p: Record<string, unknown>) => p} {...cx(st.tile(), hot && st.tileHot())}><span {...cx(st.v(), hot && st.vHot())}>{v}</span><span {...st.l()}>{l}</span></Link>)}</div>
         <div {...ui.grid2()}>
           <Card><div {...cn(st.sect(), ui.row())}><h3 {...ui.h3()}>{t("Activity")}</h3><span {...cn(ui.small(), ui.muted())}>{t("what the company did, newest first")}</span></div>
-            {S.activity.length ? S.activity.map((e, i) => <div key={i} {...st.feedRow()}><span {...st.when()}>{t("{t} ago", { t: ago(S.now - e.at) })}</span><span><TicketLink id={e.ticket_id} /> {e.title} <Pill>{t(STATE_LABEL[e.to_state] ?? e.to_state)}</Pill> <span {...cn(ui.muted(), ui.small())}>{e.actor}</span>{e.note ? <span {...cn(st.nt(), ui.small())} title={e.note}>{e.note}</span> : null}</span></div>) : <Empty title={t("No activity yet")}>{t("Open a ticket and start the supervisor.")}</Empty>}
+            {S.activity.length ? S.activity.map((e, i) => <div key={i} {...st.feedRow()}><span {...st.when()}>{t("{t} ago", { t: ago(S.now - e.at) })}</span><span><TicketLink id={e.ticket_id} /> {tx(e.title)} <Pill>{t(STATE_LABEL[e.to_state] ?? e.to_state)}</Pill> <span {...cn(ui.muted(), ui.small())}>{e.actor}</span>{e.note ? <span {...cn(st.nt(), ui.small())} title={e.note}>{tx(e.note)}</span> : null}</span></div>) : <Empty title={t("No activity yet")}>{t("Open a ticket and start the supervisor.")}</Empty>}
           </Card>
           <div {...ui.stack()}>
             <Card><div {...st.sect()}><h3 {...ui.h3()}>{t("Running now")}</h3></div>
               {S.running.length ? <table {...ui.table()}><tbody>{S.running.map((r) => <tr key={r.id}><Td><Code>{r.role}</Code><div {...cn(ui.small(), ui.muted())}>{r.engine}:{r.model}</div></Td><Td><TicketLink id={r.ticket_id} live /></Td><Td className={cn(ui.small(), ui.muted(), ui.num()).className}>{ago(S.now - r.started_at)} <span {...ui.muted()}>· {t("watch")}</span></Td></tr>)}</tbody></table> : <Empty>{t(S.supervisor.alive ? "Idle. Sessions start as tickets become ready." : "Supervisor not running — start it with holdco supervise.")}</Empty>}
               {!S.running.length && !S.waiting.length && S.supervisor.alive && S.next_ceo_at !== null ? <div {...st.sect()} style={{ paddingTop: 0 }}><div {...cn(ui.small(), ui.muted())}>{S.next_ceo_at - S.now <= 0 ? t("CEO is due now") : t("CEO runs in {t}", { t: left(S.next_ceo_at - S.now) })} — {t("it opens the next tickets from the strategy")}</div></div> : null}
               {!S.running.length && S.waiting.length ? <div {...st.sect()} style={{ paddingTop: 0 }}><h3 {...ui.h3()}>{t("Waiting on")}</h3><div {...cn(ui.small(), ui.muted())}>{t("nothing runs until one of these moves")}</div></div> : null}
-              {!S.running.length && S.waiting.length ? <table {...ui.table()}><tbody>{S.waiting.map((w) => <tr key={w.ticket_id}><Td><TicketLink id={w.ticket_id} /><div {...cn(ui.small(), ui.muted())}>{w.title}</div></Td><Td className={ui.small().className}>{waitingText(w)}{w.stall ? <div {...st.stall()}>{w.stall.reason}</div> : null}</Td><Td className={cn(ui.small(), ui.muted(), ui.num()).className}>{etaText(w, S.now)}</Td></tr>)}</tbody></table> : null}
+              {!S.running.length && S.waiting.length ? <table {...ui.table()}><tbody>{S.waiting.map((w) => <tr key={w.ticket_id}><Td><TicketLink id={w.ticket_id} /><div {...cn(ui.small(), ui.muted())}>{tx(w.title)}</div></Td><Td className={ui.small().className}>{waitingText(w)}{w.stall ? <div {...st.stall()}>{tx(w.stall.reason)}</div> : null}</Td><Td className={cn(ui.small(), ui.muted(), ui.num()).className}>{etaText(w, S.now)}</Td></tr>)}</tbody></table> : null}
             </Card>
             <Card><div {...st.sect()}><h3 {...ui.h3()}>{t("Finished in the last 24h")}</h3></div>
-              {S.done_24h.length ? <table {...ui.table()}><tbody>{S.done_24h.map((tk) => <tr key={tk.id}><Td><TicketLink id={tk.id} /></Td><Td>{tk.title}</Td><Td className={cn(ui.small(), ui.muted()).className}>{tk.department}</Td><Td className={cn(ui.num(), ui.small()).className}>{usd(tk.cost)}</Td></tr>)}</tbody></table> : <Empty>{t("Nothing finished in the last day.")}</Empty>}
+              {S.done_24h.length ? <table {...ui.table()}><tbody>{S.done_24h.map((tk) => <tr key={tk.id}><Td><TicketLink id={tk.id} /></Td><Td>{tx(tk.title)}</Td><Td className={cn(ui.small(), ui.muted()).className}>{tk.department}</Td><Td className={cn(ui.num(), ui.small()).className}>{usd(tk.cost)}</Td></tr>)}</tbody></table> : <Empty>{t("Nothing finished in the last day.")}</Empty>}
             </Card>
           </div>
         </div>

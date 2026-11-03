@@ -77,7 +77,9 @@ export const Waiting = Schema.Struct({ ticket_id: Str, title: Str, state: Ticket
 
 export const Snapshot = Schema.Struct({
   now: Num,
-  company: Schema.Struct({ name: Str, mission: Str, timezone: Str }),
+  company: Schema.Struct({ name: Str, mission: Str, timezone: Str, language: Str }),
+  /** D75: translations of the English texts in this snapshot into company.language, keyed by the original. */
+  translations: Schema.Record(Str, Str),
   supervisor: Schema.Struct({ alive: Bool, pid: Num, release: Str, candidate: NullStr, boot_at: NullNum }),
   interrupts: Schema.Array(Interrupt),
   departments: Schema.Array(Str),
@@ -120,6 +122,7 @@ export const TicketDetail = Schema.Struct({
   label: Schema.NullOr(LabelRow),
   comments: Schema.Array(Comment),
   diff: Schema.NullOr(Diff),
+  translations: Schema.Record(Str, Str),
   cost: Num,
 })
 export type TicketDetail = typeof TicketDetail.Type

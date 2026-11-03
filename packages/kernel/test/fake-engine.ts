@@ -9,7 +9,7 @@ import { writeFileSync } from "node:fs"
 import * as NodePath from "node:path"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
-import type { Engine, Outcome, SessionEvent, SessionSpec, EngineQuota } from "../src/engine/types.ts"
+import type { Engine, Outcome, SessionEvent, SessionSpec, EngineQuota, TranslateRequest, TranslateResult } from "../src/engine/types.ts"
 
 export type Script = (ctx: Ctx) => Promise<Partial<Outcome> & { report?: unknown }>
 export interface Ctx {
@@ -94,6 +94,9 @@ export class FakeEngine implements Engine {
   quotaAnswer: EngineQuota | undefined | (() => Promise<EngineQuota | undefined>) = undefined
   /** D72: quota events emitted at the start of every run (what a Claude session's rate_limit_event looks like). */
   quotaEvents: Array<Extract<SessionEvent, { kind: "quota" }>> = []
+  /** D75: translations as "[<lang>] <text>"; `translateCalls` counts the batches. */
+  translateCalls: Array<ReadonlyArray<string>> = []
+  async translate(req: TranslateRequest): Promise<TranslateResult> { this.translateCalls.push(req.texts); return { texts: req.texts.map((t) => `[${req.to}] ${t}`), costUsd: 0.01 * req.texts.length } }
   async quota(): Promise<EngineQuota | undefined> { return typeof this.quotaAnswer === "function" ? this.quotaAnswer() : this.quotaAnswer }
   constructor(readonly scripts: Partial<Record<string, Script>> = {}, readonly costPerRun = 0.1, readonly id: "claude" | "codex" = "claude") {}
 

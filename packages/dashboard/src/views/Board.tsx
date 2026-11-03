@@ -6,7 +6,7 @@ import { useSnapshot } from "../hooks.ts"
 import { useOpenTicket } from "../nav.ts"
 import { etaText, waitingText } from "../ticket/Waiting.tsx"
 import { cn, Empty, Head, ui } from "../ui.tsx"
-import { t, useLang } from "../i18n.ts"
+import { t, useLang, tx } from "../i18n.ts"
 
 const st = {
   board: style({ display: "grid", gridTemplateColumns: "repeat(6, minmax(0, 1fr))", gap: "10px !custom", overflowX: "auto", "@media (max-width: 1100px)": { gridTemplateColumns: "repeat(6, 200px)" } }),
@@ -46,7 +46,7 @@ export const Board = () => {
               <div {...st.cards()}>{ts.length ? ts.map((tk) => (
                 <div key={tk.id} {...cx(st.card(), tk.state === "blocked" && st.blocked())} onClick={() => open(tk.id)}>
                   <div {...st.id()}><span>{tk.id}</span><span>{tk.cost ? usd(tk.cost) : ""}</span></div>
-                  <div {...st.t()}>{tk.title}</div>
+                  <div {...st.t()}>{tx(tk.title)}</div>
                   <div {...st.id()}><span {...st.idText()}>{tk.department}{tk.action ? ` · ${tk.action}` : ""}</span><span>{ago(S.now - tk.updated_at)}</span></div>
                   {tk.state === "blocked" ? <div {...st.flag()}>{t("needs a decision")}</div> : tk.interrupt_flag ? <div {...st.flag()}>{t("paused: {f}", { f: tk.interrupt_flag })}</div> : tk.state === "rejected" ? <div {...cn(st.flag(), ui.muted())}>{t("rejected, retrying ({n})", { n: tk.attempts })}</div> : waits[tk.id] ? <div {...st.wait()}>{waitingText(waits[tk.id]!)}{etaText(waits[tk.id]!, S.now) ? ` · ${etaText(waits[tk.id]!, S.now)}` : ""}</div> : null}
                 </div>)) : <div {...cn(ui.small(), ui.muted())} style={{ padding: "6px 2px" }}>—</div>}</div>

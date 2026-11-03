@@ -3,10 +3,10 @@
  * Live runs need ANTHROPIC_API_KEY (or the engine's configured auth_env) and are exercised by the
  * M3 smoke test; the option mapping and result mapping are unit-tested here.
  */
-import { query, type SDKMessage, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk"
+import { query, type Options, type SDKMessage, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk"
 import { spawnSync } from "node:child_process"
 import { existsSync, readFileSync } from "node:fs"
-import type { Engine, EngineCapabilities, EngineQuota, EngineQuotaWindow, Outcome, ProbeContext, ProbeResult, SessionEvent, SessionSpec } from "@holdco/kernel/engine"
+import type { Engine, EngineCapabilities, EngineQuota, EngineQuotaWindow, Outcome, ProbeContext, ProbeResult, SessionEvent, SessionSpec, TranslateRequest, TranslateResult } from "@holdco/kernel/engine"
 import { resolveClaudeBinary } from "./binary.ts"
 import { toClaudeOptions } from "./options.ts"
 import { aborted, fromResult } from "./outcome.ts"
@@ -84,6 +84,28 @@ export const quota = async (env: Record<string, string | undefined>): Promise<En
     if (u && typeof u.utilization === "number") windows.push({ id: w.id, label: w.label, usedPct: Math.max(0, Math.min(100, u.utilization)), resetsAt: u.resets_at ? Date.parse(u.resets_at) || null : null, lengthMs: w.lengthMs })
   }
   return { plan: null, windows }
+}
+
+/** D75: one haiku-class call that returns the texts translated, as structured output; no tools, nothing written. */
+export const translateTexts = async (req: TranslateRequest): Promise<TranslateResult> => {
+  const schema = { type: "object", properties: { texts: { type: "array", items: { type: "string" } } }, required: ["texts"], additionalProperties: false }
+  const options: Options = {
+    cwd: req.cwd,
+    model: req.model,
+    systemPrompt: `You translate an AI company's internal operations text for its human owner. Translate each string into ${req.to}. Keep ticket ids (ENG-1), file paths, commands, code, URLs, product and model names, and numbers exactly as they are. Keep the register plain and terse; keep list structure and line breaks. Return the translations in the same order, one per input, nothing else.`,
+    allowedTools: [],
+    disallowedTools: ["Bash", "Edit", "Write", "Read", "WebFetch", "WebSearch", "Task", "Agent"],
+    maxTurns: 1,
+    maxBudgetUsd: 0.5,
+    outputFormat: { type: "json_schema", schema },
+    env: { ...req.env } as Record<string, string>,
+  }
+  let result: SDKResultMessage | undefined
+  for await (const msg of query({ prompt: JSON.stringify(req.texts), options })) if (msg.type === "result") result = msg
+  if (!result || result.subtype !== "success") throw new Error(`translate: ${result?.subtype ?? "no result"}`)
+  const out = (result.structured_output as { texts?: Array<string> } | undefined)?.texts
+  if (!out || out.length !== req.texts.length) throw new Error(`translate: expected ${req.texts.length} texts, got ${out?.length ?? 0}`)
+  return { texts: out, costUsd: result.total_cost_usd ?? 0 }
 }
 
 const oauthToken = (env: Record<string, string | undefined>): string | undefined => {
@@ -174,7 +196,7 @@ export const probe = async (_ctx: ProbeContext): Promise<ReadonlyArray<ProbeResu
   return out
 }
 
-export const engine: Engine = { id: "claude", capabilities, run, loginStatus, probe, quota }
+export const engine: Engine = { id: "claude", capabilities, run, loginStatus, probe, quota, translate: translateTexts }
 export { resolveClaudeBinary } from "./binary.ts"
 export { CLAUDE_TOOLS, toClaudeOptions, toolLists } from "./options.ts"
 export { fromResult } from "./outcome.ts"
