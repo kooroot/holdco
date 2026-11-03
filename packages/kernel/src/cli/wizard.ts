@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, wri
 import { homedir } from "node:os"
 import { basename, dirname, join, relative, resolve } from "node:path"
 import { loadPreset } from "../scaffold/templates.ts"
-import { scaffold } from "../scaffold/scaffold.ts"
+import { projectIdFor, scaffold } from "../scaffold/scaffold.ts"
 import { parseVerify, renderVerify } from "../config/projects.ts"
 import { KERNEL_VERSION } from "../version.ts"
 import { writeOperatorEnv } from "./env.ts"
@@ -57,11 +57,11 @@ export const guessVerify = (project: string): string => {
 
 /** "50 30 20" → [0.5, 0.3, 0.2]; undefined when it is not `n` percentages summing to at most 100. */
 export const parseSplit = (text: string, n: number): Array<number> | undefined => {
-  const parts = text.trim().split(/[\s,/]+/).filter(Boolean).map(Number)
+  const parts = text.trim().split(/[\s,/]+/).filter(Boolean).map((x) => Math.round(Number(x)))
   if (parts.length !== n || parts.some((x) => !Number.isFinite(x) || x < 0)) return undefined
   const sum = parts.reduce((a, b) => a + b, 0)
-  if (sum > 100 + 1e-9 || sum === 0) return undefined
-  return parts.map((x) => Math.round(x) / 100)
+  if (sum > 100 || sum === 0) return undefined
+  return parts.map((x) => x / 100)
 }
 
 /** `~/x` → `$HOME/x`; everything else resolved against the current directory. */
@@ -93,10 +93,12 @@ const nearbyRepos = (checkout: string): Array<string> => {
   return out.sort((a, b) => b.at - a.at).map((r) => r.path)
 }
 
-/** Is `dir` (or a parent) a git working tree? */
+/** Is `dir` inside a git working tree below the home directory? (A dotfiles repository at $HOME does not count.) */
 const insideGitRepo = (dir: string): boolean => {
+  const home = homedir()
   let d = dir
   while (true) {
+    if (d === home || d === "/") return false
     if (existsSync(join(d, ".git"))) return true
     const up = dirname(d)
     if (up === d) return false
@@ -105,7 +107,7 @@ const insideGitRepo = (dir: string): boolean => {
 }
 
 const codexLoggedIn = () => existsSync(join(process.env["CODEX_HOME"] ?? join(homedir(), ".codex"), "auth.json"))
-const claudeInstalled = () => has("claude")
+const claudeInstalled = () => has("claude") || existsSync(join(homedir(), ".claude", "local", "claude")) || existsSync(join(homedir(), ".local", "bin", "claude")) // the alias install puts it outside PATH
 
 const bail = (v: unknown): never => { p.cancel("Nothing was created."); process.exit(1) }
 const ask = async <T>(v: Promise<T | symbol>): Promise<T> => { const r = await v; if (p.isCancel(r)) bail(r); return r as T }
@@ -117,7 +119,7 @@ export const runWizard = async (checkoutPackages: string | undefined): Promise<W
 
   // Default: next to the checkout (a company inside the Holdco repository would nest two git repositories).
   const insideCheckout = checkoutPackages !== undefined && (process.cwd() + "/").startsWith(dirname(checkoutPackages) + "/")
-  const dirDefault = insideCheckout ? join(dirname(dirname(checkoutPackages as string)), "my-co") : "my-co"
+  const dirDefault = insideCheckout ? join(dirname(dirname(checkoutPackages as string)), "my-co") : insideGitRepo(process.cwd()) ? "../my-co" : "my-co"
   const dirProblem = (v: string): string | undefined => {
     const d = expandPath(v)
     if (existsSync(d) && readdirSync(d).length) return `${d} is not empty`
@@ -153,7 +155,7 @@ export const runWizard = async (checkoutPackages: string | undefined): Promise<W
     }))
     paths.push({ path: join(dirname(dir), name), create: true })
   }
-  const ids = paths.map((x) => basename(x.path).toLowerCase().replace(/[^a-z0-9-]/g, "-"))
+  const ids = paths.map((x) => projectIdFor(x.path))
   if (new Set(ids).size !== ids.length) { p.log.error(`two repositories would get the same project id (${ids.join(", ")}); rename one or register it later with --id`); bail(undefined) }
 
   const details: Array<{ verify: Array<string> | undefined; cls: WizardProject["class"] }> = []
@@ -162,10 +164,10 @@ export const runWizard = async (checkoutPackages: string | undefined): Promise<W
     const verifyGuess = x.create ? "" : guessVerify(x.path)
     const verifyInput = await ask(p.text({
       message: `${name}: command that proves it works — offline, on a fresh checkout; chain with && (Verification runs it; a failure rejects the ticket). Blank for none`,
-      ...(verifyGuess ? { defaultValue: verifyGuess, placeholder: verifyGuess } : { placeholder: "bun test" }),
-      validate: (v) => (/,\s*[A-Za-z]/.test(v ?? "") ? "separate commands with && (a comma is not a separator)" : undefined),
+      ...(verifyGuess ? { initialValue: verifyGuess } : { placeholder: "bun test" }),
+      validate: (v) => (/\S,\s+[A-Za-z]/.test(v ?? "") ? "separate commands with && (a comma between commands is read as && — if that is what you mean, fine)" : undefined),
     }))
-    const verify = parseVerify(verifyInput || verifyGuess)
+    const verify = parseVerify(verifyInput ?? "")
     const cls = paths.length === 1 ? "core" : await ask(p.select({
       message: `${name}: what kind of bet is it?`, initialValue: "core",
       options: [

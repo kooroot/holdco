@@ -51,7 +51,10 @@ export interface ScaffoldProject {
 }
 
 /** The id a repository gets when none is given: its directory name as a slug. */
-export const projectIdFor = (path: string): string => NodePath.basename(NodePath.resolve(path)).toLowerCase().replace(/[^a-z0-9-]/g, "-")
+export const projectIdFor = (path: string): string => {
+  const raw = NodePath.basename(NodePath.resolve(path)).toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "")
+  return (/^[a-z]/.test(raw) ? raw : `p-${raw}`).slice(0, 32).replace(/-+$/, "") || "project" // Slug: a letter first, ≤ 32
+}
 
 export const DEFAULT_LOCKED: ReadonlyArray<string> = ["AGENTS.md", "CLAUDE.md", ".github/**"]
 

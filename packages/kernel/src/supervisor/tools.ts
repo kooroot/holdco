@@ -103,8 +103,9 @@ export const TOOLS: ReadonlyArray<Tool> = [
       const enabled = [...host.config.modules.departments, "improvement", "verification"]
       if (!enabled.includes(dept)) throw new ToolError(`department '${dept}' is not enabled`)
       if (dept === "improvement" && !host.config.modules.improvement.enabled) throw new ToolError("Improvement is off")
-      const project = a["project"] === undefined ? null : String(a["project"])
-      if (project !== null && !host.config.projects.some((p) => p.id === project)) throw new ToolError(`unknown project '${project}'`)
+      const project = a["project"] === undefined ? (dept === "improvement" ? null : host.config.projects[0]?.id ?? null) : String(a["project"])
+      if (project !== null && !host.config.projects.some((p) => p.id === project)) throw new ToolError(`unknown project '${project}' (registered: ${host.config.projects.map((p) => p.id).join(", ") || "none"})`)
+      if (project === null && dept !== "improvement") throw new ToolError("department work needs a project and none is registered; the Operator adds one in Settings → Projects")
       const selfImprovement = b.kind === "improvement" && dept === "improvement"
       const t = host.store.createTicket({
         department: dept, title: String(a["title"]), goal: String(a["goal"]), why: String(a["why"]),

@@ -4,7 +4,7 @@ import { api, type Action } from "./api.ts"
 import { addTranslations } from "./i18n.ts"
 
 export const useSnapshot = () => useQuery({ queryKey: ["state"], queryFn: async () => { const s = await api.state(); addTranslations(s.translations); return s }, refetchInterval: 5000, refetchIntervalInBackground: false })
-export const useTicket = (id: string | null, blind = false) => useQuery({ queryKey: ["ticket", id, blind], queryFn: async () => { const d = await api.ticket(id as string, blind); addTranslations(d.translations); return d }, enabled: id !== null })
+export const useTicket = (id: string | null, blind = false) => useQuery({ queryKey: ["ticket", id, blind], queryFn: async () => { const d = await api.ticket(id as string, blind); addTranslations(d.translations); return d }, enabled: id !== null, refetchInterval: 5000, refetchIntervalInBackground: false })
 export const useFiles = (id: string | null) => useQuery({ queryKey: ["files", id], queryFn: () => api.files(id as string), enabled: id !== null })
 export const useFile = (id: string | null, path: string | null) => useQuery({ queryKey: ["file", id, path], queryFn: () => api.file(id as string, path as string), enabled: id !== null && path !== null })
 
@@ -15,7 +15,7 @@ export const useLiveFeed = (sessionId: string | null) => {
     queryKey: ["events", sessionId, state.id === sessionId ? (state.events.at(-1)?.i ?? -1) : -1],
     queryFn: () => api.events(sessionId as string, state.id === sessionId ? (state.events.at(-1)?.i ?? -1) : -1),
     enabled: sessionId !== null,
-    refetchInterval: state.id === sessionId && !state.running && state.events.length ? false : 2000,
+    refetchInterval: state.id === sessionId && !state.running ? false : 2000, // an ended session (journal or not) is read once
   })
   useEffect(() => {
     const r = q.data

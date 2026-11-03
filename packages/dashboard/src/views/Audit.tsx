@@ -7,6 +7,7 @@ import type { Snapshot } from "../api.ts"
 import { Diff } from "../ticket/Diff.tsx"
 import { Files } from "../ticket/Files.tsx"
 import { cn, Button, Card, Code, Empty, Head, Kv, Pill, Tabs, ui } from "../ui.tsx"
+import { useSearchState } from "../nav.ts"
 import { t, useLang, tx } from "../i18n.ts"
 
 const st = {
@@ -29,9 +30,10 @@ const Pane = ({ id, graded, onGrade }: { id: string; graded: Graded | undefined;
   const q = useTicket(id, true)
   const [tab, setTab] = useState<"diff" | "files">("diff")
   const [note, setNote] = useState("")
+  const search = useSearchState()
   useEffect(() => { setNote(""); setTab("diff") }, [id])
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if ((e.target as HTMLElement).matches("input, textarea, select") || graded || q.data?.verdict) return; if (e.key === "a" || e.key === "r") onGrade(e.key === "a" ? "approve" : "reject", note) }
+    const onKey = (e: KeyboardEvent) => { if (e.metaKey || e.ctrlKey || e.altKey || e.repeat || search.ticket || search.new) return; if ((e.target as HTMLElement).matches("input, textarea, select") || graded || q.data?.verdict) return; if (e.key === "a" || e.key === "r") onGrade(e.key === "a" ? "approve" : "reject", note) }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
   })

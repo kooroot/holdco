@@ -13,7 +13,7 @@ Read `protocols/brief.schema.md` for field definitions. This skill is the proced
 5. **Fill `out_of_scope` and `stop_conditions`.** Think of the most likely way a junior goes wrong and fence it off.
 6. **Set `budget`** proportionate to the task. Set `restate_first: true` for large tasks and every `compete` brief. A restating junior returns `status: restatement` and stops; compare it to the brief, fix the brief if needed, and start a new junior with `restate_first: false`.
 7. For `compete`, write a different `approach_hint` per junior.
-8. **Name it `<ticket>-b<n>`** and leave `worktree` unset: the kernel creates `t-<ticket>-<brief_id>` on branch `t/<ticket>-<brief_id>` for a `junior_worker`.
+8. **Name it `<ticket>-b<n>`** and leave `worktree` unset: the kernel creates `t-<brief_id>` on branch `t/<brief_id>` (a brief id is `<ticket>-b<n>`, so `t/ENG-1-b2`) for a `junior_worker`.
 9. **Start it with `delegate_start`** (the brief as a JSON object; `brief_validate` first if unsure). The kernel validates it, including the minimum lengths (goal ≥ 10, purpose ≥ 20, each criterion ≥ 10 code points) and the cross-field rules (compete needs approach_hint, purpose must not restate goal, no vague criteria), and refuses to start a junior on a bad one; the refusal lists every violation. Fix and resubmit.
 
 Template (JSON when sent; shown as YAML):

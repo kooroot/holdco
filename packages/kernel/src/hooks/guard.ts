@@ -125,8 +125,9 @@ export const evaluateGuard = (id: Identity, event: HookEvent, ctx: GuardContext)
 
   if (SHELL_TOOLS.has(tool)) {
     const cmd = shellCommand(event)
-    if (mentions(cmd, UNREADABLE) || /\bsqlite3?\b/.test(cmd)) {
-      return locked(`commands may not touch ${UNREADABLE.join(", ")} or open databases directly.`)
+    // "sqlite" in a command is a problem only when it reaches the company's state (projects use sqlite too: bun:sqlite, drizzle, better-sqlite3)
+    if (mentions(cmd, UNREADABLE) || (/\bsqlite3?\b/.test(cmd) && (cmd.includes(".holdco") || cmd.includes(ctx.companyRoot)))) {
+      return locked(`commands may not touch ${UNREADABLE.join(", ")} or open the company's databases directly.`)
     }
     if (looksLikeWrite(cmd)) {
       // The company's locked names (package.json, CLAUDE.md, node_modules/…) are about the company repository.
@@ -140,7 +141,9 @@ export const evaluateGuard = (id: Identity, event: HookEvent, ctx: GuardContext)
       if (ctx.project && ctx.project.locked.some((g) => { const lit = g.split(/[*?]/)[0] ?? ""; return lit.length > 0 && cmd.includes(lit) })) {
         return locked("shell command looks like a write to a path the Operator locked for this project.")
       }
-      if (id.dept !== "improvement" && mentions(cmd, ORG_DEF)) {
+      // The company definition (org/, protocols/, improvement/) is Improvement's; in a project session those names are
+      // ordinary directories (src/protocols/…) unless the command reaches into the company checkout by path.
+      if (id.dept !== "improvement" && mentions(cmd, ORG_DEF) && (!ctx.project || cmd.includes(ctx.companyRoot))) {
         return locked("shell command looks like a write to the company definition.")
       }
     }

@@ -426,6 +426,32 @@ describe("the Operator reads the company in Korean (D75)", () => {
   })
 })
 
+describe("inbox decisions reach the ticket (review D76)", () => {
+  test("an expired `blocked` item declines the ticket instead of leaving it blocked with nothing open", async () => {
+    const c = company("expire-blocked", (raw) => { ;((raw["policy"] as Record<string, Record<string, unknown>>)["executive"] as Record<string, unknown>)["blocked_after"] = "1m"; ;(raw["policy"] as Record<string, Record<string, unknown>>)["inbox"] = { batch_at: "09:00", timeout: "1h" } })
+    const clock = { now: Date.UTC(2026, 10, 3, 9) }
+    const engine = new FakeEngine({ ceo: async () => ({}) }, 0.1) // a CEO that leaves blocked tickets alone
+    const { sup, store } = makeSupervisor(c, engine, clock)
+    await sup.boot()
+    const t = store.createTicket({ department: "engineering", title: "stuck", goal: "g", why: "w", done_criteria: ["d"], opened_by: "operator", project: "app", state: "triaged", action: "code.merge.app", now: clock.now })
+    store.transition(t.id, "blocked", "kernel", "cannot-score: no rubric", clock.now)
+    await cycle(sup, clock, 3) // past blocked_after: the item is raised
+    expect(store.inboxOpen().some((i) => i.ticket_id === t.id && i.kind === "blocked")).toBe(true)
+    await cycle(sup, clock, 70) // past the 1h timeout
+    expect(store.inboxOpen().some((i) => i.ticket_id === t.id)).toBe(false)
+    expect(store.ticket(t.id)?.state).toBe("declined")
+    await sup.stop()
+  })
+  test("a CEO unblock gives attempts back, like the Operator's", () => {
+    const s = new Store(":memory:")
+    const t = s.createTicket({ department: "engineering", title: "x", goal: "g", why: "w", done_criteria: ["d"], opened_by: "ceo", project: "app", state: "triaged", now: 1 })
+    s.db.run("UPDATE tickets SET attempts = 4, state = 'blocked' WHERE id = ?", [t.id])
+    s.transition(t.id, "triaged", "ceo", "decided: go with option B", 2)
+    expect(s.ticket(t.id)?.attempts).toBe(0)
+    s.close()
+  })
+})
+
 describe("Improvement on operational signals (D66)", () => {
   test("the cycle runs after ten finished tickets without any Operator label, and its prompt carries rejections, verify failures and costs", async () => {
     const c = company("signals", (raw) => {
@@ -511,6 +537,8 @@ describe("the project's verify command (D65)", () => {
     await cycle(sup, clock, 10)
     const judge = engine.runs.filter((r) => r.role.kind === "verification").find((r) => r.prompt.includes(id2))
     expect(judge?.prompt).toContain("verify command `echo checking; test -f passes.txt` in this worktree: exit 0")
+    expect(judge?.prompt).toContain("ci-green: PASSED by the kernel")
+    expect(judge?.prompt).not.toMatch(/Run the required gates \([^)]*verification-approved/) // kernel-owned gates are never asked of the judge (review D76)
     await sup.stop()
   })
 })

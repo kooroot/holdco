@@ -101,6 +101,9 @@ describe("operator commands", () => {
     expect(holdco("project", "set", "other", "--share", "30%", "--verify", "bun test").stdout).toContain("30% of effort, verify: bun test")
     expect(holdco("project", "list").stdout).toMatch(/app\s+core\s+70%/)
     expect(holdco("project", "remove", "app").stderr).toContain("open ticket") // ENG-1 is open
+    // the command after the id is taken whole, flags included (review D76)
+    expect(holdco("project", "verify", "app", "cargo", "test", "--release", "--features", "a,b").stdout).toContain("`cargo test --release --features a,b`")
+    expect(holdco("project", "set", "--min-tier", "T3", "app").stdout).toContain("every action at least T3") // a value flag before the positional
     expect(holdco("project", "remove", "other").stdout).toContain("other removed")
     expect(readFileSync(NodePath.join(co, "company.yaml"), "utf8")).not.toContain("id: other")
   })

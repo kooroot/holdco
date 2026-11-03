@@ -54,7 +54,7 @@ const KO: Record<string, string> = {
   "{n} waiting": "{n}건 대기", "{n} waiting, {u} urgent": "{n}건 대기, 긴급 {u}", "Nothing waiting on you": "기다리는 결정 없음", "The company is working within its rules.": "회사가 규칙 안에서 일하고 있습니다.",
   "rejects itself in {t}": "{t} 후 자동 거절", "Approve": "승인", "Reject": "거절", "Ticket": "티켓", "Goal": "목표", "Branch": "브랜치", "Verdict": "판정", "{o}/4, {c} confidence — {s}": "{o}/4, 신뢰도 {c} — {s}",
   "CEO proposes:": "CEO 제안:", "Why now:": "왜 지금:", "Cost:": "비용:", "Rollback:": "롤백:", "Risk:": "위험:", "Rejected alternatives:": "기각된 대안:", "COO {d}s:": "COO {d}:",
-  "note (optional; goes to the ticket and the digest)": "메모 (선택; 티켓과 다이제스트에 남음)", "Approved": "승인함", "Rejected!": "거절함",
+  "note (optional; goes to the ticket and the digest)": "메모 (선택; 티켓과 다이제스트에 남음)", "Approved": "승인함", "Rejected.": "거절함",
   'Approve "{t}"? The kernel executes it on the next tick.': '"{t}" 승인할까요? 커널이 다음 틱에 실행합니다.',
   // board
   "Every piece of work, by where the kernel holds it. Blocked tickets wait on a decision.": "모든 일을 커널이 붙잡고 있는 단계별로. 막힌 티켓은 결정을 기다립니다.",
@@ -79,7 +79,7 @@ const KO: Record<string, string> = {
   "Replay results ({n})": "리플레이 결과 ({n})", "was: {v}": "이전: {v}", "candidate: ": "후보: ",
   "No candidate under watch. Improvement merges create one; {r} is what every session runs on.": "감시 중인 후보 없음. 개선 머지가 후보를 만들며, 모든 세션은 {r}에서 돕니다.", "Tag a release now": "지금 릴리스 태그", "Tag the current organization as a new release?": "현재 조직을 새 릴리스로 태그할까요?",
   "Release": "릴리스", "When": "시각", "Status": "상태", "Changes": "변경", "No releases recorded since this database was created.": "이 데이터베이스 생성 이후 릴리스 기록 없음.",
-  "Executed": "실행됨", "No actions executed yet.": "아직 실행된 행동 없음.", "rolled back": "롤백됨", "Roll back": "롤백", "no undo": "되돌리기 없음", "Roll back this action? The action type is demoted one tier and a follow-up ticket opens.": "이 행동을 롤백할까요? 행동 유형이 한 등급 강등되고 후속 티켓이 열립니다.", "Rolled back!": "롤백함",
+  "Executed": "실행됨", "No actions executed yet.": "아직 실행된 행동 없음.", "rolled back": "롤백됨", "Roll back": "롤백", "no undo": "되돌리기 없음", "Roll back this action? The action type is demoted one tier and a follow-up ticket opens.": "이 행동을 롤백할까요? 행동 유형이 한 등급 강등되고 후속 티켓이 열립니다.", "Rolled back.": "롤백함",
   // spend
   "Costs are metered in USD at API rates even on a subscription, so budgets and tripwires mean the same everywhere.": "구독이어도 비용은 API 요율의 USD로 계량하므로 예산과 트립와이어의 의미가 어디서나 같습니다.",
   "This month": "이달", "of {m} · {d} in the last 24h · {s} cap per session": "{m} 중 · 최근 24시간 {d} · 세션당 상한 {s}", "Last 14 days": "최근 14일", "Department": "부서", "Share": "몫", "Used": "사용",
@@ -115,7 +115,7 @@ const KO: Record<string, string> = {
   "Budget & limits": "예산·한도", "Monthly budget (USD)": "월 예산 (USD)", "Per-session cap (USD)": "세션당 상한 (USD)", "Max concurrent sessions": "최대 동시 세션", "Max attempts per ticket": "티켓당 최대 시도", "Inbox timeout": "인박스 시한", "e.g. 48h": "예: 48h", "Routine digest at": "정기 다이제스트 시각", "Audit sample per week": "주간 감사 샘플", "Save limits": "한도 저장", "Limits saved and committed": "한도 저장·커밋됨",
   "Dashboard": "대시보드", "Shown in this browser only.": "이 브라우저에만 적용됩니다.",
   // drawer
-  "Overview": "개요", "Live ●": "라이브 ●", "Log": "로그", "Why": "이유", "{c} across {n} sessions": "세션 {n}에 걸쳐 {c}", "Attempts": "시도", "Decision needed": "결정 필요", "your decision, in one line (the senior reads it)": "한 줄 결정 (시니어가 읽습니다)", "Unblock with this decision": "이 결정으로 풀기", "Decline the ticket": "티켓 기각", "Write the decision first": "결정을 먼저 적으세요", "Unblocked": "풀림", "Decline {id}?": "{id}를 기각할까요?", "Declined!": "기각함",
+  "Overview": "개요", "Live ●": "라이브 ●", "Log": "로그", "Why": "이유", "{c} across {n} sessions": "세션 {n}에 걸쳐 {c}", "Attempts": "시도", "Decision needed": "결정 필요", "your decision, in one line (the senior reads it)": "한 줄 결정 (시니어가 읽습니다)", "Unblock with this decision": "이 결정으로 풀기", "Decline the ticket": "티켓 기각", "Write the decision first": "결정을 먼저 적으세요", "Unblocked": "풀림", "Decline {id}?": "{id}를 기각할까요?", "Declined.": "기각함",
   "{o}/4 · {c} confidence": "{o}/4 · 신뢰도 {c}", "Timeline": "타임라인", "Sessions": "세션", "Your notes": "당신의 메모", "Notes are binding for the next session on this ticket (senior and judge). A running session does not see them.": "메모는 이 티켓의 다음 세션(시니어·심판)에 구속력이 있습니다. 실행 중인 세션은 보지 못합니다.", "a note for the next session, e.g. use the existing fee helper": "다음 세션에 줄 메모, 예: 기존 fee 헬퍼를 쓸 것", "Add note": "메모 추가", "Noted": "메모됨", "No branch yet.": "아직 브랜치 없음.", "Diff vs {b}": "{b} 대비 diff", "{n} turns": "{n}턴",
   // live
   "No session has run on this ticket yet.": "이 티켓에서 돈 세션이 아직 없습니다.", "live": "라이브", "running · {t}": "실행 중 · {t}", "ended": "종료", "{n} events": "이벤트 {n}", "follow": "따라가기", "waiting for the first event…": "첫 이벤트 대기 중…", "no journal for this session (it ran on an older kernel)": "이 세션의 저널 없음 (이전 커널에서 돌았음)", "edit {p}": "편집 {p}",

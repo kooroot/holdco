@@ -8,12 +8,12 @@ import { HttpApiClient } from "effect/http-api"
 import { DashboardApi, type Action } from "@holdco/kernel/dashboard"
 
 const params = new URLSearchParams(location.search)
-let token = params.get("t")
-try {
-  if (token) localStorage.setItem("holdco.token", token)
-  else token = localStorage.getItem("holdco.token")
-} catch {}
-if (params.get("t")) history.replaceState(null, "", location.pathname + location.hash)
+const fromUrl = params.get("t")
+let token = fromUrl
+try { if (!token) token = localStorage.getItem("holdco.token") } catch {}
+if (fromUrl) history.replaceState(null, "", location.pathname + location.hash)
+/** The URL's token is kept only once it worked, so a stale bookmark cannot replace a good one. */
+const rememberToken = () => { try { if (fromUrl) localStorage.setItem("holdco.token", fromUrl) } catch {} }
 
 const client = Effect.runSync(
   HttpApiClient.make(DashboardApi, {
@@ -23,8 +23,16 @@ const client = Effect.runSync(
 )
 
 /** Errors reach React Query as plain Errors with the server's message. */
+export const NOT_AUTHORIZED = "Not authorized: open the dashboard from the link `holdco service status` (or `holdco dashboard`) prints — it carries the Operator token."
 const run = <A, E>(eff: Effect.Effect<A, E>): Promise<A> =>
-  Effect.runPromise(eff.pipe(Effect.mapError((e) => new Error(typeof e === "object" && e !== null && "message" in e ? String((e as { message: unknown }).message) : String(e)))))
+  Effect.runPromise(eff.pipe(
+    Effect.tap(() => Effect.sync(rememberToken)),
+    Effect.mapError((e) => {
+      const status = (e as { response?: { status?: number }; reason?: { response?: { status?: number } } }).response?.status ?? (e as { reason?: { response?: { status?: number } } }).reason?.response?.status
+      if (status === 401 || /\b401\b/.test(String((e as { message?: unknown }).message ?? ""))) return new Error(NOT_AUTHORIZED)
+      return new Error(typeof e === "object" && e !== null && "message" in e ? String((e as { message: unknown }).message) : String(e))
+    }),
+  ))
 
 export const api = {
   state: () => run(client.dashboard.state()),

@@ -33,14 +33,14 @@ import { Return } from "../protocol/return.ts"
 import { SessionReport } from "../protocol/report.ts"
 import { CeoCycleReport, Proposal } from "../protocol/approval.ts"
 import { Verdict } from "../protocol/verdict.ts"
-import { END_STATES, Store, type Ticket } from "../store/store.ts"
+import { END_STATES, Store, type Ticket, TRANSITIONS } from "../store/store.ts"
 import { clear as clearInterrupt, raise as raiseInterrupt, readControl } from "./control.ts"
 import { type ExecResult, executorEnv, executorKind, mergeBranch, mergeViaGithub, runAsync, runExecutor } from "./executors.ts"
 import { consoleNotifier, type Notifier } from "./notify.ts"
 import { Org, projectInstructions } from "./org.ts"
 import { renderDigest } from "./digest.ts"
 import { type SessionBinding, ToolServer, type ToolHost } from "./tools.ts"
-import { changedPaths, createDetachedWorktree, createWorktree, defaultBranch, provisionDependencies, removeWorktree } from "./worktrees.ts"
+import { changedPaths, createDetachedWorktree, createWorktree, defaultBranch, provisionDependencies, removeTicketWorktrees, removeWorktree } from "./worktrees.ts"
 
 export interface SupervisorOptions {
   readonly companyRoot: string
@@ -93,7 +93,7 @@ const VERIFICATION_RULES = (gates: ReadonlyArray<string>, ticketId: string): Arr
     ? `Run the required gates (${gates.join(", ")}) with the repository's own commands and record each in \`gates\` with evidence.`
     : "This action requires no mechanical gate. Run the repository's tests or checks only where the changed files could affect them (a docs-only or data-only change needs none); record what you ran in `gates`.",
   "The rubric's gate list is advice for scoring; only the gates listed above are required. Do not reject for a gate the action does not require.",
-  "You have no network: remote CI and GitHub are unreachable by design, so cite the local run of the same checks instead; the kernel treats `ci-green` as the local test run. An environmental limit is not a code defect, but an unexecuted required gate must not be marked passed: return cannot-score with the missing prerequisite. A gate the kernel has already evidenced in this prompt (the project's verify command, rollback-tested) counts as executed. For rollback-tested, exercise recovery in an isolated test environment and cite the command and restored-state checks; an undo declaration alone is insufficient.",
+  "You have no network: remote CI and GitHub are unreachable by design, so cite the local run of the same checks instead; the kernel treats `ci-green` as the local test run. Your shell may refuse listening sockets (a test that starts a local server): that is an environmental limit, not a defect, and never a reason to fail a gate the kernel already ran. An unexecuted required gate must not be marked passed: return cannot-score with the missing prerequisite — except a gate this prompt says the kernel evidenced (the project's verify command; rollback-tested when the action declares an undo): those are executed, record them passed with the kernel's evidence. For a rollback-tested gate listed above without kernel evidence, exercise recovery in an isolated test environment and cite the command and restored-state checks; an undo declaration alone is insufficient.",
   "A LOCKED PATH refusal from the policy hook is not an interrupt and not a finding: skip that path and continue. Searching the company repository is unnecessary; your rubric and the registry are in this prompt.",
   "Verdicts: approve when the done criteria hold and no required gate failed; reject only for a defect in the work or a required gate that ran and failed; cannot-score when the done criteria or a required gate cannot be assessed.",
   `Score the rubric, then submit with verdict_submit; the verdict must name ticket ${ticketId}.`,
@@ -116,6 +116,10 @@ const decode = <S extends Schema.Codec<any, any, never, never>>(s: S, v: unknown
 
 /** Names that look like credentials never reach a session (D14), whatever the shell holds. */
 const SECRET_NAME = /(_KEY|_TOKEN|_SECRET|_PASSWORD|_PASS|_CREDENTIALS?|_AUTH|_COOKIE|_SESSION)$|^(AWS_|GH_|GITHUB_|NPM_|OPENAI_|ANTHROPIC_|TELEGRAM_|SLACK_|CLAUDE_CODE_OAUTH|CODEX_)/i
+/** Names the secret filter would catch that carry no secret: gateways, regions, registries. */
+const PLAIN_NAME = /^(ANTHROPIC_BASE_URL|OPENAI_BASE_URL|AWS_REGION|AWS_DEFAULT_REGION|AWS_PROFILE|NPM_CONFIG_REGISTRY|NPM_CONFIG_[A-Z_]*CA[A-Z_]*)$/i
+/** Git identity and no signing, for sessions and for the kernel's own merges/reverts. */
+export const GIT_ENV: Record<string, string> = { GIT_AUTHOR_NAME: "holdco", GIT_AUTHOR_EMAIL: "holdco@localhost", GIT_COMMITTER_NAME: "holdco", GIT_COMMITTER_EMAIL: "holdco@localhost", GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "commit.gpgsign", GIT_CONFIG_VALUE_0: "false" }
 
 /**
  * The environment a session's engine process gets (D14): the Operator's environment with every
@@ -127,9 +131,12 @@ const SECRET_NAME = /(_KEY|_TOKEN|_SECRET|_PASSWORD|_PASS|_CREDENTIALS?|_AUTH|_C
 export const sessionEnv = (config: CompanyConfig, engine: EngineId, env: Record<string, string | undefined>): Record<string, string> => {
   const e = config.engines[engine]
   const out: Record<string, string> = {}
-  for (const [k, v] of Object.entries(env)) if (v !== undefined && !SECRET_NAME.test(k)) out[k] = v
+  for (const [k, v] of Object.entries(env)) if (v !== undefined && (!SECRET_NAME.test(k) || PLAIN_NAME.test(k))) out[k] = v
   out["PATH"] = env["PATH"] ?? "/usr/local/bin:/usr/bin:/bin"
   out["HOME"] = env["HOME"] ?? "/tmp"
+  // Commits inside a session never depend on the Operator's ~/.gitconfig: a headless host has no identity, and a
+  // signing key the sandbox cannot read would hang every commit on pinentry.
+  for (const [k, v] of Object.entries(GIT_ENV)) if (!(k in out)) out[k] = v
   const authEnv = authMode(e) === "api_key" ? e?.auth_env : undefined
   if (authEnv && env[authEnv]) out[authEnv] = env[authEnv] as string
   // Claude subscription logins may live in an OAuth token env var (`claude setup-token`) instead of the keychain
@@ -286,8 +293,16 @@ export class Supervisor {
   // ── kernel steps ─────────────────────────────────────────────────────────
 
   private kernelSteps(now: number) {
-    for (const t of this.store.ticketsIn(["verified"])) this.classify(t, now)
-    for (const t of this.store.ticketsIn(["awaiting_approval"])) this.routeApproval(t, now)
+    // One ticket's failure never stops the tick for the others: it is blocked with the error and the loop goes on.
+    const guarded = (t: Ticket, step: () => void) => {
+      try { step() } catch (e) {
+        this.log(`${t.id}: kernel step failed: ${String(e)}`)
+        const cur = this.store.ticket(t.id)
+        if (cur && TRANSITIONS[cur.state].includes("blocked")) this.store.transition(t.id, "blocked", "kernel", `kernel step failed: ${String(e).slice(0, 300)}`, now)
+      }
+    }
+    for (const t of this.store.ticketsIn(["verified"])) guarded(t, () => this.classify(t, now))
+    for (const t of this.store.ticketsIn(["awaiting_approval"])) guarded(t, () => this.routeApproval(t, now))
     this.inboxTimeouts(now)
     this.escalateBlocked(now)
     this.inboxAlerts(now)
@@ -377,10 +392,12 @@ export class Supervisor {
     if (open) return
     // A manual action (no executor declared): the Operator did it by hand → done; declined → declined. Checked here,
     // on every tick, not only inside execute() — the first live run approved the item and the ticket never moved.
-    const manual = this.store.db.query<{ status: string }, [string]>("SELECT status FROM inbox WHERE ticket_id = ? AND kind = 'manual_action' ORDER BY id DESC LIMIT 1").get(t.id)
+    // Decisions count only from this wait: a decision taken in an earlier round of the same ticket (blocked, reworked, verified again) is not an approval of the new proposal.
+    const since = this.store.db.query<{ at: number | null }, [string]>("SELECT MAX(at) AS at FROM ticket_events WHERE ticket_id = ? AND to_state = 'awaiting_approval'").get(t.id)?.at ?? 0
+    const manual = this.store.db.query<{ status: string }, [string, number]>("SELECT status FROM inbox WHERE ticket_id = ? AND kind = 'manual_action' AND created_at >= ? ORDER BY id DESC LIMIT 1").get(t.id, since)
     if (manual?.status === "approved") { this.store.transition(t.id, "done", "operator", "performed by the Operator", now); return }
     if (manual?.status === "rejected" || manual?.status === "expired") { this.store.transition(t.id, "declined", "operator", `manual action ${manual.status}`, now); return }
-    const decided = this.store.db.query<{ status: string }, [string]>("SELECT status FROM inbox WHERE ticket_id = ? AND kind IN ('t3','t2_objection') ORDER BY id DESC LIMIT 1").get(t.id)
+    const decided = this.store.db.query<{ status: string }, [string, number]>("SELECT status FROM inbox WHERE ticket_id = ? AND kind IN ('t3','t2_objection','coo_timeout') AND created_at >= ? ORDER BY id DESC LIMIT 1").get(t.id, since)
     if (decided?.status === "approved") {
       this.execute(t, [], tier, now)
       return
@@ -413,22 +430,24 @@ export class Supervisor {
       if (project?.merge === "github") {
         // non-blocking: poll the checks once per tick until merge_wait has passed
         const startedKey = `ghwait:${t.id}`
-        const started = Number(this.store.getMeta(startedKey) ?? now)
-        if (this.store.getMeta(startedKey) === undefined) this.store.setMeta(startedKey, String(now))
-        r = mergeViaGithub({ repo, branch: t.branch, title: message, body: `${t.goal}\n\nVerdict: ${this.store.verdictFor(t.id)?.verdict ?? "none"}\n\nOpened by Holdco for ticket ${t.id}.`, waitMs: durationMs(project.merge_wait ?? "20m"), poll: true, env: this.executorEnvFor(["GH_TOKEN", "GITHUB_TOKEN"]), now: () => this.now() - (now - started) })
+        const started = Number(this.store.getMeta(startedKey) || now)
+        if (!this.store.getMeta(startedKey)) this.store.setMeta(startedKey, String(now))
+        const remaining = started + durationMs(project.merge_wait ?? "20m") - now // the wait is measured from the first poll, not restarted every tick
+        r = mergeViaGithub({ repo, branch: t.branch, title: message, body: `${t.goal}\n\nVerdict: ${this.store.verdictFor(t.id)?.verdict ?? "none"}\n\nOpened by Holdco for ticket ${t.id}.`, waitMs: Math.max(0, remaining), poll: true, env: this.executorEnvFor(["GH_TOKEN", "GITHUB_TOKEN", "SSH_AUTH_SOCK", "GIT_SSH_COMMAND"]), now: () => this.now() })
         if (r.pending) return
         this.store.setMeta(startedKey, "")
       } else r = mergeBranch(repo, t.branch, message)
       if (!r.ok) {
-        this.store.transition(t.id, "rejected", "kernel", `merge failed: ${r.error}`, now)
-        this.store.bumpAttempts(t.id, this.config.runtime.max_attempts, "kernel", "merge failed", now)
+        // From awaiting_approval only `blocked` is legal (a rejected merge after an approval is the Operator's call: main moved, dirty checkout, conflict).
+        this.store.transition(t.id, t.state === "awaiting_approval" ? "blocked" : "rejected", "kernel", `merge failed: ${r.error}`, now)
+        if (t.state !== "awaiting_approval") this.store.bumpAttempts(t.id, this.config.runtime.max_attempts, "kernel", "merge failed", now)
         return
       }
       const id = this.store.logAction({ at: now, actor: "kernel", ticket_id: t.id, action: t.action as string, effective_tier: tier, forced_by: forcedBy, inputs: { branch: t.branch }, outputs: r.outputs, undo: r.undo })
       const window = tier === "T2" ? now + durationMs(this.config.policy.windows.t2_internal) : null
       this.store.transition(t.id, "done", "kernel", `merged (${tier}); action-log ${id}`, now, { window_closes_at: window })
       if (t.department === "improvement") this.onImprovementMerged(t, now)
-      if (project) removeWorktree(repo, `t-${t.id}`)
+      if (project) removeTicketWorktrees(repo, t.id)
       void this.notifier.send("info", this.say(`${t.id} done: ${this.tx(t.title)} (${t.action}, ${tier})`, `${t.id} 완료: ${this.tx(t.title)} (${t.action}, ${tier})`))
     } else if (declared !== undefined) {
       // Operator-declared executor (D50): the kernel runs it with the declared env names only, off the tick
@@ -457,7 +476,7 @@ export class Supervisor {
         const id = this.store.logAction({ at: end, actor: "kernel", ticket_id: t.id, action, effective_tier: tier, forced_by: forcedBy, inputs: { branch: t.branch, deliverable }, outputs: r.outputs, undo: r.undo })
         const window = tier === "T2" ? end + durationMs(this.config.policy.windows.t2_internal) : null
         this.store.transition(t.id, "done", "kernel", `executed ${action} (${tier}); action-log ${id}`, end, { window_closes_at: window })
-        if (project) removeWorktree(repo, `t-${t.id}`)
+        if (project) removeTicketWorktrees(repo, t.id)
         void this.notifier.send("info", this.say(`${t.id} done: ${this.tx(t.title)} (${action}, ${tier})`, `${t.id} 완료: ${this.tx(t.title)} (${action}, ${tier})`))
       }).catch((e) => {
         void this.notifier.send("warning", this.say(`${t.id}: executor crashed: ${String(e)}`, `${t.id}: 실행기 크래시: ${String(e)}`))
@@ -680,6 +699,10 @@ export class Supervisor {
       if (i.kind === "issue" || i.kind === "graduation" || i.kind === "manual_action" || i.kind === "recovery") continue
       if (now - i.created_at > timeout) {
         this.store.inboxDecide(i.id, "expired", "no answer within the timeout: rejected by default", now)
+        if ((i.kind === "blocked" || i.kind === "triage") && i.ticket_id) {
+          const t = this.store.ticket(i.ticket_id)
+          if (t && (t.state === "blocked" || t.state === "new")) this.store.transition(t.id, "declined", "operator", `inbox #${i.id} expired: rejected by default`, now)
+        }
         void this.notifier.send("warning", this.say(`inbox #${i.id} expired: ${this.tx(String(i.payload["title"] ?? i.kind))}`, `인박스 #${i.id} 만료: ${this.tx(String(i.payload["title"] ?? i.kind))}`))
       }
     }
@@ -786,6 +809,7 @@ export class Supervisor {
     const ceoWork = ceoWorkSince(this.store, lastCeo)
     if (this.config.modules.executive !== "none" && (this.due("ceo", durationMs(this.config.policy.executive.ceo_cycle), now) || (idleWake && this.due("ceo", 0, now) && (this.store.setMeta("ceo_idle_streak", String(streak + 1)), true)) || (ceoWork && this.due("ceo", WORK_WAKE_MS, now)))) this.ceoCycle(now)
     if (this.config.modules.executive === "ceo+coo") this.cooReviews(now)
+    else for (const t of this.store.ticketsIn(["awaiting_approval"]).filter((x) => x.approval_stage === "needs_review")) this.store.setStage(t.id, "inbox", now) // no COO in this organization: the Operator reviews
     if (this.due("tripwires", durationMs(this.config.runtime.tick), now)) this.tripwires(now)
     if (this.due("quota", QUOTA_POLL_MS, now)) void this.pollQuota(now)
     if ((this.config.company.language ?? "en") !== "en" && this.due("translate", 30_000, now)) void this.translatePending(now)
@@ -866,6 +890,15 @@ export class Supervisor {
     if ([...this.running.values()].some((r) => r.kind === "coo")) return
     const pending = this.store.ticketsIn(["awaiting_approval"]).filter((t) => t.approval_stage === "needs_review")
     if (pending.length === 0) return
+    // No answer within blocked_after → the Operator decides (coo_timeout); the COO is not retried every tick.
+    const after = durationMs(this.config.policy.executive.blocked_after)
+    for (const t of pending) {
+      if (now - t.updated_at > after) {
+        this.store.setStage(t.id, "inbox", now)
+        this.store.inboxAdd("coo_timeout", t.id, { title: `${t.id}: the COO did not answer; ${this.tx(t.title)}`, proposal: this.store.proposal(t.id)?.proposal, note: "the CEO's proposal waited for a COO review past blocked_after; approve executes it, reject declines" }, now, this.isCore(t) ? "urgent" : "routine")
+      }
+    }
+    if (!this.due("coo", Math.min(after, 30 * 60_000), now)) return
     this.maybeInjectCanary(now)
     const batch = this.store.ticketsIn(["awaiting_approval"]).filter((t) => t.approval_stage === "needs_review")
     const role = this.org.role("coo")
@@ -1214,11 +1247,11 @@ export class Supervisor {
       t.action ? `Registry action the result needs: ${t.action}` : "Registry action: choose the right one from governance/policy.md and pass it to ticket_update.",
       `Attempt ${t.attempts + 1} of ${this.config.runtime.max_attempts}. Your worktree is ${cwd} on branch ${branch}; commit there. Inspect the branch first: earlier attempts may have left work.${deps ? ` ${deps}.` : ""}`,
       t.state === "in_progress" && t.note ? `Last note on this ticket: ${t.note}` : "",
-      project?.verify ? `The project's verify command is \`${renderVerify(project.verify)}\`: run it in your worktree before returning; Verification runs the same command and the kernel rejects the ticket if it fails.` : project ? "This project has no verify command yet. If your change adds tests or a check script, say in the report what command proves the project works, so the Operator can register it (projects[].verify)." : "",
+      project?.verify ? `The project's verify command is \`${renderVerify(project.verify)}\`: run it in your worktree before returning; the kernel runs the same command outside your sandbox and rejects the ticket if it fails. Your sandbox may refuse listening sockets (tests that start a local server): that is an environmental limit, not a defect — note it and let the kernel's run decide.` : project ? "This project has no verify command yet. If your change adds tests or a check script, say in the report what command proves the project works, so the Operator can register it (projects[].verify)." : "",
       this.operatorNotes(t.id),
       prior.length ? `Earlier session reports:\n${prior.map((s) => s.report).join("\n")}` : "",
       "",
-      this.config.modules.juniors.enabled ? `Team: list the ticket's independent parts first; two or more → one junior each, started together (consecutive delegate_start, one delegate_wait), up to ${this.config.modules.juniors.max_per_task}. Solo only when the work is small or cannot be split. Record the choice in the report's \`team\`.` : "",
+      this.config.modules.juniors.enabled ? `Commit before delegating: juniors branch from your branch's HEAD and never see uncommitted files. Team: list the ticket's independent parts first; two or more → one junior each, started together (consecutive delegate_start, one delegate_wait), up to ${this.config.modules.juniors.max_per_task}. Solo only when the work is small or cannot be split. Record the choice in the report's \`team\`.` : "",
       "Finish by calling ticket_update (ready_for_verification with branch and action, or blocked with the decision needed), then return the structured session report.",
     ].filter((l) => l !== "").join("\n")
     const extra: Array<[string, string]> = []
@@ -1262,12 +1295,16 @@ export class Supervisor {
     const paths = t.branch ? changedPaths(repo, base, t.branch) : []
     const rubricRef = action?.evaluator ?? "engineering.md#app"
     const deps = provisionDependencies(cwd, repo, this.log)
-    const gates = action?.gates ?? []
+    // The judge is asked only for gates it can execute; the kernel's own (verification-approved, replay-gain, canary-clean,
+    // rollback-tested with a declared undo) are evidenced by the kernel in classify() — asking the judge to run them made
+    // every Improvement ticket cannot-score.
+    const kernelOwned = this.config.executors?.[t.action ?? ""]?.undo !== undefined ? new Set([...KERNEL_GATES, "rollback-tested"]) : KERNEL_GATES
+    const gates = (action?.gates ?? []).filter((g) => !kernelOwned.has(g))
     // D65: the project's verify command runs first, in the worktree, by the kernel. A failure rejects without
     // spending a judge; a pass is handed to the judge as the ci-green evidence.
     if (project?.verify && t.branch) {
       const argv = project.verify
-      void runAsync(argv, cwd, executorEnv([], this.env), durationMs(project.verify_timeout ?? "10m")).then((r) => {
+      void runAsync(argv, cwd, sessionEnv(this.config, assignmentFor(this.config, "verification").engine, this.env), durationMs(project.verify_timeout ?? "10m")).then((r) => {
         const cur = this.store.ticket(t.id)
         if (cur?.state !== "ready_for_verification" || cur.lease_holder !== sessionId) return
         const tail = (r.stdout + (r.stderr ? `\n${r.stderr}` : "")).trim().split("\n").slice(-40).join("\n").slice(-4000)
@@ -1358,7 +1395,7 @@ export class Supervisor {
     const home = this.env["HOME"] ?? "/tmp"
     const denyRead = [...UNREADABLE.map((u) => NodePath.join(this.root, u).replace(/\/$/, "")), ...HOST_DENY_READ.map((h) => h.replace(/^~/, home))]
     const writable = kind === "ceo" || kind === "coo" || kind === "verification" || kind === "junior_reader" ? [] : [p.cwd]
-    const denyWrite = [this.root, ...(p.projectRoot ? (p.locked ?? []).map((g) => NodePath.join(p.projectRoot as string, g.replace(/\/?\*\*$/, ""))) : [])].filter((d) => d !== p.cwd)
+    const denyWrite = [this.root, ...(p.projectRoot ? (p.locked ?? []).map((g) => NodePath.join(p.projectRoot as string, g.replace(/\/?\*\*$/, ""))) : [])].filter((d) => d !== p.cwd && !(p.cwd + "/").startsWith(d + "/")) // an ancestor of the worktree would deny every write in it
     const dept = this.config.modules.departments.includes(p.role.department) ? p.role.department : undefined
     const allowedDomains = dept && p.role.capabilities.includes("web") ? ["*"] : []
     const price = assignment.engine === "codex" ? this.config.engines.codex?.prices[assignment.model] : undefined
@@ -1462,7 +1499,7 @@ export class Supervisor {
         r.abort.abort()
       }
     }
-    if ((e.kind === "command" && SECRET.test(e.command)) || (e.kind === "file_change" && e.paths.some((p) => /\.(env|pem|key)$/.test(p)))) {
+    if ((e.kind === "command" && SECRET.test(e.command)) || (e.kind === "file_change" && e.paths.some((p) => /(^|\/)\.env(\.[a-z]+)?$/.test(p) && !/\.env\.(example|sample|template|test)$/.test(p)))) {
       raiseInterrupt(this.root, "L5", "*", `secret pattern in session ${r.sessionId}`, this.now())
       void this.notifier.send("critical", this.say(`tripwire: secret pattern in ${r.role}'s session; L5 raised`, `트립와이어: ${r.role} 세션에 시크릿 패턴; L5 발동`))
     }
@@ -1500,7 +1537,7 @@ export class Supervisor {
     const prompt = [
       `# Brief ${brief.brief_id} for ticket ${brief.ticket}`,
       "```json", JSON.stringify(brief, null, 2), "```",
-      reader ? "You are read-only. Put your findings in the return form." : `Work in ${cwd} on branch ${parentBranch}-${brief.brief_id}; commit there. Your senior merges it.`,
+      reader ? "You are read-only. Put your findings in the return form." : `Work in ${cwd} on branch ${parentBranch}-${suffix}; commit there (your senior merges that branch).`,
       "End with the return form (protocols/return.schema.md) as your structured answer. Mark a criterion met only with evidence; list every assumption.",
     ].join("\n")
     const gate = this.admit("junior_worker", binding.department, readControl(this.root), now)

@@ -7,7 +7,7 @@ import { usd } from "./format.ts"
 import { useNewTicket, useOpenTicket, useSearchState, VIEWS } from "./nav.ts"
 import { NewTicket } from "./ticket/NewTicket.tsx"
 import { Drawer } from "./ticket/Drawer.tsx"
-import { Button, cn, Meter, ui } from "./ui.tsx"
+import { Button, cn, Meter, ui, Empty } from "./ui.tsx"
 import { t, useLang } from "./i18n.ts"
 
 const st = {
@@ -48,6 +48,7 @@ export const Shell = ({ children }: { children: ReactNode }) => {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return // browser shortcuts (Cmd+1..9 tabs, Ctrl+N) are not ours
       if ((e.target as HTMLElement).matches("input, textarea, select")) return
       if (e.key === "Escape") { if (search.new) setNew(false); else if (search.ticket) openTicket(null); return }
       if (e.key === "n" && !search.new) { setNew(true); return }
@@ -91,7 +92,7 @@ export const Shell = ({ children }: { children: ReactNode }) => {
           <Meter ratio={ratio} />
         </div>
       </aside>
-      <main {...st.main()}>{children}</main>
+      <main {...st.main()}>{q.isError && !S ? <Empty title={t("Dashboard unreachable")}>{q.error.message}</Empty> : children}</main>
       {search.ticket ? <Drawer id={search.ticket} onClose={() => openTicket(null)} /> : null}
       {search.new ? <NewTicket onClose={() => setNew(false)} /> : null}
       {toast ? <div {...cn(ui.toast(), toast.error && ui.toastErr())}>{toast.text}</div> : null}

@@ -360,7 +360,12 @@ export const act = async (ctx: DashboardContext, a: Action): Promise<Record<stri
             const log = last ? store.actionLog(last.id) : undefined
             const undoable = (() => { try { return log !== undefined && !log.rolled_back && Object.keys(JSON.parse(log.undo) as object).length > 0 } catch { return false } })()
             if (log && undoable) {
-              const r = act(ctx, { kind: "rollback", id: log.id, note: a.note ?? "rolled back from the recovery item" })
+              let r: Record<string, unknown>
+              try { r = await act(ctx, { kind: "rollback", id: log.id, note: a.note ?? "rolled back from the recovery item" }) } catch (e) {
+                // the undo failed: the effect is still live, so the ticket stays blocked and the decision is put back in the inbox
+                store.inboxAdd("recovery", t.id, { ...item.payload, note: `rollback failed: ${e instanceof ActionError ? e.message : String(e)} — fix it by hand, then approve (done) or reject (retry the undo)` }, now, "urgent")
+                throw e
+              }
               store.transition(t.id, "rolled_back", "operator", a.note ?? "rolled back after a failed postcheck", now)
               return r
             }
@@ -373,6 +378,7 @@ export const act = async (ctx: DashboardContext, a: Action): Promise<Record<stri
     case "unblock": {
       const t = store.ticket(a.id)
       if (!t) throw new ActionError(`ticket ${a.id} not found`)
+      if (t.state !== "blocked") throw new ActionError(`${a.id} is ${t.state}, not blocked`)
       store.transition(a.id, "triaged", "operator", a.note, now)
       return { ok: true }
     }
@@ -453,7 +459,8 @@ export const act = async (ctx: DashboardContext, a: Action): Promise<Record<stri
       if (a.project !== undefined && a.project !== null && !config.projects.some((p) => p.id === a.project)) throw new ActionError(`unknown project '${a.project}'`)
       if (a.department !== undefined && !config.modules.departments.includes(a.department) && a.department !== "improvement") throw new ActionError(`department '${a.department}' is not enabled`)
       const criteria = a.criteria?.map((c) => c.trim()).filter(Boolean)
-      store.editTicket(a.id, { ...(a.title !== undefined ? { title: a.title.trim() } : {}), ...(a.goal !== undefined ? { goal: a.goal.trim() } : {}), ...(a.why !== undefined ? { why: a.why.trim() } : {}), ...(criteria && criteria.length ? { done_criteria: criteria } : {}), ...(a.priority !== undefined ? { priority: a.priority } : {}), ...(a.action !== undefined ? { action: a.action } : {}), ...(a.project !== undefined ? { project: a.project } : {}), ...(a.department !== undefined ? { department: a.department } : {}) }, now)
+      if (a.title !== undefined && !a.title.trim()) throw new ActionError("a title is required")
+      store.editTicket(a.id, { ...(a.title !== undefined ? { title: a.title.trim() } : {}), ...(a.goal !== undefined && a.goal.trim() ? { goal: a.goal.trim() } : {}), ...(a.why !== undefined ? { why: a.why.trim() } : {}), ...(criteria && criteria.length ? { done_criteria: criteria } : {}), ...(a.priority !== undefined ? { priority: a.priority } : {}), ...(a.action !== undefined ? { action: a.action } : {}), ...(a.project !== undefined ? { project: a.project } : {}), ...(a.department !== undefined ? { department: a.department } : {}) }, now)
       if (t.state === "in_progress") store.addComment(a.id, "operator", "The ticket was edited while you were working; re-read goal and done criteria with ticket_get.", now)
       return { ok: true }
     }
@@ -508,12 +515,7 @@ export const act = async (ctx: DashboardContext, a: Action): Promise<Record<stri
     }
     case "settings": {
       const config = ctx.config()
-      if (a.strategy !== undefined) {
-        const path = NodePath.join(ctx.root, "governance", "strategy.md")
-        writeFileSync(path, a.strategy.endsWith("\n") ? a.strategy : `${a.strategy}\n`)
-        spawnSync("git", ["add", "governance/strategy.md"], { cwd: ctx.root })
-        spawnSync("git", ["commit", "-qm", "strategy: edited from the dashboard"], { cwd: ctx.root })
-      }
+      if (a.strategy !== undefined && !a.strategy.trim()) throw new ActionError("the strategy cannot be empty; the CEO allocates against it")
       const next = {
         ...config,
         budget: { ...config.budget, ...(a.budget?.monthly_usd !== undefined ? { monthly_usd: a.budget.monthly_usd } : {}), ...(a.budget?.session_max_usd !== undefined ? { session_max_usd: a.budget.session_max_usd } : {}) },
@@ -522,8 +524,14 @@ export const act = async (ctx: DashboardContext, a: Action): Promise<Record<stri
       }
       if (a.budget || a.inbox || a.audit_weekly_sample !== undefined || a.runtime) {
         const exit = Schema.decodeUnknownExit(CompanyConfig, { errors: "all" })(next)
-        if (Exit.isFailure(exit)) throw new ActionError(`refused: ${String(exit.cause).slice(0, 400)}`)
+        if (Exit.isFailure(exit)) throw new ActionError(`refused: ${String(exit.cause).slice(0, 400)}`) // nothing written yet: the strategy comes after validation
         ctx.saveConfig(exit.value, "settings edited from the dashboard")
+      }
+      if (a.strategy !== undefined) {
+        const path = NodePath.join(ctx.root, "governance", "strategy.md")
+        writeFileSync(path, a.strategy.endsWith("\n") ? a.strategy : `${a.strategy}\n`)
+        spawnSync("git", ["add", "governance/strategy.md"], { cwd: ctx.root })
+        spawnSync("git", ["-c", "user.name=holdco", "-c", "user.email=holdco@localhost", "-c", "commit.gpgsign=false", "commit", "-qm", "strategy: edited from the dashboard"], { cwd: ctx.root })
       }
       return { ok: true }
     }

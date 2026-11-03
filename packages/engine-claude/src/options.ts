@@ -95,7 +95,7 @@ export const toClaudeOptions = (
     maxTurns: spec.limits.maxTurns,
     maxBudgetUsd: spec.limits.maxBudgetUsd,
     abortController,
-    env: { ...spec.env },
+    env: { ...spec.env, AGENT_ID: spec.role.role, AGENT_DEPT: spec.role.department, HOLDCO_COMPANY_ROOT: spec.companyRoot, HOLDCO_SESSION_TOKEN: spec.tools.token, ...(spec.projectRoot ? { HOLDCO_PROJECT_ROOT: spec.projectRoot, HOLDCO_PROJECT_LOCKED: JSON.stringify(spec.projectLocked ?? []) } : {}) },
   }
   // `ultra` is Codex-only (the config schema rejects it for Claude roles); map defensively to `max`
   if (spec.assignment.effort !== undefined) options.effort = spec.assignment.effort === "ultra" ? "max" : spec.assignment.effort

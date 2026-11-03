@@ -145,8 +145,8 @@ describe("telegram bridge", () => {
     const b = bridge()
     expect(await b.command("/halt runaway spend")).toBe("")
     const ask = sent().at(-1)!
-    expect(ask.reply_markup.inline_keyboard[0][0].callback_data).toBe("halt:runaway spend")
-    queue = [{ update_id: 4, callback_query: { id: "cq3", from: { id: 4242 }, message: { message_id: 9, chat: { id: 4242 }, text: "Stop everything?" }, data: "halt:runaway spend" } }]
+    expect(ask.reply_markup.inline_keyboard[0][0].callback_data).toBe("halt:") // the reason is kept in meta: callback data is limited to 64 bytes
+    queue = [{ update_id: 4, callback_query: { id: "cq3", from: { id: 4242 }, message: { message_id: 9, chat: { id: 4242 }, text: "Stop everything?" }, data: "halt:" } }]
     await b.pollOnce()
     expect(readControl(dir)).toMatchObject([{ level: "L5", target: "*", reason: "runaway spend" }])
     expect(await b.command("/resume *")).toContain("Resumed L5")

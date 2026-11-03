@@ -29,7 +29,7 @@ export const Files = ({ id, stacked }: { id: string; stacked?: boolean }) => {
   }, [files.data, path])
   const file = useFile(id, path)
   if (files.isLoading) return <div {...cn(ui.muted(), ui.small())}>{t("Loading…")}</div>
-  if (!files.data?.files.length) return <div {...cn(ui.muted(), ui.small())}>{t("No files changed{b}.", { b: files.data ? t(" vs {b}", { b: files.data.base }) : "" })}</div>
+  if (!files.data?.files.length) return <div {...cn(ui.muted(), ui.small())}>{t("No files changed{b}.", { b: files.data?.base ? t(" vs {b}", { b: files.data.base }) : "" })}</div>
   return (
     <div {...cx(st.wrap(), stacked && st.stacked())}>
       <div {...cx(st.list(), stacked && st.listRow())}>

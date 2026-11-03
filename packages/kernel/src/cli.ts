@@ -33,7 +33,7 @@ import { Brief } from "./protocol/brief.ts"
 import { Return } from "./protocol/return.ts"
 import { assemble } from "./scaffold/assemble.ts"
 import { renderCompanyYaml, scaffold } from "./scaffold/scaffold.ts"
-import { loadPreset, presetNames } from "./scaffold/templates.ts"
+import { loadPreset, presetNames, TemplateError } from "./scaffold/templates.ts"
 import { InterruptsFileJson } from "./schema/interrupts.ts"
 import { crossCheck, validateBrief, validateReturn } from "./validate.ts"
 
@@ -49,9 +49,11 @@ const flag = (name: string): string | undefined => {
   return i >= 0 ? argv[i + 1] : undefined
 }
 const has = (name: string): boolean => argv.includes(`--${name}`)
-const VALUE_FLAGS: ReadonlySet<string> = new Set(["dir", "preset", "github", "name", "brief", "title", "goal", "why", "criteria", "dept", "project", "action", "priority", "note", "reason", "id", "class", "share", "kill", "mission", "timezone"])
+const VALUE_FLAGS: ReadonlySet<string> = new Set(["dir", "preset", "github", "name", "brief", "title", "goal", "why", "criteria", "dept", "project", "action", "priority", "note", "reason", "id", "class", "share", "kill", "mission", "timezone", "autonomy", "cap", "minutes", "port", "dashboard-port", "verify", "min-tier", "project-id"])
 const positional: Array<string> = []
-for (let i = 0; i < argv.length; i++) {
+// `holdco project verify <id> <command…>`: everything after the id is the command, flags included (`cargo test --release`).
+const rawCommand = argv[0] === "project" && argv[1] === "verify" ? argv.slice(3) : undefined
+for (let i = 0; i < (rawCommand ? 3 : argv.length); i++) {
   const a = argv[i] as string
   if (a.startsWith("--")) {
     if (VALUE_FLAGS.has(a.slice(2))) i++
@@ -59,6 +61,7 @@ for (let i = 0; i < argv.length; i++) {
   }
   positional.push(a)
 }
+if (rawCommand) positional.push(...rawCommand)
 const instanceDir = (): string => NodePath.resolve(flag("dir") ?? process.cwd())
 
 const fail = (msg: string): never => {
@@ -242,6 +245,11 @@ const doctor = async (dir: string): Promise<Array<Check>> => {
       }
     }
     add("operator.github is set", config.operator.github !== "OPERATOR", "create-holdco --github <handle>, or edit company.yaml and CODEOWNERS")
+    for (const ch of config.alerts.channels) {
+      if (ch.type !== "telegram" || !process.env[ch.bot_token_env]) continue
+      // a token with the preset's placeholder chat id would post every alert into the void and ignore the Operator's messages
+      add(`telegram chat is paired (${ch.chat_id})`, /^-?\d{5,}$/.test(ch.chat_id) && ch.chat_id !== "123456789", "run holdco telegram setup (send the bot a message while it waits)")
+    }
     for (const p of config.projects) {
       const abs = NodePath.resolve(dir, p.path)
       add(`project '${p.id}' is a git repository (${p.path})`, existsSync(NodePath.join(abs, ".git")), "holdco project add <path>, or fix projects[].path")
@@ -342,19 +350,21 @@ switch (cmd) {
     const project = flag("project")
     const checkout = checkoutDir
     if (checkout) for (const pkg of ["kernel", "engine-claude", "engine-codex"]) spawnSync("bun", ["link"], { cwd: NodePath.join(checkout, pkg), stdio: "pipe" })
-    const result = scaffold({
+    const slug = (s: string) => { const r = s.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, ""); return (/^[a-z]/.test(r) ? r : `co-${r}`).slice(0, 32).replace(/-+$/, "") || "my-co" }
+    let result: ReturnType<typeof scaffold>
+    try { result = scaffold({
       dir: NodePath.resolve(dir),
       preset,
       kernelVersion: KERNEL_VERSION,
       ...(checkout ? { packagesDir: checkout } : {}),
       git: !has("no-git"),
       ...(github ? { github } : {}),
-      ...(name ? { companyName: name } : {}),
+      ...(name ? { companyName: slug(name) } : { companyName: slug(NodePath.basename(NodePath.resolve(dir))) }),
       ...(flag("mission") ? { mission: flag("mission") as string } : {}),
       ...(flag("autonomy") === "autonomous" || flag("autonomy") === "supervised" ? { autonomy: flag("autonomy") as "autonomous" | "supervised" } : {}),
       ...(flag("timezone") ? { timezone: flag("timezone") as string } : {}),
       ...(project ? { projectPath: NodePath.resolve(project) } : {}),
-    })
+    }) } catch (e) { fail(e instanceof TemplateError ? e.message : String(e)); break }
     console.log(`created ${result.config.company.name} in ${result.dir}`)
     console.log(`modules: ${result.modules.join(", ")}`)
     console.log(`engines: ${Object.keys(result.config.engines).join(", ")}${result.tagged ? "; tagged r0" : ""}`)

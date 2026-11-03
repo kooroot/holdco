@@ -49,7 +49,7 @@ export const diagnose = (ctx: StallContext, t: Ticket): StallDiagnosis | undefin
   const err = (report: string | null) => (report ? `: ${String((JSON.parse(report) as { error?: string }).error ?? "").slice(0, 160)}` : "")
   const kind = t.state === "ready_for_verification" ? L("Verification", "검증") : L("senior", "시니어")
   switch (t.state) {
-    case "blocked": return d(L("waiting for your decision (inbox)", "당신의 결정 대기 (인박스)"), "operator")
+    case "blocked": return store.inboxOpen().some((i) => i.ticket_id === t.id) ? d(L("waiting for your decision (inbox)", "당신의 결정 대기 (인박스)"), "operator") : d(L("blocked with nothing open in the inbox (the CEO may unblock it on its cycle; it reaches the inbox after blocked_after)", "막혔는데 인박스에 열린 항목이 없음 (CEO가 사이클에서 풀 수 있고, blocked_after 뒤 인박스로 감)"))
     case "new": return d(L(`waiting for CEO triage${eta}`, `CEO 분류 대기${eta}`))
     case "awaiting_approval": {
       if (t.approval_stage === "inbox") return store.inboxOpen().some((i) => i.ticket_id === t.id) ? d(L("waiting for your approval (inbox)", "당신의 승인 대기 (인박스)"), "operator") : d(L("at the approval stage with nothing open in the inbox; the kernel's routing did not move it", "승인 단계인데 인박스에 열린 항목이 없음; 커널 라우팅이 옮기지 못함"))

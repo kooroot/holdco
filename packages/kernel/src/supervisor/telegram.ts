@@ -21,6 +21,13 @@ interface Update {
 
 const KIND_LABEL: Record<string, [string, string]> = { t3: ["Approval needed", "승인 필요"], t2_objection: ["COO objected", "COO 반대"], coo_timeout: ["COO did not answer", "COO 무응답"], triage: ["Triage", "분류"], blocked: ["Blocked ticket", "막힌 티켓"], graduation: ["Graduation proposal", "승격 제안"], issue: ["Issue from an agent", "에이전트 이슈"], manual_action: ["Run by hand", "수동 실행"], candidate_withdrawn: ["Candidate withdrawn", "후보 철회"], recovery: ["Recovery needed", "복구 필요"] }
 
+/** Telegram rejects messages over 4096 characters; cut at a line and say so instead of losing the card. */
+const clipHtml = (text: string, max: number): string => {
+  if (text.length <= max) return text
+  const cut = text.lastIndexOf("\n", max)
+  return `${text.slice(0, cut > max / 2 ? cut : max)}\n…`
+}
+
 /** A ten-cell meter for a percentage. */
 const bar = (pct: number): string => { const n = Math.max(0, Math.min(10, Math.round(pct / 10))); return "▰".repeat(n) + "▱".repeat(10 - n) }
 const esc = (s: unknown) => String(s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c] as string))
@@ -59,7 +66,7 @@ export class TelegramBridge {
   }
 
   send(text: string, extra: Record<string, unknown> = {}) {
-    return this.call("sendMessage", { chat_id: this.o.chatId, text, parse_mode: "HTML", disable_web_page_preview: true, ...extra })
+    return this.call("sendMessage", { chat_id: this.o.chatId, text: clipHtml(text, 3900), parse_mode: "HTML", disable_web_page_preview: true, ...extra })
   }
 
   /** The Operator's language (company.yaml:company.language, default en) and a picker over two strings. */
@@ -72,8 +79,8 @@ export class TelegramBridge {
     const timeout = this.o.ctx.config().policy.inbox.timeout
     for (const i of store.inboxOpen()) {
       if (store.getMeta(`tg:sent:${i.id}`) === "1") continue
-      store.setMeta(`tg:sent:${i.id}`, "1")
-      await this.send(this.renderItem(i.id) ?? "", { reply_markup: this.buttons(i.id) })
+      const sent = await this.send(this.renderItem(i.id) ?? "", { reply_markup: this.buttons(i.id) })
+      if (sent !== undefined) store.setMeta(`tg:sent:${i.id}`, "1") // a card Telegram refused (network, size) is sent again next time
     }
     void timeout
   }
@@ -99,10 +106,10 @@ export class TelegramBridge {
     const lines = [
       `${i.urgency === "urgent" ? "🔴 " : ""}<b>#${i.id} · ${esc(kind ? L(kind[0], kind[1]) : i.kind)}</b>`,
       esc(this.tx(String(i.payload["title"] ?? ""))),
-      t ? `<code>${esc(t.id)}</code> ${esc(t.department)}${t.action ? ` · <code>${esc(t.action)}</code>` : ""}\n${esc(this.tx(t.goal))}` : "",
-      v ? `${L("Verdict", "판정")}: <b>${esc(v.verdict)}</b> ${v.overall}/4, ${esc(v.confidence)} — ${esc(this.tx((JSON.parse(v.payload) as { summary?: string }).summary ?? ""))}` : "",
+      t ? `<code>${esc(t.id)}</code> ${esc(t.department)}${t.action ? ` · <code>${esc(t.action)}</code>` : ""}\n${esc(this.tx(t.goal).slice(0, 600))}` : "",
+      v ? `${L("Verdict", "판정")}: <b>${esc(v.verdict)}</b> ${v.overall}/4, ${esc(v.confidence)} — ${esc(this.tx((JSON.parse(v.payload) as { summary?: string }).summary ?? "").slice(0, 700))}` : "",
       p ? `CEO: ${esc(this.tx(p.decision))}\n${L("Why now", "왜 지금")}: ${esc(this.tx(p.why_now))}\n${L("Cost", "비용")}: ${esc(p.expected_cost)} · ${L("Rollback", "롤백")}: ${esc(this.tx(p.rollback_plan))}` : "",
-      typeof i.payload["note"] === "string" ? esc(this.tx(i.payload["note"])) : "",
+      typeof i.payload["note"] === "string" ? esc(this.tx(i.payload["note"]).slice(0, 700)) : "",
       expires ? L(`⏱ rejects itself in ${left(expires - this.o.ctx.now())}`, `⏱ ${left(expires - this.o.ctx.now())} 후 자동 거절`) : "",
     ].filter((l) => l.length > 0)
     return lines.join("\n")
@@ -249,7 +256,7 @@ export class TelegramBridge {
       case "/approve":
       case "/reject": {
         const [idText, ...noteParts] = rest
-        const id = Number(idText)
+        const id = Number((idText ?? "").replace(/^#/, ""))
         if (!Number.isInteger(id)) return `${L("Usage", "사용법")}: ${cmd} <inbox id> [note]`
         const decision = cmd.toLowerCase() === "/approve" ? "approved" : "rejected"
         return run({ kind: "inbox", id, decision, ...(noteParts.length ? { note: noteParts.join(" ") } : {}) }, () => L(`#${id} ${decision}.`, `#${id} ${decision === "approved" ? "승인" : "거절"}.`))
@@ -302,7 +309,8 @@ export class TelegramBridge {
         return L(`Resumed ${active.map((i) => i.level).join(", ")} on ${esc(target)}.`, `${esc(target)}의 ${active.map((i) => i.level).join(", ")} 재개됨.`)
       }
       case "/halt": {
-        await this.send(L(`Stop everything (L5)? Reason: ${esc(arg || "halted from Telegram")}`, `전부 정지할까요 (L5)? 사유: ${esc(arg || "halted from Telegram")}`), { reply_markup: { inline_keyboard: [[{ text: L("🛑 Yes, halt", "🛑 네, 정지"), callback_data: `halt:${arg.slice(0, 60)}` }, { text: L("Cancel", "취소"), callback_data: "noop" }]] } })
+        store.setMeta("tg:halt_reason", arg || "halted from Telegram")
+        await this.send(L(`Stop everything (L5)? Reason: ${esc(arg || "halted from Telegram")}`, `전부 정지할까요 (L5)? 사유: ${esc(arg || "halted from Telegram")}`), { reply_markup: { inline_keyboard: [[{ text: L("🛑 Yes, halt", "🛑 네, 정지"), callback_data: "halt:" }, { text: L("Cancel", "취소"), callback_data: "noop" }]] } })
         return ""
       }
       default:
@@ -325,7 +333,7 @@ export class TelegramBridge {
       if (data === "noop") result = L("Cancelled.", "취소됨.")
       else if (data.startsWith("halt:")) {
         try {
-          await act(this.o.ctx, { kind: "interrupt", level: "L5", target: "*", reason: data.slice(5) || "halted from Telegram" })
+          await act(this.o.ctx, { kind: "interrupt", level: "L5", target: "*", reason: data.slice(5) || this.o.ctx.store.getMeta("tg:halt_reason") || "halted from Telegram" })
           result = L("🛑 Halted (L5). /resume * lifts it.", "🛑 정지됨 (L5). /resume * 로 해제.")
         } catch (e) {
           result = `⚠️ ${String(e)}`
@@ -412,7 +420,8 @@ export const discoverChatId = async (token: string, f: Fetch = fetch, waitMs = 1
   let offset = 0
   while (Date.now() < deadline) {
     const r = await f(`https://api.telegram.org/bot${token}/getUpdates`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ offset, timeout: 20 }), signal: AbortSignal.timeout(35_000) })
-    const j = (await r.json()) as { ok: boolean; result?: Array<Update> }
+    const j = (await r.json()) as { ok: boolean; result?: Array<Update>; description?: string }
+    if (!j.ok) throw new Error(`Telegram refused the token: ${j.description ?? "unknown error"}${/webhook/i.test(j.description ?? "") ? " (a webhook is set on this bot; delete it with deleteWebhook, Holdco polls)" : ""}`)
     for (const u of j.result ?? []) {
       offset = u.update_id + 1
       if (u.message?.text) return { chatId: String(u.message.chat.id), name: u.message.from?.first_name ?? "you" }

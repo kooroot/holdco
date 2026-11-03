@@ -30,7 +30,7 @@ export const Board = () => {
   const [showDone, setShowDone] = useState(false)
   useLang()
   const S = q.data
-  if (!S) return <Empty>Loading…</Empty>
+  if (!S) return <Empty>{t("Loading…")}</Empty>
   const depts = [...new Set(S.tickets.map((x) => x.department))].sort()
   const waits = Object.fromEntries(S.waiting.map((w) => [w.ticket_id, w]))
   const tickets = S.tickets.filter((x) => !dept || x.department === dept)

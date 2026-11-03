@@ -7,7 +7,7 @@ import { spawnSync } from "node:child_process"
 import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs"
 import * as NodePath from "node:path"
 import { Exit, Schema } from "effect"
-import { assignmentFor, CompanyConfig, type EngineId, ENGINE_IDS, ROLE_KINDS, type RoleKind, type Tier } from "../config/company.ts"
+import { assignmentFor, authMode, CompanyConfig, type EngineId, ENGINE_IDS, ROLE_KINDS, type RoleKind, type Tier } from "../config/company.ts"
 import { defaultRoles, EXAMPLE_PRICES, formatAssignment, MODEL_DEFAULTS, MODEL_MODES, type ModelMode, parseAssignment, PRICES_CHECKED_ON } from "../config/models.ts"
 import type { Engine } from "../engine/types.ts"
 import { renderCompanyYaml } from "../scaffold/scaffold.ts"
@@ -127,6 +127,9 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
       const engines = await loadEngines(config, dir)
       const sup = new Supervisor({ companyRoot: dir, config, engines, notifier: liveNotifier(config), port: Number(process.env["HOLDCO_TOOLS_PORT"] ?? 0) })
       writeFileSync(lock, String(process.pid), { mode: 0o600 })
+      // Under launchd (HOLDCO_CAFFEINATE=1) the Mac is kept awake for as long as this process lives: caffeinate -w exits with us,
+      // and we stay the job's main process so SIGTERM reaches stop() below.
+      if (process.env["HOLDCO_CAFFEINATE"] === "1" && process.platform === "darwin") Bun.spawn(["caffeinate", "-s", "-w", String(process.pid)], { stdio: ["ignore", "ignore", "ignore"] })
       await sup.boot()
       sup.start()
       const dash = startDashboard({ root: dir, config: () => loadConfig(dir), store: sup.store, now: () => Date.now(), supervisor: sup, saveConfig: (c, m) => saveConfig(dir, c, m) }, Number(process.env["HOLDCO_DASHBOARD_PORT"] ?? args.flag("dashboard-port") ?? config.runtime.dashboard_port ?? 7117), (l) => console.log(l))
@@ -262,7 +265,7 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
       let any = false
       for (const [id, engine] of engines) {
         if (!engine.quota) continue
-        if ((config.engines[id] as { auth?: string } | undefined)?.auth === "api_key") { console.log(`${id}: API key — no plan windows (rate limits are the provider's)`); continue }
+        if (authMode(config.engines[id]) === "api_key") { console.log(`${id}: API key — no plan windows (rate limits are the provider's)`); continue }
         try {
           const q = await engine.quota(process.env)
           if (!q) { console.log(`${id}: no subscription login found on this host`); continue }
@@ -636,6 +639,8 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
       // service (launchd on macOS, a systemd user unit on Linux), so no terminal has to stay open.
       const config = loadConfig(dir)
       const bin = NodePath.join(dir, "node_modules", ".bin", "holdco")
+      const q = (s: string) => (/[\s"'$]/.test(s) ? `"${s.replace(/"/g, "\\\"")}"` : s) // systemd quoting
+      const x = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") // plist strings are XML
       const envFile = envFilePath(config.company.name)
       const logFile = NodePath.join(dir, ".holdco", "supervisor.log")
       const home = process.env["HOME"] ?? dir
@@ -643,7 +648,7 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
       const pidAlive = () => { const lock = NodePath.join(dir, ".holdco", "supervisor.pid"); const pid = existsSync(lock) ? Number(readFileSync(lock, "utf8")) : 0; return pid > 0 && spawnSync("kill", ["-0", String(pid)]).status === 0 ? pid : 0 }
       const dashboardUrl = `http://127.0.0.1:${process.env["HOLDCO_DASHBOARD_PORT"] ?? config.runtime.dashboard_port ?? 7117}/?t=${dashboardToken(dir)}`
       const status = () => { const pid = pidAlive(); console.log(`${config.company.name}: supervisor ${pid ? `running (pid ${pid})` : "not running"}\ndashboard: ${dashboardUrl}\nlog: ${logFile}`); return pid }
-      const waitUp = async () => { for (let i = 0; i < 20; i++) { if (pidAlive()) return true; await Bun.sleep(500) } return false }
+      const waitUp = async () => { for (let i = 0; i < 120; i++) { if (pidAlive()) return true; await Bun.sleep(500) } return false } // doctor (sandbox probes, logins, usage endpoints) runs before the pid is written
       const run = (cmd: string, args: Array<string>) => spawnSync(cmd, args, { stdio: "pipe", encoding: "utf8" })
       const action = sub ?? "show"
       if (action === "logs") { spawnSync("tail", ["-n", "100", "-f", logFile], { stdio: "inherit" }); return true }
@@ -652,7 +657,7 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
         const name = `holdco-${config.company.name}`
         const unit = [
           "[Unit]", `Description=Holdco company: ${config.company.name}`, "After=network-online.target", "",
-          "[Service]", `WorkingDirectory=${dir}`, `Environment=PATH=${path}`, `EnvironmentFile=-${envFile}`, `ExecStartPre=${bin} doctor`, `ExecStart=${bin} supervise`, "Restart=always", "RestartSec=10", "",
+          "[Service]", `WorkingDirectory=${dir}`, `Environment="PATH=${path}"`, `EnvironmentFile=-${envFile}`, `ExecStartPre=${q(bin)} doctor`, `ExecStart=${q(bin)} supervise`, "Restart=always", "RestartSec=10", "",
           "[Install]", "WantedBy=default.target", "",
         ].join("\n")
         const out = NodePath.join(home, ".config", "systemd", "user", `${name}.service`)
@@ -677,12 +682,12 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>Label</key><string>${label}</string>
-  <key>ProgramArguments</key><array><string>/bin/sh</string><string>-c</string><string>exec caffeinate -s ${bin} supervise</string></array>
-  <key>WorkingDirectory</key><string>${dir}</string>
-  <key>EnvironmentVariables</key><dict><key>PATH</key><string>${path}</string><key>HOME</key><string>${home}</string></dict>
+  <key>ProgramArguments</key><array><string>${x(bin)}</string><string>supervise</string></array>
+  <key>WorkingDirectory</key><string>${x(dir)}</string>
+  <key>EnvironmentVariables</key><dict><key>PATH</key><string>${x(path)}</string><key>HOME</key><string>${x(home)}</string><key>HOLDCO_CAFFEINATE</key><string>1</string></dict>
   <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>${logFile}</string>
-  <key>StandardErrorPath</key><string>${logFile}</string>
+  <key>StandardOutPath</key><string>${x(logFile)}</string>
+  <key>StandardErrorPath</key><string>${x(logFile)}</string>
 </dict></plist>
 `
         const out = NodePath.join(home, "Library", "LaunchAgents", `${label}.plist`)

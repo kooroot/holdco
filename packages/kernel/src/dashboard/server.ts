@@ -44,7 +44,9 @@ export const clientDir = (log: (line: string) => void = () => {}): string | unde
   const dist = NodePath.join(workspaceClient, "dist")
   if (existsSync(NodePath.join(workspaceClient, "vite.config.ts"))) {
     const built = existsSync(NodePath.join(dist, "index.html")) ? statSync(NodePath.join(dist, "index.html")).mtimeMs : 0
-    const stale = built < Math.max(newest(NodePath.join(workspaceClient, "src")), statSync(NodePath.join(workspaceClient, "index.html")).mtimeMs, statSync(NodePath.join(workspaceClient, "zyzz.config.ts")).mtimeMs)
+    const mtime = (p: string) => (existsSync(p) ? statSync(p).mtimeMs : 0)
+    // the bundle also carries the kernel's contract/schema (decoded in the browser) and vite's config: a change there is a stale client too
+    const stale = built < Math.max(newest(NodePath.join(workspaceClient, "src")), newest(import.meta.dir), mtime(NodePath.join(workspaceClient, "index.html")), mtime(NodePath.join(workspaceClient, "zyzz.config.ts")), mtime(NodePath.join(workspaceClient, "vite.config.ts")), mtime(NodePath.join(workspaceClient, "package.json")))
     if (stale && process.env["NODE_ENV"] !== "test") { // tests serve whatever is built; a vite build inside a test is a timeout, not a check
       log("building the dashboard client (packages/dashboard)…")
       const r = spawnSync("bun", ["x", "vite", "build", "--logLevel", "error"], { cwd: workspaceClient, stdio: ["ignore", "inherit", "inherit"] })

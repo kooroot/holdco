@@ -3,7 +3,7 @@ import { cx } from "zyzz"
 import { style, vars } from "../../zyzz.config.ts"
 import { ago, KIND_LABEL, left } from "../format.ts"
 import { useAct, useSnapshot } from "../hooks.ts"
-import { useOpenTicket } from "../nav.ts"
+import { useOpenTicket, useSearchState } from "../nav.ts"
 import { cn, Button, Card, Code, Empty, Head, Kv, Pill, VerdictPill, ui } from "../ui.tsx"
 import { t, useLang, tx } from "../i18n.ts"
 
@@ -24,25 +24,28 @@ export const Inbox = () => {
   const act = useAct()
   const open = useOpenTicket()
   const [sel, setSel] = useState(0)
+  const search = useSearchState()
   const [notes, setNotes] = useState<Record<number, string>>({})
   useLang()
   const S = q.data
   const items = [...(S?.inbox ?? [])].sort((a, b) => (a.urgency === b.urgency ? a.created_at - b.created_at : a.urgency === "urgent" ? -1 : 1))
+  const cur = Math.min(sel, Math.max(0, items.length - 1)) // the list shrinks as items are decided
   const decide = (id: number, decision: "approved" | "rejected") => {
     const item = items.find((i) => i.id === id)
     if (decision === "approved" && item && ["t3", "manual_action", "graduation"].includes(item.kind) && !confirm(t('Approve "{t}"? The kernel executes it on the next tick.', { t: String(item.payload["title"] ?? item.kind) }))) return
-    void act({ kind: "inbox", id, decision, ...(notes[id] ? { note: notes[id] } : {}) }, t(decision === "approved" ? "Approved" : "Rejected!"))
+    void act({ kind: "inbox", id, decision, ...(notes[id] ? { note: notes[id] } : {}) }, t(decision === "approved" ? "Approved" : "Rejected."))
   }
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.target as HTMLElement).matches("input, textarea, select") || !items.length) return
+      if (e.metaKey || e.ctrlKey || e.altKey || e.repeat) return // Cmd+R / Ctrl+A reach the page before the browser acts on them
+      if ((e.target as HTMLElement).matches("input, textarea, select") || !items.length || search.ticket || search.new) return
       if (e.key === "j" || e.key === "k") setSel((x) => Math.max(0, Math.min(items.length - 1, x + (e.key === "j" ? 1 : -1))))
-      if (e.key === "a" || e.key === "r") { const it = items[sel]; if (it) decide(it.id, e.key === "a" ? "approved" : "rejected") }
+      if (e.key === "a" || e.key === "r") { const it = items[cur]; if (it) decide(it.id, e.key === "a" ? "approved" : "rejected") }
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
   })
-  if (!S) return <Empty>Loading…</Empty>
+  if (!S) return <Empty>{t("Loading…")}</Empty>
   const urgent = items.filter((i) => i.urgency === "urgent").length
   return (
     <>
@@ -51,7 +54,7 @@ export const Inbox = () => {
         {!items.length ? <Empty title={t("Nothing waiting on you")}>{t("The company is working within its rules.")}</Empty> : items.map((i, idx) => {
           const tk = i.ticket; const p = i.proposal as { decision?: string; why_now?: string; expected_cost?: string; rollback_plan?: string; risk?: string; alternatives_rejected?: Array<string> } | null; const r = i.review as { decision?: string; reasoning?: string } | null; const v = i.verdict
           const exp = i.expires_at ? i.expires_at - S.now : null
-          const openIt = idx === sel
+          const openIt = idx === cur
           return (
             <div key={i.id} {...cx(st.item(), i.urgency === "urgent" && st.urgent(), openIt && st.sel())} onClick={(e) => { if ((e.target as HTMLElement).closest("button, a, input")) return; setSel(idx) }}>
               <div><div {...st.title()}>{tx(String(i.payload["title"] ?? t(KIND_LABEL[i.kind] ?? i.kind)))}</div><div {...st.meta()}><Pill tone={i.urgency === "urgent" ? "signal" : undefined}>{t(KIND_LABEL[i.kind] ?? i.kind)}</Pill><span>{t("{t} ago", { t: ago(S.now - i.created_at) })}</span>{exp !== null ? <span {...cn(ui.num(), exp < 6 * 3600000 && st.soon())}>{t("rejects itself in {t}", { t: left(exp) })}</span> : null}</div></div>

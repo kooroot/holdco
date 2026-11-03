@@ -25,33 +25,63 @@ export interface ExecResult {
   readonly applied?: boolean
 }
 
-const git = (cwd: string, args: ReadonlyArray<string>) => spawnSync("git", [...args], { cwd, encoding: "utf8" })
+/** Kernel git: its own identity and no signing, whatever ~/.gitconfig says (a signing key would hang on pinentry). */
+const GIT_ID = ["-c", "user.name=holdco", "-c", "user.email=holdco@localhost", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"]
+const git = (cwd: string, args: ReadonlyArray<string>) => spawnSync("git", [...GIT_ID, ...args], { cwd, encoding: "utf8", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } })
 const fail = (error: string): ExecResult => ({ ok: false, outputs: {}, undo: {}, error })
+
+/**
+ * Run `fn` in a kernel-owned detached worktree of `base`, so the Operator's own checkout is never touched: no
+ * `git checkout` under their feet, no refusal because they have uncommitted edits or `base` checked out elsewhere.
+ * A remote's `base` is fetched first so the merge lands on what origin has, not on a stale local branch.
+ */
+const onBase = (repo: string, base: string, fn: (wt: string) => ExecResult): ExecResult => {
+  const hasRemote = git(repo, ["remote", "get-url", "origin"]).status === 0
+  if (hasRemote) {
+    const f = git(repo, ["fetch", "--quiet", "origin", base])
+    if (f.status === 0) {
+      // fast-forward the local base to origin when it is behind (never rewrite local commits the Operator made)
+      const ahead = git(repo, ["rev-list", "--count", `origin/${base}..${base}`]).stdout.trim()
+      if (ahead === "0") git(repo, ["update-ref", `refs/heads/${base}`, `origin/${base}`])
+    }
+  }
+  const wt = NodePath.join(repo, ".claude", "worktrees", `kernel-${process.pid}-${Date.now()}`)
+  const add = git(repo, ["worktree", "add", "--detach", wt, base])
+  if (add.status !== 0) return fail(`cannot prepare a worktree of ${base}: ${add.stderr.trim()}`)
+  try {
+    return fn(wt)
+  } finally {
+    spawnSync("git", ["worktree", "remove", "--force", wt], { cwd: repo })
+    spawnSync("git", ["worktree", "prune"], { cwd: repo })
+  }
+}
 
 /** Merge `branch` into the repository's default branch with a merge commit; push when a remote exists. */
 export const mergeBranch = (repo: string, branch: string, message: string): ExecResult => {
   const base = defaultBranch(repo)
   const head = branchHead(repo, branch)
   if (head === undefined) return fail(`branch ${branch} does not exist`)
-  const dirty = git(repo, ["status", "--porcelain", "--untracked-files=no"]).stdout.trim()
-  if (dirty.length > 0) return fail(`${repo} has uncommitted changes; the Operator must clean it before merges can run`)
-  const current = git(repo, ["rev-parse", "--abbrev-ref", "HEAD"]).stdout.trim()
-  if (current !== base) {
-    const co = git(repo, ["checkout", base])
-    if (co.status !== 0) return fail(co.stderr)
-  }
-  const before = git(repo, ["rev-parse", "HEAD"]).stdout.trim()
-  const m = git(repo, ["merge", "--no-ff", "--no-edit", "-m", message, branch])
-  if (m.status !== 0) {
-    git(repo, ["merge", "--abort"])
-    return fail(`merge conflict: ${m.stdout}${m.stderr}`.trim())
-  }
-  const after = git(repo, ["rev-parse", "HEAD"]).stdout.trim()
-  let pushed = false
-  if (git(repo, ["remote", "get-url", "origin"]).status === 0) {
-    pushed = git(repo, ["push", "origin", base]).status === 0
-  }
-  return { ok: true, outputs: { repo, base, branch, before, after, pushed }, undo: { kind: "revert-merge", repo, base, merge: after } }
+  return onBase(repo, base, (wt) => {
+    const before = git(wt, ["rev-parse", "HEAD"]).stdout.trim()
+    const m = git(wt, ["merge", "--no-ff", "--no-edit", "-m", message, branch])
+    if (m.status !== 0) {
+      git(wt, ["merge", "--abort"])
+      return fail(`merge conflict: ${m.stdout}${m.stderr}`.trim())
+    }
+    const after = git(wt, ["rev-parse", "HEAD"]).stdout.trim()
+    // land it on the branch: a fast-forward of refs/heads/<base> (the Operator's checkout, if on base, sees it on their next status)
+    const land = git(repo, ["update-ref", `refs/heads/${base}`, after, before])
+    if (land.status !== 0) return fail(`could not update ${base}: ${land.stderr.trim()}`)
+    if (git(repo, ["rev-parse", "--abbrev-ref", "HEAD"]).stdout.trim() === base) spawnSync("git", ["-C", repo, "reset", "--quiet", "--merge", after], { encoding: "utf8" }) // keep the Operator's working tree in step
+    let pushed = false
+    let pushError = ""
+    if (git(repo, ["remote", "get-url", "origin"]).status === 0) {
+      const p = git(repo, ["push", "origin", `${base}:${base}`])
+      pushed = p.status === 0
+      if (!pushed) pushError = p.stderr.trim().split("\n").at(-1) ?? ""
+    }
+    return { ok: true, outputs: { repo, base, branch, before, after, pushed, ...(pushError ? { push_error: pushError } : {}) }, undo: { kind: "revert-merge", repo, base, merge: after } }
+  })
 }
 
 /** Undo a merge by reverting the merge commit (safe even if later commits exist). */
@@ -59,14 +89,20 @@ export const revertMerge = (undo: Record<string, unknown>): ExecResult => {
   const repo = String(undo["repo"])
   const base = String(undo["base"])
   const merge = String(undo["merge"])
-  if (git(repo, ["checkout", base]).status !== 0) return fail(`cannot check out ${base}`)
-  const r = git(repo, ["revert", "-m", "1", "--no-edit", merge])
-  if (r.status !== 0) {
-    git(repo, ["revert", "--abort"])
-    return fail(r.stderr)
-  }
-  if (git(repo, ["remote", "get-url", "origin"]).status === 0) git(repo, ["push", "origin", base])
-  return { ok: true, outputs: { reverted: merge, commit: git(repo, ["rev-parse", "HEAD"]).stdout.trim() }, undo: {} }
+  return onBase(repo, base, (wt) => {
+    const before = git(wt, ["rev-parse", "HEAD"]).stdout.trim()
+    const r = git(wt, ["revert", "-m", "1", "--no-edit", merge])
+    if (r.status !== 0) {
+      git(wt, ["revert", "--abort"])
+      return fail(r.stderr.trim())
+    }
+    const after = git(wt, ["rev-parse", "HEAD"]).stdout.trim()
+    const land = git(repo, ["update-ref", `refs/heads/${base}`, after, before])
+    if (land.status !== 0) return fail(`could not update ${base}: ${land.stderr.trim()}`)
+    if (git(repo, ["rev-parse", "--abbrev-ref", "HEAD"]).stdout.trim() === base) spawnSync("git", ["-C", repo, "reset", "--quiet", "--merge", after], { encoding: "utf8" })
+    if (git(repo, ["remote", "get-url", "origin"]).status === 0) git(repo, ["push", "origin", `${base}:${base}`])
+    return { ok: true, outputs: { reverted: merge, commit: after }, undo: {} }
+  })
 }
 
 // ── GitHub merges (D51) ──────────────────────────────────────────────────────

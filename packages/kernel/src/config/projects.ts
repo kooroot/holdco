@@ -29,7 +29,9 @@ export const parseVerify = (text: string): Array<string> | undefined => {
   const raw = text.trim()
   if (!raw) return undefined
   if (raw.startsWith("sh -c ") || raw.startsWith("bash -c ")) { const [sh, , ...rest] = raw.split(/\s+/) as [string, string, ...Array<string>]; return [sh, "-c", rest.join(" ").replace(/^(['"])(.*)\1$/s, "$2")] }
-  const joined = raw.replace(/\s*,\s*(?=[A-Za-z0-9_./])/g, " && ").replace(/\s*\n+\s*/g, " && ")
+  // A comma followed by a space between two words is "and then" (the first live run's `bun run check, bun scripts/ops/check.ts`);
+  // a comma inside an argument (`--features a,b`, `--reporter=dot,json`) is left alone.
+  const joined = raw.replace(/(?<=\S),\s+(?=[A-Za-z])/g, " && ").replace(/\s*\n+\s*/g, " && ")
   return /[&|;<>$'"`*?()]/.test(joined) ? ["sh", "-c", joined] : joined.split(/\s+/)
 }
 
@@ -57,7 +59,7 @@ export const addProject = (root: string, config: CompanyConfig, a: AddProject): 
   const abs = NodePath.resolve(root, a.path)
   if (!existsSync(NodePath.join(abs, ".git"))) throw new ProjectError(`${abs} is not a git repository`)
   const id = a.id ?? projectIdFor(abs)
-  if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) throw new ProjectError(`project id '${id}': lowercase letters, digits and dashes`)
+  if (!/^[a-z][a-z0-9-]{0,31}$/.test(id)) throw new ProjectError(`project id '${id}': a lowercase letter, then letters, digits and dashes, at most 32 (pass --id)`)
   if (config.projects.some((p) => p.id === id)) throw new ProjectError(`project '${id}' is already registered (holdco project set ${id} … to change it)`)
   const rel = NodePath.relative(root, abs)
   if (config.projects.some((p) => NodePath.resolve(root, p.path) === abs)) throw new ProjectError(`${abs} is already registered as '${config.projects.find((p) => NodePath.resolve(root, p.path) === abs)?.id}'`)

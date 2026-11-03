@@ -25,7 +25,7 @@ A brief is a contract. A junior should be able to complete the task using only t
 | `done_criteria` | yes | Checkable conditions. Each must be verifiable by a test, a command, a schema, or an explicit observable fact. Kernel: at least one, each ≥ 10 code points, none of the vague words |
 | `stop_conditions` | yes | Situations in which the junior stops and returns instead of continuing (may be empty array) |
 | `budget` | yes | `{max_turns ≥ 1, max_spend_usd > 0}`; `delegate_start` also caps `max_turns` at `policy.delegation.max_iterations × 40` |
-| `worktree` | no — leave unset | The kernel creates the junior's worktree `t-<ticket>-<brief_id>` on branch `t/<ticket>-<brief_id>` for a `junior_worker` and none for a `junior_reader`; naming one yourself is ignored |
+| `worktree` | no — leave unset | The kernel creates the junior's worktree `t-<brief_id>` on branch `t/<brief_id>` (a brief id is `<ticket>-b<n>`, so `t/ENG-1-b2`) for a `junior_worker` and none for a `junior_reader`; naming one yourself is ignored |
 | `restate_first` | no | `true` if the junior must return a restatement first and stop (delegation §5) |
 | `approach_hint` | for `compete` | The angle this junior should take, different per competitor |
 

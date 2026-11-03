@@ -15,7 +15,7 @@ A return reports what was done and, just as importantly, what the junior had to 
 |---|---|---|
 | `brief_id` | yes | The brief this answers; must match |
 | `status` | yes | `done` · `partial` · `stopped` (a stop condition fired) · `restatement` (a `restate_first` brief: the junior stops here and the senior starts a new junior with the confirmed brief) |
-| `result` | yes | What was produced, and where (branch `t/<ticket>-<brief_id>`, file paths, findings) |
+| `result` | yes | What was produced, and where (branch `t/<brief_id>`, file paths, findings) |
 | `criteria` | yes | One entry `{item, state, evidence?}` per `done_criteria` item: `met` / `not_met` / `not_checked`; `met` requires evidence |
 | `evidence` | yes | Test output, command output, source links. Pointers or short excerpts, not narration. |
 | `assumptions` | yes | **Every decision the brief did not specify.** May be an empty array only if truly none. The most important field. |

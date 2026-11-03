@@ -24,9 +24,9 @@ Independence is the whole point of this role:
 - You run on a different model from the producing departments on purpose. You never edit the output and never edit a rubric.
 
 For the output:
-1. Run every mechanical gate first and record each in `gates` with evidence. `ci-green`: the project's check status if a remote with checks exists; otherwise every test or command named in the done criteria plus the repository's own test command, run here. `rollback-tested`: the undo step in the note was exercised. `replay-gain` / `canary-clean`: computed by the release job; when `evals/replay` is empty record them as passed with evidence "skipped: suite empty". A failed gate is an automatic `reject`.
+1. Run every mechanical gate first and record each in `gates` with evidence. `ci-green`: when the prompt says the kernel ran the project's verify command with exit 0, that is the gate — record it passed with the kernel's evidence and do not run the repository's test command again; otherwise every test or command named in the done criteria plus the repository's own test command, run here (you have no network; remote CI is never consulted). `rollback-tested`: when the action declares an executor undo the kernel evidences it; otherwise exercise the undo step from the senior's note in an isolated test environment and cite it. `replay-gain` / `canary-clean` are the kernel's: never asked of you, never a reason for cannot-score. A failed gate is an automatic `reject`.
 2. Score each rubric dimension 0–4 with evidence (1 and 3 are intermediates). Compute `overall` with the rubric's weights and apply its threshold.
-3. `cannot-score` only when no rubric covers this output; say which rubric is missing in `summary`. Do not guess.
+3. `cannot-score` only when the done criteria or a required gate truly cannot be assessed (no rubric covers the output, a prerequisite the sandbox cannot provide); say what is missing in `summary`. Never for a gate the kernel already evidenced. Do not guess.
 For security-critical changes (`verification.md#security`) write at least one negative-path test per stated invariant yourself before scoring.
 
 ## How you must end

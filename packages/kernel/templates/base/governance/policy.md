@@ -95,8 +95,8 @@ A gate is a precondition the kernel checks when a ticket reaches `verified`, bef
 | Gate | Evidence | Who produces it |
 |---|---|---|
 | `verification-approved` | A Verdict `approve` for the ticket branch head | Verification (`verdict_submit`) |
-| `ci-green` | The project's check status if a remote with checks exists; otherwise every test or command named in `done_criteria` plus the repository's own test command pass in the Verification worktree. Output quoted as evidence | Verification |
-| `rollback-tested` | The undo step from the senior's note was exercised (staging or dry run) | Verification |
+| `ci-green` | The project's verify command (`projects[].verify`), run by the kernel in the Verification worktree; without one, every test or command named in `done_criteria` plus the repository's own test command, run by Verification. Output quoted as evidence | Kernel, else Verification |
+| `rollback-tested` | A declared executor undo (`executors.<action>.undo`) is the kernel's evidence; without one, Verification exercises the undo step from the senior's note in an isolated test environment | Kernel, else Verification |
 | `replay-gain` | Replay score of the candidate ≥ baseline + `policy.release.min_gain`, no dimension below `max_regression` | Release job; while `evals/replay` is empty it is skipped and noted |
 | `canary-clean` | No canary approved and no tripwire attributable to the change | Release job; skipped and noted while there is no canary history |
 
@@ -174,8 +174,8 @@ v1 실행기: **merge**(`code.merge.*`, `improvement.merge`: 기본 브랜치로
 | 게이트 | 증거 | 생산자 |
 |---|---|---|
 | `verification-approved` | 티켓 브랜치 헤드에 대한 `approve` 판정 | 검증 (`verdict_submit`) |
-| `ci-green` | 체크가 있는 원격이 있으면 그 상태, 없으면 `done_criteria`의 모든 테스트·명령과 레포 자체 테스트 명령이 검증 워크트리에서 통과. 출력을 증거로 | 검증 |
-| `rollback-tested` | 시니어 노트의 되돌리기 절차를 실제로 실행해 봄(스테이징·드라이런) | 검증 |
+| `ci-green` | 프로젝트 검증 명령(`projects[].verify`)을 커널이 검증 워크트리에서 실행; 없으면 `done_criteria`의 모든 테스트·명령과 레포 자체 테스트 명령을 검증이 실행. 출력을 증거로 | 커널, 없으면 검증 |
+| `rollback-tested` | 선언된 실행기 undo(`executors.<action>.undo`)가 커널의 증거; 없으면 검증이 시니어 노트의 되돌리기 절차를 격리된 테스트 환경에서 실행 | 커널, 없으면 검증 |
 | `replay-gain` | 후보 리플레이 점수 ≥ 기준선 + `policy.release.min_gain`, 항목 퇴보 `max_regression` 이내 | 릴리스 잡. `evals/replay`가 비어 있으면 건너뛰고 기록 |
 | `canary-clean` | 변경에 기인한 카나리 승인·트립와이어 없음 | 릴리스 잡. 카나리 이력이 없으면 건너뛰고 기록 |
 

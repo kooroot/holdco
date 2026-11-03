@@ -65,17 +65,22 @@ export const provisionDependencies = (worktree: string, repo: string, log: (line
     const nested = existsSync(NodePath.join(repo, "node_modules")) ? linkNestedModules(repo, worktree) : 0
     return nested ? `node_modules is shared from ${repo} (symlink, plus ${nested} workspace node_modules); do not run the package installer here` : undefined
   }
+  const yarnBerry = existsSync(NodePath.join(worktree, "yarn.lock")) && !/yarn lockfile v1/.test(readFileSync(NodePath.join(worktree, "yarn.lock"), "utf8").slice(0, 200))
   const installers: ReadonlyArray<[lock: string, cmd: Array<string>]> = [
     ["bun.lock", ["bun", "install", "--frozen-lockfile"]],
     ["bun.lockb", ["bun", "install", "--frozen-lockfile"]],
     ["pnpm-lock.yaml", ["pnpm", "install", "--frozen-lockfile"]],
-    ["yarn.lock", ["yarn", "install", "--immutable"]],
+    ["yarn.lock", yarnBerry ? ["yarn", "install", "--immutable"] : ["yarn", "install", "--frozen-lockfile"]],
     ["package-lock.json", ["npm", "ci"]],
   ]
   const lock = installers.find(([l]) => existsSync(NodePath.join(worktree, l)))
   if (lock === undefined) return undefined
   const shared = NodePath.join(repo, "node_modules")
-  if (existsSync(shared)) {
+  // A workspace's node_modules/@scope/pkg is a relative link that, followed through a shared root link, lands in the
+  // MAIN checkout's packages — tests would run against unmodified shared code. The same when the branch changed what is
+  // installed. Both cases install in the worktree (offline from the package manager's cache when possible).
+  const workspaces = isWorkspaceRepo(worktree) || dependenciesChanged(repo, worktree)
+  if (existsSync(shared) && !workspaces) {
     try {
       symlinkSync(shared, NodePath.join(worktree, "node_modules"), "dir")
       excludeFromGit(repo, "node_modules")
@@ -88,12 +93,25 @@ export const provisionDependencies = (worktree: string, repo: string, log: (line
     }
   }
   const [cmd, ...args] = lock[1] as [string, ...Array<string>]
-  const r = spawnSync(cmd, args, { cwd: worktree, encoding: "utf8", timeout: 10 * 60_000, env: { PATH: process.env["PATH"] ?? "", HOME: process.env["HOME"] ?? "" } })
+  const r = spawnSync(cmd, args, { cwd: worktree, encoding: "utf8", timeout: 10 * 60_000, env: { PATH: process.env["PATH"] ?? "", HOME: process.env["HOME"] ?? "", ...(process.env["HTTPS_PROXY"] ? { HTTPS_PROXY: process.env["HTTPS_PROXY"] as string } : {}), ...(process.env["NPM_CONFIG_REGISTRY"] ? { NPM_CONFIG_REGISTRY: process.env["NPM_CONFIG_REGISTRY"] as string } : {}) } })
   if (r.status !== 0) {
     log(`${cmd} ${args.join(" ")} in ${worktree} failed: ${(r.stderr || r.stdout).trim().split("\n").at(-1) ?? ""}`)
     return `dependency install (${cmd} ${args.join(" ")}) failed before the session; checks that need node_modules cannot run`
   }
   return `dependencies installed with ${cmd} ${args.join(" ")}`
+}
+
+const isWorkspaceRepo = (dir: string): boolean => {
+  if (existsSync(NodePath.join(dir, "pnpm-workspace.yaml"))) return true
+  try { return (JSON.parse(readFileSync(NodePath.join(dir, "package.json"), "utf8")) as { workspaces?: unknown }).workspaces !== undefined } catch { return false }
+}
+/** Did the branch checked out in the worktree change what is installed (lockfile or package manifests) versus the main checkout's HEAD? */
+const dependenciesChanged = (repo: string, worktree: string): boolean => {
+  const head = spawnSync("git", ["rev-parse", "HEAD"], { cwd: worktree, encoding: "utf8" }).stdout.trim()
+  const main = spawnSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).stdout.trim()
+  if (!head || !main || head === main) return false
+  const r = spawnSync("git", ["diff", "--name-only", `${main}...${head}`, "--", "package.json", "bun.lock", "bun.lockb", "pnpm-lock.yaml", "yarn.lock", "package-lock.json", "**/package.json"], { cwd: repo, encoding: "utf8" })
+  return r.status === 0 && r.stdout.trim().length > 0
 }
 
 /** Every `node_modules` below the main checkout (not inside another one, depth ≤ 4) linked at the same path in the worktree. */
@@ -140,6 +158,15 @@ export const removeWorktree = (repo: string, name: string) => {
   const r = spawnSync("git", ["worktree", "remove", "--force", dir], { cwd: repo })
   if (r.status !== 0) rmSync(dir, { recursive: true, force: true })
   spawnSync("git", ["worktree", "prune"], { cwd: repo })
+}
+
+/** The ticket's own worktree and every junior's (`t-<id>-<brief>`), plus an Improvement worktree of the same id. */
+export const removeTicketWorktrees = (repo: string, ticketId: string) => {
+  for (const dir of listWorktrees(repo)) {
+    const name = NodePath.basename(dir)
+    if (name === `t-${ticketId}` || name.startsWith(`t-${ticketId}-`) || name === `imp-${ticketId}`) removeWorktree(repo, name)
+  }
+  removeWorktree(repo, `t-${ticketId}`) // when the list is unavailable
 }
 
 export const listWorktrees = (repo: string): Array<string> => {

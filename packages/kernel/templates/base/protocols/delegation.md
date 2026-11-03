@@ -44,7 +44,7 @@ Each spawn decision is recorded in the SessionReport (`team`: pattern and junior
 ### 3. Isolation
 
 - A junior is a **separate kernel session**, started by `delegate_start`, possibly on a different engine or model from the senior (`company.yaml:modules.juniors`). It is never a native subagent of the senior's engine: it has its own instructions, its own sandbox, and no company tools.
-- Every `junior_worker` works in its own **git worktree** `t-<ticket>-<brief_id>` on branch `t/<ticket>-<brief_id>`, created by the kernel. Juniors never share a working directory, never push, never open pull requests, never merge.
+- Every `junior_worker` works in its own **git worktree** `t-<brief_id>` on branch `t/<brief_id>` (a brief id is `<ticket>-b<n>`, so `t/ENG-1-b2`), created by the kernel. Juniors never share a working directory, never push, never open pull requests, never merge.
 - The senior merges junior branches into the ticket branch `t/<id>`. Conflicts are the senior's job, never a junior's.
 - `junior_reader` juniors need no worktree; their findings travel only in the return.
 - Juniors never receive production secrets or credentials: no session does (`AGENTS.md` §Secrets, D14).
