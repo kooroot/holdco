@@ -90,6 +90,23 @@ describe("telegram bridge", () => {
     expect(store.inboxItem(2)?.status).toBe("open")
     expect(sent().length).toBe(before)
   })
+  test("/audit (D74): the sample as blind cards; a button grades it, reveals the judge, and the last grade closes the week", async () => {
+    const b = bridge()
+    const before = sent().length
+    expect(await b.command("/audit")).toContain("1 to grade")
+    const card = sent().slice(before).find((m) => m.text.includes("🧾"))!
+    expect(card.text).toContain("<code>ENG-1</code>")
+    expect(card.text).toContain("Done criteria")
+    expect(card.text).not.toContain("approve") // blind: no verdict on the card
+    expect(card.reply_markup.inline_keyboard[0].map((k: any) => k.callback_data)).toEqual(["g:ENG-1:approve", "g:ENG-1:reject"])
+    queue = [{ update_id: 9, callback_query: { id: "cq9", from: { id: 4242 }, message: { message_id: 9, chat: { id: 4242 }, text: card.text }, data: "g:ENG-1:reject" } }]
+    await b.pollOnce()
+    expect(calls.filter((c) => c.method === "answerCallbackQuery").at(-1)?.body.text).toContain("judge: approve — disagree")
+    expect(store.labeledTicketIds().has("ENG-1")).toBe(true)
+    expect(sent().at(-1)?.text).toContain("Weekly audit complete")
+    expect(store.lastAuditAt()).not.toBeNull()
+    expect(await b.command("/audit")).toContain("Nothing to grade")
+  })
   test("/quota (D72): the plans' windows as meters, with the kernel's verdict; before any reading it says so", async () => {
     const b = bridge()
     expect(await b.command("/quota")).toContain("no reading yet")

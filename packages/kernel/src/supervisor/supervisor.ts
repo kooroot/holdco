@@ -921,7 +921,7 @@ export class Supervisor {
       raiseInterrupt(this.root, "L3", "*", `${missed} weekly audit(s) missed`, now)
       void this.notifier.send("critical", `audit-watch: ${missed} audit(s) missed; graduation and improvement frozen (L3). Run holdco audit, then holdco resume L3 '*'`)
     } else if (missed >= 1) {
-      void this.notifier.send("warning", `weekly audit is due (last ${new Date(last).toISOString().slice(0, 10)}): holdco audit`)
+      void this.notifier.send("warning", `weekly audit is due (last ${new Date(last).toISOString().slice(0, 10)}): send /audit here to grade from your phone, or open the dashboard's Audit page`)
     }
   }
 

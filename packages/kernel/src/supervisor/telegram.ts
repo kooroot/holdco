@@ -6,7 +6,7 @@
  * perform (`act`), so the kernel's rules apply unchanged.
  */
 import type { CompanyConfig } from "../config/company.ts"
-import { act, ActionError, type DashboardContext } from "../dashboard/api.ts"
+import { act, ActionError, auditSample, type DashboardContext, ticketFiles } from "../dashboard/api.ts"
 import { readControl } from "./control.ts"
 import { quotaPolicy, quotaVerdict, readQuota, fmtReset } from "./quota.ts"
 
@@ -146,6 +146,30 @@ export class TelegramBridge {
     return lines.join("\n")
   }
 
+  /** D74: the weekly audit from the phone — each sampled ticket as a blind card with grade buttons. */
+  async audit(): Promise<string> {
+    const L = this.L()
+    const sample = auditSample(this.o.ctx)
+    if (sample.length === 0) return L("Nothing to grade: the sample is empty or already graded this week.", "채점할 게 없습니다. 샘플이 비었거나 이번 주 채점이 끝났습니다.")
+    for (const t of sample) await this.send(this.auditCard(t), { reply_markup: { inline_keyboard: [[{ text: L("👍 Pass", "👍 통과"), callback_data: `g:${t.id}:approve` }, { text: L("👎 Fail", "👎 반려"), callback_data: `g:${t.id}:reject` }]] } })
+    return L(`${sample.length} to grade. Judge first, then see the judge's verdict. The dashboard's Audit page shows the full diff.`, `${sample.length}건 채점. 먼저 판단하면 심판 판정이 보입니다. 전체 diff는 대시보드 감사 화면에.`)
+  }
+
+  /** What the Operator needs for a blind grade: the ask, the senior's note, what changed. The verdict is withheld. */
+  private auditCard(t: { id: string; title: string; department: string; action: string | null; goal: string; done_criteria: ReadonlyArray<string>; note: string | null }): string {
+    const L = this.L()
+    const { files } = ticketFiles(this.o.ctx, t.id)
+    const senior = [...this.o.ctx.store.events(t.id)].reverse().find((e) => e.to_state === "ready_for_verification" && e.note)?.note ?? t.note ?? ""
+    return [
+      `🧾 <b>${L("Audit", "감사")}</b> <code>${esc(t.id)}</code> — ${esc(t.title)}`,
+      `${esc(t.department)}${t.action ? ` · <code>${esc(t.action)}</code>` : ""}`,
+      `<b>${L("Goal", "목표")}:</b> ${esc(t.goal.slice(0, 400))}`,
+      `<b>${L("Done criteria", "완료 조건")}:</b>\n${t.done_criteria.slice(0, 6).map((c) => `• ${esc(c.slice(0, 160))}`).join("\n")}`,
+      senior ? `<b>${L("Senior's note", "시니어의 말")}:</b> ${esc(senior.slice(0, 500))}` : "",
+      files.length ? `<b>${L("Changed", "변경")}:</b> ${files.slice(0, 8).map((f) => `${f.status} ${esc(f.path)}`).join(", ")}${files.length > 8 ? ` +${files.length - 8}` : ""}` : "",
+    ].filter(Boolean).join("\n")
+  }
+
   private monthStart(config: CompanyConfig): number {
     const now = this.o.ctx.now()
     const parts = new Intl.DateTimeFormat("en-US", { timeZone: config.company.timezone, year: "numeric", month: "numeric" }).formatToParts(new Date(now))
@@ -181,6 +205,7 @@ export class TelegramBridge {
           "/new [부서:] &lt;제목&gt; — 티켓 열기 (기본: 첫 부서)",
           "/pause &lt;부서|*&gt; &lt;사유&gt; · /resume &lt;부서|*&gt;",
           "/halt &lt;사유&gt; — 전부 정지 (L5) · /resume * — 해제",
+          "/audit — 주간 감사: 샘플을 카드로 받고 버튼으로 채점 (심판 판정은 채점 뒤에 공개)",
           "/quota — Claude·Codex 구독 한도(%)와 지금 회사가 그걸로 뭘 하는지",
           "/lang en|ko — 메시지 언어",
         ] : [
@@ -194,6 +219,7 @@ export class TelegramBridge {
           "/new [department:] &lt;title&gt; — open a ticket (default: the first department)",
           "/pause &lt;department|*&gt; &lt;reason&gt; · /resume &lt;department|*&gt;",
           "/halt &lt;reason&gt; — stop everything (L5) · /resume * — lift it",
+          "/audit — weekly audit: the sample as cards, graded with buttons (the judge's verdict is revealed after yours)",
           "/quota — Claude/Codex plan limits (%) and what the company does about them now",
           "/lang en|ko — message language",
         ]).join("\n")
@@ -208,6 +234,8 @@ export class TelegramBridge {
       case "/quota":
       case "/limits":
         return this.quota()
+      case "/audit":
+        return this.audit()
       case "/inbox": {
         const items = store.inboxOpen()
         if (items.length === 0) return L("Inbox is empty.", "인박스가 비었습니다.")
@@ -297,6 +325,17 @@ export class TelegramBridge {
           result = L("🛑 Halted (L5). /resume * lifts it.", "🛑 정지됨 (L5). /resume * 로 해제.")
         } catch (e) {
           result = `⚠️ ${String(e)}`
+        }
+      } else if (/^g:[A-Z]+-\d+:(approve|reject)$/.test(data)) {
+        // D74: a blind grade from the audit card; the judge's verdict is revealed only now
+        const [, id, verdict] = data.split(":") as [string, string, "approve" | "reject"]
+        try {
+          const r = await act(this.o.ctx, { kind: "grade", id, verdict })
+          result = `${r["agreement"] ? "🟢" : "🟠"} ${L(`you: ${verdict} · judge: ${String(r["judge"])} — ${r["agreement"] ? "agree" : "disagree"}`, `당신: ${verdict === "approve" ? "통과" : "반려"} · 심판: ${String(r["judge"])} — ${r["agreement"] ? "일치" : "불일치"}`)}`
+          const left = auditSample(this.o.ctx)
+          if (left.length === 0) { await act(this.o.ctx, { kind: "audit_done" }); await this.send(L("🧾 Weekly audit complete. Graduation and improvement stay unfrozen.", "🧾 이번 주 감사 완료. 승격·개선이 계속 돌아갑니다.")) }
+        } catch (e) {
+          result = `⚠️ ${e instanceof ActionError ? e.message : String(e)}`
         }
       } else {
         const m = /^(a|r):(\d+)$/.exec(data)
