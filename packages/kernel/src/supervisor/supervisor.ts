@@ -1245,7 +1245,7 @@ export class Supervisor {
           removeWorktree(repo, `v-${t.id}`) // the next attempt gets a fresh checkout of the branch head
           return
         }
-        this.launchJudge(t, sessionId, cap, cwd, repo, base, paths, rubricRef, deps, gates, project, `The kernel ran the project's verify command \`${renderVerify(argv)}\` in this worktree: exit 0. Count it as the ci-green gate with this evidence; do not re-run it unless a changed file could not have been covered.\nOutput tail:\n${tail || "(none)"}`)
+        this.launchJudge(t, sessionId, cap, cwd, repo, base, paths, rubricRef, deps, gates, project, `## ci-green: PASSED by the kernel\nThe kernel ran the project's verify command \`${renderVerify(argv)}\` in this worktree: exit 0. Record the ci-green gate as passed with this evidence. Do not run the repository's test command or any other command for ci-green, and never return cannot-score for ci-green: the gate is already executed. Run only commands that a changed file requires and the verify command could not have covered.\nOutput tail:\n${tail || "(none)"}`)
       })
       return
     }

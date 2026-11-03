@@ -80,7 +80,8 @@ export const toClaudeOptions = (
         denyWrite: [...spec.sandbox.denyWrite],
         denyRead: [...spec.sandbox.denyRead],
       },
-      network: { allowedDomains: [...spec.sandbox.allowedDomains] },
+      // Loopback listeners stay allowed: test suites start local servers (Bun.serve on port 0); outbound network is still the allowlist.
+      network: { allowedDomains: [...spec.sandbox.allowedDomains], allowLocalBinding: true },
     },
     // Policy tier, restrictive-only: project files cannot loosen it. `//` prefixes an absolute path.
     managedSettings: {

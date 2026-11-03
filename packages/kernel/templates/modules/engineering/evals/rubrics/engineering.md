@@ -9,7 +9,7 @@ Scores 0–4 per dimension (1 and 3 are intermediates). **Mechanical gates** mus
 
 | Gate (mechanical) | Check |
 |---|---|
-| `ci-green` | If the project has a remote with checks: all required checks green on the branch head. Otherwise: every test or command named in `done_criteria` plus the repository's own test command pass in the Verification worktree; quote the output as evidence |
+| `ci-green` | When the prompt says the kernel ran the project's verify command with exit 0, that is this gate: record it passed with the kernel's evidence and do not run the repository's test command again. Otherwise: every test or command named in `done_criteria` plus the repository's own test command pass in the Verification worktree; quote the output as evidence |
 | Done criteria | Every `done_criteria` item that names a test or command passes when run by Verification |
 | Replay | No regression on the engineering replay suite; **skipped and noted while the suite is empty** |
 | Scope | `git diff --stat <default branch>...HEAD` touches only paths implied by `done_criteria` and the senior's note |
@@ -37,5 +37,5 @@ Approve if overall ≥ 3.0.
 
 ## 한국어 요약
 
-- **#app**: 기계적 게이트(`ci-green`: 체크가 있는 원격이면 그 상태, 없으면 완료 기준의 명령과 레포 테스트 명령을 검증 워크트리에서 실행. 완료 기준 명령 실행. 리플레이 무회귀는 세트가 비어 있으면 건너뛰고 기록. diff가 완료 기준과 시니어 노트가 암시하는 경로 안) 통과 후 정확성(0.40), 테스트(0.25), 범위 준수(0.15), 가정 공개(0.10), 롤백 노트(0.10)로 채점
+- **#app**: 기계적 게이트(`ci-green`: 프롬프트에 커널이 프로젝트 검증 명령을 exit 0으로 돌렸다고 적혀 있으면 그게 이 게이트 — 통과로 기록하고 레포 테스트 명령을 다시 돌리지 않음; 아니면 완료 기준의 명령과 레포 테스트 명령을 검증 워크트리에서 실행. 완료 기준 명령 실행. 리플레이 무회귀는 세트가 비어 있으면 건너뛰고 기록. diff가 완료 기준과 시니어 노트가 암시하는 경로 안) 통과 후 정확성(0.40), 테스트(0.25), 범위 준수(0.15), 가정 공개(0.10), 롤백 노트(0.10)로 채점
 - **#docs**: 정확성(0.5, 모든 명령과 경로가 실제로 동작), 대상 독자 기준 완결성(0.3), 범위(0.2, 문서만 변경)
