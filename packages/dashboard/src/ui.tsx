@@ -1,5 +1,5 @@
 /** Primitives: the few shapes every view is built from, styled once with the tokens in zyzz.config.ts. */
-import type { ButtonHTMLAttributes, ReactNode } from "react"
+import { useState, type ButtonHTMLAttributes, type ReactNode } from "react"
 import { cx } from "zyzz"
 import { style, vars } from "../zyzz.config.ts"
 
@@ -30,6 +30,19 @@ const s = {
   meterFill: style({ display: "block", height: "100% !custom", backgroundColor: "kernel", borderRadius: "sm", transition: "width .3s" }),
   meterWarn: style({ backgroundColor: "warn" }),
   meterBad: style({ backgroundColor: "bad" }),
+  // Tip: an instant, styled hover bubble (the browser's title tooltip is slow and unstyled); Bars: a small column chart with hover values.
+  tipWrap: style({ position: "relative", display: "inline-block", maxWidth: "100% !custom" }),
+  tipBox: style({ position: "absolute", bottom: "calc(100% + 6px) !custom", left: "50% !custom", transform: "translateX(-50%)", backgroundColor: "ink", color: "bg", padding: "4px 8px !custom", borderRadius: "md", fontSize: "12px !custom", lineHeight: 1.35, whiteSpace: "nowrap", pointerEvents: "none", zIndex: 40, boxShadow: "0 4px 14px rgba(0,0,0,.18)", fontFamily: "ui", fontWeight: 400 }),
+  tipArrow: style({ position: "absolute", top: "100% !custom", left: "50% !custom", transform: "translateX(-50%)", borderWidth: "5px !custom", borderStyle: "solid", borderLeftColor: "transparent !custom", borderRightColor: "transparent !custom", borderBottomColor: "transparent !custom", borderTopColor: "ink" }),
+  bars: style({ display: "flex", alignItems: "flex-end", gap: "4px !custom", height: "96px !custom", marginTop: "22px !custom", borderBottom: line, paddingBottom: "0 !custom", position: "relative" }),
+  barCol: style({ flex: 1, position: "relative", height: "100% !custom", display: "flex", alignItems: "flex-end", minWidth: "6px !custom", cursor: "default" }),
+  bar: style({ width: "100% !custom", backgroundColor: "kernelSoft", borderRadius: "3px 3px 0 0 !custom", transition: "background-color .15s, opacity .15s" }),
+  barHot: style({ backgroundColor: "kernel" }),
+  barDim: style({ opacity: 0.55 }),
+  barLbl: style({ position: "absolute", top: "100% !custom", left: "0 !custom", right: "0 !custom", textAlign: "center", fontSize: "9.5px !custom", color: "muted", marginTop: "4px !custom", fontFamily: "mono" }),
+  barLblHot: style({ color: "ink", fontWeight: 600 }),
+  barVal: style({ position: "absolute", bottom: "100% !custom", left: "50% !custom", transform: "translateX(-50%)", marginBottom: "4px !custom", fontSize: "11px !custom", fontFamily: "mono", color: "ink", whiteSpace: "nowrap", backgroundColor: "surface", padding: "1px 5px !custom", borderRadius: "sm", border: line, zIndex: 2 }),
+  barBase: style({ position: "absolute", left: "0 !custom", right: "0 !custom", top: "0 !custom", borderTop: `1px dashed ${vars.color.lineStrong} !custom` }),
   tab: style({ background: "none", border: "none", padding: "8px 12px !custom", color: "muted", borderBottom: "2px solid transparent", marginBottom: "-1px !custom", cursor: "pointer", fontFamily: "ui", fontSize: "md" }),
   tabActive: style({ color: "ink", borderBottomColor: "kernel", fontWeight: 500 }),
 }
@@ -95,9 +108,47 @@ export const VerdictPill = ({ verdict }: { verdict: string }) => <Pill tone={ver
 export const Card = ({ pad, children, className, style: st }: { pad?: boolean; children: ReactNode; className?: string; style?: React.CSSProperties }) => (
   <div className={join(cx(s.card(), pad && s.pad()).className, className)} style={st}>{children}</div>
 )
-export const Meter = ({ ratio }: { ratio: number }) => (
-  <div {...ui.meter()}><i {...cx(s.meterFill(), ratio > 0.9 && s.meterBad(), ratio > 0.7 && ratio <= 0.9 && s.meterWarn())} style={{ width: `${Math.min(100, Math.max(0, ratio * 100))}%` }} /></div>
-)
+export const Meter = ({ ratio, tip }: { ratio: number; tip?: string }) => {
+  const bar = <div {...ui.meter()}><i {...cx(s.meterFill(), ratio > 0.9 && s.meterBad(), ratio > 0.7 && ratio <= 0.9 && s.meterWarn())} style={{ width: `${Math.min(100, Math.max(0, ratio * 100))}%` }} /></div>
+  return tip ? <Tip text={tip} block>{bar}</Tip> : bar
+}
+
+/** An instant hover bubble. `block` makes the wrapper fill its line (for meters and rows). */
+export const Tip = ({ text, children, block }: { text: ReactNode; children: ReactNode; block?: boolean }) => {
+  const [on, setOn] = useState(false)
+  return (
+    <span {...s.tipWrap()} style={block ? { display: "block" } : undefined} onMouseEnter={() => setOn(true)} onMouseLeave={() => setOn(false)} onFocus={() => setOn(true)} onBlur={() => setOn(false)}>
+      {children}
+      {on && text ? <span {...s.tipBox()} role="tooltip">{text}<i {...s.tipArrow()} /></span> : null}
+    </span>
+  )
+}
+
+/** A small column chart: hovering a column shows its value; the tallest column's value is always shown; a dashed line marks the average. */
+export const Bars = ({ data, format, empty }: { data: ReadonlyArray<{ label: string; value: number; tip?: string }>; format: (v: number) => string; empty?: string }) => {
+  const [hot, setHot] = useState<number | null>(null)
+  const max = Math.max(0.000001, ...data.map((d) => d.value))
+  const sum = data.reduce((a, d) => a + d.value, 0)
+  const avg = data.length ? sum / data.length : 0
+  const peak = data.findIndex((d) => d.value === max && d.value > 0)
+  if (!data.length) return <div {...cn(ui.small(), ui.muted())}>{empty ?? "—"}</div>
+  return (
+    <div {...s.bars()} onMouseLeave={() => setHot(null)}>
+      {avg > 0 ? <div {...s.barBase()} style={{ top: `${100 - (avg / max) * 100}%` }} /> : null}
+      {data.map((d, i) => {
+        const isHot = hot === i
+        const showVal = isHot || (hot === null && i === peak)
+        return (
+          <div key={i} {...s.barCol()} onMouseEnter={() => setHot(i)}>
+            <div {...cx(s.bar(), isHot && s.barHot(), hot !== null && !isHot && s.barDim())} style={{ height: `${Math.max(2, (d.value / max) * 100)}%` }} />
+            {showVal ? <span {...s.barVal()}>{d.tip ?? format(d.value)}</span> : null}
+            <span {...cx(s.barLbl(), isHot && s.barLblHot())}>{d.label}</span>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
 export const Empty = ({ title, children }: { title?: string; children?: ReactNode }) => (
   <div {...ui.empty()}>{title ? <strong {...ui.emptyTitle()}>{title}</strong> : null}{children}</div>
 )

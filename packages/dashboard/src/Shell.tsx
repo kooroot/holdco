@@ -3,7 +3,7 @@ import { useEffect, type ReactNode } from "react"
 import { cx } from "zyzz"
 import { style, vars } from "../zyzz.config.ts"
 import { useSnapshot, useToastState } from "./hooks.ts"
-import { usd } from "./format.ts"
+import { usd, left } from "./format.ts"
 import { useNewTicket, useOpenTicket, useSearchState, VIEWS } from "./nav.ts"
 import { NewTicket } from "./ticket/NewTicket.tsx"
 import { Drawer } from "./ticket/Drawer.tsx"
@@ -86,10 +86,10 @@ export const Shell = ({ children }: { children: ReactNode }) => {
           <div {...st.status()}><i {...cx(st.dot(), !alive && st.dotOff(), alive && held && st.dotHold(), alive && !held && st.dotOn())} /><span>{q.isError ? t("unreachable: {m}", { m: q.error.message }) : !S ? t("connecting…") : !S.supervisor.alive ? t("supervisor not running") : halted ? t("halted (L5)") : S.interrupts.length ? t("running · {n} interrupts", { n: S.interrupts.length }) : t("running · {n} sessions", { n: S.running.length })}</span></div>
           {S?.quotas.map((q) => <div key={q.engine} title={q.verdict.reason ?? t("{e} plan limits · from {s}", { e: q.engine, s: q.source === "endpoint" ? t("the usage endpoint") : t("the last session") })}>
             <div {...cn(st.status(), ui.num())}><span>{q.engine}{q.verdict.kind !== "ok" ? ` · ${q.verdict.kind === "pause" ? t("paused") : t("pacing")}` : ""}</span><span style={{ marginLeft: "auto" }}>{q.windows.map((w) => `${w.label.replace("-hour", "h").replace("-day", "d")} ${Math.round(w.used_pct)}%`).join(" · ")}</span></div>
-            {q.windows.slice(0, 2).map((w) => <div key={w.id} style={{ marginTop: 3 }}><Meter ratio={w.used_pct / 100} /></div>)}
+            {q.windows.slice(0, 2).map((w) => <div key={w.id} style={{ marginTop: 3 }}><Meter ratio={w.used_pct / 100} tip={`${q.engine} ${w.label} · ${Math.round(w.used_pct)}%${w.resets_at ? ` · ↻ ${left(w.resets_at - S.now)}` : ""}`} /></div>)}
           </div>)}
           <div {...cn(st.status(), ui.num())}>{S ? t("{a} of {b} this month", { a: usd(S.budget.spent_month), b: usd(S.budget.monthly) }) : "—"}</div>
-          <Meter ratio={ratio} />
+          <Meter ratio={ratio} tip={S ? `${usd(S.budget.spent_month)} / ${usd(S.budget.monthly)} · ${Math.round(ratio * 100)}%` : ""} />
         </div>
       </aside>
       <main {...st.main()}>{q.isError && !S ? <Empty title={t("Dashboard unreachable")}>{q.error.message}</Empty> : children}</main>
