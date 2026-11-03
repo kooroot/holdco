@@ -464,7 +464,7 @@ switch (cmd) {
     const { runOperator, OperatorError } = await import("./cli/operator.ts")
     try {
       const handled = cmd === undefined ? false : await runOperator(cmd, { positional, flag, has }, instanceDir())
-      if (!handled) fail("usage: holdco init | doctor | build-hook | smoke | supervise | dashboard | telegram [setup] | service [install] | observe <file.json> | decision add|revoke|list | quota | status | models (= roles) | ticket | inbox | interrupt | resume | audit | digest | release | promote | rollback | project | engines | config check | validate | presets | schemas | examples")
+      if (!handled) fail("usage: holdco init | doctor | build-hook | smoke | supervise | dashboard | telegram [setup] | service [install] | observe <file.json> | decision add|revoke|list | improve --now | quota | status | models (= roles) | ticket | inbox | interrupt | resume | audit | digest | release | promote | rollback | project | engines | config check | validate | presets | schemas | examples")
     } catch (e) {
       if (e instanceof OperatorError) fail(e.message)
       throw e

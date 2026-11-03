@@ -92,7 +92,8 @@ export const codexConfig = (spec: SessionSpec): TomlTable => {
     // Project AGENTS.md is supplied by the kernel from the default branch, never read from the worktree.
     project_doc_max_bytes: 0,
     permissions: { holdco: { description: `holdco session ${spec.sessionId}`, filesystem, network } },
-    shell_environment_policy: { inherit: "core", exclude: ["*KEY*", "*TOKEN*", "*SECRET*"] },
+    // `all`: LANG, TZ, SSL_CERT_FILE, NODE_OPTIONS… reach the session's shell as they reach the kernel's verify run; secrets are already stripped by sessionEnv
+    shell_environment_policy: { inherit: "all", exclude: ["*KEY*", "*TOKEN*", "*SECRET*", "*PASSWORD*"] },
     mcp_servers: { company },
     features,
   }

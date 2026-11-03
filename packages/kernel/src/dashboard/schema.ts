@@ -129,7 +129,7 @@ export type TicketDetail = typeof TicketDetail.Type
 
 export const JournalLine = Schema.Struct({ i: Num, at: Num, kind: Str, text: Str, ok: Schema.optionalKey(Bool) })
 /** The live feed of one session: journal lines after `after`, and whether the session is still running. */
-export const SessionEvents = Schema.Struct({ session_id: Str, running: Bool, status: NullStr, cost_usd: Num, events: Schema.Array(JournalLine) })
+export const SessionEvents = Schema.Struct({ session_id: Str, running: Bool, status: NullStr, cost_usd: Num, events: Schema.Array(JournalLine), prompt: NullStr })
 
 export const TicketFiles = Schema.Struct({ base: Str, files: Schema.Array(Schema.Struct({ path: Str, status: Str })) })
 export const TicketFile = Schema.Struct({ path: Str, content: Str, truncated: Bool, binary: Bool })
@@ -141,6 +141,7 @@ export const Action = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("decline"), id: Str, note: Schema.optionalKey(Str) }),
   Schema.Struct({ kind: Schema.Literal("grade"), id: Str, verdict: Schema.Literals(["approve", "reject"]), note: Schema.optionalKey(Str) }),
   Schema.Struct({ kind: Schema.Literal("audit_done") }),
+  Schema.Struct({ kind: Schema.Literal("improve_now") }),
   Schema.Struct({ kind: Schema.Literal("interrupt"), level: Level, target: Str, reason: Str }),
   Schema.Struct({ kind: Schema.Literal("resume"), level: Level, target: Str }),
   Schema.Struct({ kind: Schema.Literal("release"), note: Schema.optionalKey(Str) }),

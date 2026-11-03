@@ -34,6 +34,7 @@ export const Live = ({ sessions, now }: { sessions: ReadonlyArray<S>; now: numbe
   const feed = useLiveFeed(current?.id ?? null)
   const box = useRef<HTMLDivElement>(null)
   const [stick, setStick] = useState(true)
+  const [showPrompt, setShowPrompt] = useState(false)
   useEffect(() => { if (stick && box.current) box.current.scrollTop = box.current.scrollHeight }, [feed.events.length, stick])
   if (!current) return <div {...cn(ui.muted(), ui.small())}>{t("No session has run on this ticket yet.")}</div>
   return (
@@ -46,7 +47,9 @@ export const Live = ({ sessions, now }: { sessions: ReadonlyArray<S>; now: numbe
         {feed.running || current.ended_at === null ? <Pill tone="kernel">{t("running · {t}", { t: ago(now - current.started_at) })}</Pill> : <Pill tone={current.status === "success" ? "ok" : "bad"}>{current.status ?? t("ended")}</Pill>}
         <span {...cn(ui.muted(), ui.small())}>{t("{n} events", { n: feed.events.length })}{feed.cost || current.cost_usd ? ` · ${usd(feed.cost || current.cost_usd)}` : ""}</span>
         <label {...cn(ui.small(), ui.muted())} style={{ marginLeft: "auto" }}><input type="checkbox" checked={stick} onChange={(e) => setStick(e.target.checked)} /> {t("follow")}</label>
+        {feed.prompt ? <button {...cn(st.chip(), showPrompt && st.chipOn())} onClick={() => setShowPrompt((v) => !v)}>{t("prompt")}</button> : null}
       </div>
+      {showPrompt && feed.prompt ? <pre {...st.feed()} style={{ whiteSpace: "pre-wrap", maxHeight: 360, overflow: "auto" }}>{feed.prompt}</pre> : null}
       <div ref={box} {...st.feed()} onScroll={(e) => { const el = e.currentTarget; setStick(el.scrollHeight - el.scrollTop - el.clientHeight < 24) }}>
         {feed.events.length === 0 ? <span {...st.dim()}>{t(feed.running || current.ended_at === null ? "waiting for the first event…" : "no journal for this session (it ran on an older kernel)")}</span> : null}
         {feed.events.map((e) => (

@@ -10,7 +10,7 @@ export const useFile = (id: string | null, path: string | null) => useQuery({ qu
 
 /** The live feed of one session: polls the journal every 2s while the session runs, keeps what it has seen. */
 export const useLiveFeed = (sessionId: string | null) => {
-  const [state, setState] = useState<{ id: string | null; events: Array<Awaited<ReturnType<typeof api.events>>["events"][number]>; running: boolean; status: string | null; cost: number }>({ id: null, events: [], running: false, status: null, cost: 0 })
+  const [state, setState] = useState<{ id: string | null; events: Array<Awaited<ReturnType<typeof api.events>>["events"][number]>; running: boolean; status: string | null; cost: number; prompt: string | null }>({ id: null, events: [], running: false, status: null, cost: 0, prompt: null })
   const q = useQuery({
     queryKey: ["events", sessionId, state.id === sessionId ? (state.events.at(-1)?.i ?? -1) : -1],
     queryFn: () => api.events(sessionId as string, state.id === sessionId ? (state.events.at(-1)?.i ?? -1) : -1),
@@ -20,9 +20,9 @@ export const useLiveFeed = (sessionId: string | null) => {
   useEffect(() => {
     const r = q.data
     if (!r || sessionId === null) return
-    setState((s) => (s.id === sessionId ? { ...s, events: r.events.length ? [...s.events, ...r.events] : s.events, running: r.running, status: r.status, cost: r.cost_usd } : { id: sessionId, events: [...r.events], running: r.running, status: r.status, cost: r.cost_usd }))
+    setState((s) => (s.id === sessionId ? { ...s, events: r.events.length ? [...s.events, ...r.events] : s.events, running: r.running, status: r.status, cost: r.cost_usd, prompt: s.prompt ?? r.prompt } : { id: sessionId, events: [...r.events], running: r.running, status: r.status, cost: r.cost_usd, prompt: r.prompt }))
   }, [q.data, sessionId])
-  return state.id === sessionId ? state : { id: sessionId, events: [], running: false, status: null, cost: 0 }
+  return state.id === sessionId ? state : { id: sessionId, events: [], running: false, status: null, cost: 0, prompt: null }
 }
 
 /** Toasts: one line at the bottom, errors in red. */

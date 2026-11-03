@@ -120,7 +120,7 @@ describe("generated engine home", () => {
   })
   test("no project docs from the worktree, no secrets in shell env, risky features off", () => {
     expect(config).toContain("project_doc_max_bytes = 0")
-    expect(config).toContain('exclude = ["*KEY*", "*TOKEN*", "*SECRET*"]')
+    expect(config).toContain(`exclude = ["*KEY*", "*TOKEN*", "*SECRET*", "*PASSWORD*"]`)
     for (const f of DISABLED_FEATURES) expect(config).toContain(`${f} = false`)
     expect(config).toContain("multi_agent = false")
   })

@@ -244,7 +244,8 @@ export const sessionEvents = (ctx: DashboardContext, id: string, after: number) 
   if (!/^[A-Za-z0-9_-]+$/.test(id)) throw new ActionError("not a session id")
   const row = ctx.store.session(id)
   if (!row) throw new ActionError(`no session ${id}`)
-  return { session_id: id, running: row.ended_at === null, status: row.status ?? null, cost_usd: row.cost_usd, events: readSessionEvents(ctx.root, id, after) }
+  const promptFile = NodePath.join(ctx.root, ".holdco", "sessions", id, "prompt.md")
+  return { session_id: id, running: row.ended_at === null, status: row.status ?? null, cost_usd: row.cost_usd, events: readSessionEvents(ctx.root, id, after), prompt: after < 0 && existsSync(promptFile) ? readFileSync(promptFile, "utf8").slice(0, 200_000) : null }
 }
 
 export const ticketFiles = (ctx: DashboardContext, id: string): { base: string; files: Array<{ path: string; status: string }> } => {
@@ -320,6 +321,7 @@ export type Action =
   | { kind: "decline"; id: string; note?: string }
   | { kind: "grade"; id: string; verdict: "approve" | "reject"; note?: string }
   | { kind: "audit_done" }
+  | { kind: "improve_now" }
   | { kind: "interrupt"; level: Level; target: string; reason: string }
   | { kind: "resume"; level: Level; target: string }
   | { kind: "release"; note?: string }
@@ -393,6 +395,12 @@ export const act = async (ctx: DashboardContext, a: Action): Promise<Record<stri
       if (store.labeledTicketIds().has(a.id)) throw new ActionError(`${a.id} is already graded`)
       store.addLabel({ ticket_id: a.id, action: t.action, at: now, agreement: v.verdict === a.verdict, operator_verdict: a.verdict, ...(a.note ? { note: a.note } : {}) })
       return { ok: true, judge: v.verdict, agreement: v.verdict === a.verdict, summary: (JSON.parse(v.payload) as { summary?: string }).summary ?? "" }
+    }
+    case "improve_now": {
+      if (!ctx.supervisor) throw new ActionError("the supervisor is not running in this process; use holdco improve --now")
+      if (!ctx.config().modules.improvement.enabled) throw new ActionError("Improvement is off in company.yaml")
+      ctx.supervisor.runImprovementNow(now)
+      return { ok: true }
     }
     case "audit_done": {
       store.recordAudit(now, ctx.config().policy.audit.weekly_sample)

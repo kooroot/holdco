@@ -256,6 +256,17 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
       await bridge.start()
       return true
     }
+    case "improve": {
+      // D78: holdco improve --now — start the Improvement cycle in the running supervisor (through the dashboard API) instead of waiting a week
+      const config = loadConfig(dir)
+      if (!config.modules.improvement.enabled) throw new OperatorError("Improvement is off in company.yaml (modules.improvement.enabled)")
+      const port = Number(process.env["HOLDCO_DASHBOARD_PORT"] ?? config.runtime.dashboard_port ?? 7117)
+      const r = await fetch(`http://127.0.0.1:${port}/api/act`, { method: "POST", headers: { authorization: `Bearer ${dashboardToken(dir)}`, "content-type": "application/json" }, body: JSON.stringify({ kind: "improve_now" }) }).catch(() => undefined)
+      if (!r) throw new OperatorError(`the supervisor is not reachable on :${port}; start it (holdco service start) and retry`)
+      if (!r.ok) throw new OperatorError(`refused: ${(await r.text()).slice(0, 300)}`)
+      console.log("Improvement cycle started; it reads the last two weeks of signals and proposes changes on a branch. Watch it on the dashboard (Tickets → IMPROVEMENT-CYCLE session) or with holdco status.")
+      return true
+    }
     case "quota": {
       // D72: read the plans' rate-limit windows now (the supervisor polls them every 5 minutes) and print them.
       const config = loadConfig(dir)

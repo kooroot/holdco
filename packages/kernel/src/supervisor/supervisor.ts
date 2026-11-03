@@ -75,6 +75,9 @@ interface Running {
 
 /** Below this much remaining budget a share counts as exhausted: no session could do anything with it. */
 const MIN_SESSION_USD = 0.05
+/** D78: the CEO prompt lists at most this many tickets per section; a bigger backlog is paged across cycles. */
+export const CEO_LIST_CAP = 25
+const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}…` : s)
 /** D72: how often the engines' usage endpoints are asked for the plan windows. */
 export const QUOTA_POLL_MS = 5 * 60_000
 /** With no work left, the CEO is woken at most this often to open the next tickets from the strategy. */
@@ -870,14 +873,14 @@ export class Supervisor {
       `Budget this month: ${this.store.spentAll(this.monthStart(now)).toFixed(2)} of ${this.config.budget.monthly_usd} USD spent.`,
       ...(this.quotaLines(now).length ? ["Subscription limits (the real budget — sessions pause on an engine past its limit; when the week is burning faster than it passes, only core projects run):", ...this.quotaLines(now)] : []),
       "",
-      `## New tickets to triage (${news.length}) — use ticket_triage for each`,
-      ...news.map((t) => `- ${t.id} [${t.department}] ${t.title}: ${t.goal}`),
+      `## New tickets to triage (${news.length}) — use ticket_triage for each${news.length > CEO_LIST_CAP ? `; the oldest ${CEO_LIST_CAP} are listed, the rest next cycle` : ""}`,
+      ...news.slice(0, CEO_LIST_CAP).map((t) => `- ${t.id} [${t.department}] ${t.title}: ${clip(t.goal, 400)}`),
       "",
-      `## Tickets awaiting your proposal (${proposals.length}) — use proposal_submit for each; tier is T2 or T3`,
-      ...proposals.map((t) => `- ${t.id} [${t.department}] ${t.title} — action ${t.action}, branch ${t.branch}, verdict ${this.store.verdictFor(t.id)?.verdict ?? "none"}`),
+      `## Tickets awaiting your proposal (${proposals.length}) — use proposal_submit for each; tier is T2 or T3${proposals.length > CEO_LIST_CAP ? `; first ${CEO_LIST_CAP}` : ""}`,
+      ...proposals.slice(0, CEO_LIST_CAP).map((t) => `- ${t.id} [${t.department}] ${t.title} — action ${t.action}, branch ${t.branch}, verdict ${this.store.verdictFor(t.id)?.verdict ?? "none"}`),
       "",
-      `## Blocked tickets (${blocked.length}) — use ticket_unblock with a decision, or leave for the Operator`,
-      ...blocked.map((t) => `- ${t.id} [${t.department}] ${t.title}: ${t.note}`),
+      `## Blocked tickets (${blocked.length}) — use ticket_unblock with a decision, or leave for the Operator${blocked.length > CEO_LIST_CAP ? `; first ${CEO_LIST_CAP}` : ""}`,
+      ...blocked.slice(0, CEO_LIST_CAP).map((t) => `- ${t.id} [${t.department}] ${t.title}: ${clip(t.note ?? "", 300)}`),
       "",
       "## Then: keep every objective moving — with evidence, never with busywork",
       `Open tickets: ${this.store.ticketsIn(["new", "triaged", "in_progress", "ready_for_verification", "verified", "awaiting_approval", "rejected", "blocked"]).length}. The company stops when nothing is open, so for every objective in governance/strategy.md that no open ticket serves, open the next concrete ticket with ticket_create (they start triaged): small, one deliverable, testable done criteria, and cite the objective or the product observation it answers. Check existing tickets before creating another. Open nothing for what the strategy does not name — no maintenance or refactoring to keep departments busy; when every objective is served or met, open nothing and say in the report what evidence or decision would change that. Keep the inbox small: escalate only what policy or genuinely new judgment requires.`,
@@ -985,6 +988,9 @@ export class Supervisor {
    * tickets, failed sessions, guard refusals, cost per ticket — not only on the Operator's grades. The
    * replay gate still needs labeled tickets; without them a candidate is judged by its canary alone.
    */
+  /** D78: `holdco improve --now` / the dashboard: run the Improvement cycle without waiting for the week. */
+  runImprovementNow(now = this.now()) { this.lastJob.set("improvement", now); this.store.setMeta("job:improvement", String(now)); this.improvementCycle(now) }
+
   private improvementCycle(now: number) {
     if ([...this.running.values()].some((r) => r.kind === "improvement" && r.ticketId === "IMPROVEMENT-CYCLE")) return
     const role = this.org.role("improvement")
@@ -1471,6 +1477,8 @@ export class Supervisor {
     if (engine === undefined) throw new Error(`engine '${spec.assignment.engine}' is not installed`)
     const now = this.now()
     const abort = new AbortController()
+    // D78: what the session was told, for the Operator who asks "why did it do that" (dashboard Log tab → Prompt)
+    writeFileSync(NodePath.join(spec.stateDir, "prompt.md"), `# ${sessionId} · ${p.role.role} (${spec.assignment.engine}:${spec.assignment.model})\n\n## Instructions\n\n${spec.instructions}\n\n## Prompt\n\n${spec.prompt}\n`, { mode: 0o600 })
     this.store.startSession({ id: sessionId, ticket_id: p.ticketId, parent_session: p.parent ?? null, role: p.role.role, kind: p.role.kind, department: p.spender ?? p.role.department, engine: spec.assignment.engine, model: spec.assignment.model, worktree: p.cwd, started_at: now, boot_id: this.bootId, release: org.tag })
     const running: Running = { sessionId, ticketId: p.ticketId, role: p.role.role, department: p.role.department, kind: p.role.kind, engine: spec.assignment.engine, abort, cap, startedAt: now, release: org.tag, org, toolErrors: new Map(), promise: Promise.resolve() }
     const timeout = setTimeout(() => abort.abort(), spec.limits.timeoutMs)

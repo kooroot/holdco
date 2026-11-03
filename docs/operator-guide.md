@@ -101,6 +101,8 @@ Commands that loosen anything (`inbox approve`, `resume`, `promote`, `rollback`,
 
 Verification scores every ticket; you grade a blind sample weekly; agreement between the two is tracked per action type. When an action meets the graduation rule (enough samples, high agreement, a clean recent streak, no rollbacks or missed canaries) a proposal lands in your inbox; approving it moves the action one tier toward autonomy. Low agreement demotes it automatically. Once `modules.improvement.replay_min_tickets` labeled tickets exist, the weekly Improvement cycle diagnoses recurring failures and opens tickets for itself; its changes to `org/`, `protocols/` and `improvement/` are merged like any other work (verified, approved) and become a **candidate** release `rc-<n>`. If the candidate changes the judge (rubrics, the Verification charter or role), a replay gate first re-judges your labeled tickets with it and withdraws it unless agreement with your grades improves. Then `policy.release.canary_traffic` of production sessions run on the candidate for `policy.release.watch`; if their rejection rate stays within `max_regression` of the rest and nothing is demoted, it is promoted to `r<n>`, otherwise it is withdrawn, `main` is reverted and you are told. A demotion during the window still raises L4.
 
+**Seeing why.** Every session's prompt is kept with its journal: in a ticket's Log tab, pick the session and press *prompt*. And the Improvement cycle need not wait for its week — `bunx holdco improve --now` starts it so you can watch its first candidate go through replay, canary and release.
+
 ### 7. What is not automated in this version
 
 Deploys, publishes, outreach and credential actions run only if you declare how in `company.yaml`:
@@ -173,6 +175,8 @@ bunx holdco project remove old-repo                       # 열린 티켓이 있
 ### 6. 자기개선이 일어나는 방식
 
 검증이 모든 티켓을 채점하고, 운영자가 매주 블라인드 샘플을 채점하고, 둘의 일치율을 행동 유형별로 추적합니다. 승격 규칙을 충족하면 인박스에 제안이 오고, 승인하면 한 단계 자율 쪽으로 이동합니다. 일치율이 낮으면 자동 강등됩니다. 라벨 붙은 티켓이 `replay_min_tickets`개 쌓이면 주간 개선 주기가 반복되는 실패를 진단해 스스로 티켓을 열고, 그 변경(`org/`, `protocols/`, `improvement/`)은 다른 작업과 똑같이 검증·승인을 거쳐 **후보** 릴리스 `rc-<n>`이 됩니다. 후보가 심판(루브릭, 검증 헌장·역할)을 바꾸면 먼저 리플레이 게이트가 운영자가 채점한 티켓을 후보로 다시 판정해 일치율이 오르지 않으면 철회합니다. 그 뒤 생산 세션의 `policy.release.canary_traffic`만 `policy.release.watch` 동안 후보 조직으로 돌고, 반려율이 나머지보다 `max_regression` 이상 나쁘지 않고 강등이 없으면 `r<n>`으로 승격, 아니면 철회하고 `main`을 되돌린 뒤 알립니다. 감시 기간 안의 강등은 여전히 L4를 겁니다.
+
+**왜 그랬는지 보기.** 모든 세션의 프롬프트가 저널과 함께 남습니다: 티켓의 로그 탭에서 세션을 고르고 *프롬프트*를 누르세요. 개선 사이클도 주를 기다릴 필요 없이 `bunx holdco improve --now`로 시작해 첫 후보가 리플레이·카나리·릴리스를 거치는 걸 지켜볼 수 있습니다.
 
 ### 7. 이 버전에서 자동화되지 않은 것
 
