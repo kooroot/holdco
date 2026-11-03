@@ -491,7 +491,7 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
     case "project": {
       // D70: list | add <path> [--id --class --share --verify "cmd"] | set <id> [--share --class --verify "cmd"|none --kill …] | remove <id> [--force] | verify <id> [cmd…]
       const config = loadConfig(dir)
-      const usage = "usage: holdco project list | add <path> [--id x] [--class core|experiment|maintenance|brand] [--share 0.3] [--verify \"bun test\"] | set <id> [--share 0.3] [--class …] [--verify \"cmd\"|none] [--kill \"…\"] [--min-tier T0..T3|none] | remove <id> [--force] | verify <id> [command…]"
+      const usage = "usage: holdco project list | add <path> [--id x] [--class core|experiment|maintenance|brand] [--share 0.3] [--verify \"bun test\"] | set <id> [--share 0.3] [--class …] [--verify \"cmd\"|none] [--kill \"…\"] [--min-tier T0..T3|none] [--merge local|github] | remove <id> [--force] | verify <id> [command…]"
       const pct = (x: number) => `${Math.round(x * 100)}%`
       const shareArg = (v: string | undefined): number | undefined => {
         if (v === undefined) return undefined
@@ -536,9 +536,11 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
           const id = args.positional[2] ?? (() => { throw new OperatorError(usage) })()
           const verify = args.flag("verify")
           const kill = args.flag("kill")
+          const mergeMode = args.flag("merge")
+          if (mergeMode !== undefined && mergeMode !== "local" && mergeMode !== "github") throw new OperatorError("--merge: local or github")
           const minTier = args.flag("min-tier")
           if (minTier !== undefined && !["T0", "T1", "T2", "T3", "none"].includes(minTier)) throw new OperatorError("--min-tier: T0, T1, T2, T3 or none")
-          const patch = { ...(minTier !== undefined ? { min_tier: minTier === "none" ? null : (minTier as "T0" | "T1" | "T2" | "T3") } : {}), ...(shareArg(args.flag("share")) !== undefined ? { share: shareArg(args.flag("share")) as number } : {}), ...(classArg(args.flag("class")) ? { class: classArg(args.flag("class")) as ProjectClass } : {}), ...(verify !== undefined ? { verify: verify === "none" ? [] : (parseVerify(verify) ?? []) } : {}), ...(kill !== undefined ? { kill_criteria: kill === "none" ? null : kill } : {}) }
+          const patch = { ...(mergeMode !== undefined ? { merge: mergeMode as "local" | "github" } : {}), ...(minTier !== undefined ? { min_tier: minTier === "none" ? null : (minTier as "T0" | "T1" | "T2" | "T3") } : {}), ...(shareArg(args.flag("share")) !== undefined ? { share: shareArg(args.flag("share")) as number } : {}), ...(classArg(args.flag("class")) ? { class: classArg(args.flag("class")) as ProjectClass } : {}), ...(verify !== undefined ? { verify: verify === "none" ? [] : (parseVerify(verify) ?? []) } : {}), ...(kill !== undefined ? { kill_criteria: kill === "none" ? null : kill } : {}) }
           if (!Object.keys(patch).length) throw new OperatorError(usage)
           const next = setProject(config, id, patch)
           saveConfig(dir, next, `project set ${id}`)

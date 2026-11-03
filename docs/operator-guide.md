@@ -73,6 +73,8 @@ bunx holdco project remove old-repo                       # refused while it has
 
 A share is also budget: a project's share of `budget.monthly_usd` is its cap for the month, and once it is spent no new work session starts there until next month or a bigger share (`budget.project_shares: soft` keeps the steering and drops the cap). The dashboard shows spend against cap per project, the stall line says "spent its share" instead of going quiet, and the Operator is told once. `min_tier` per project (Settings → Min tier, or `--min-tier T3`) floors every action there — a payments repository stays Operator-approved while a toy project is autonomous. Two companies on one machine: set `runtime.dashboard_port` on the second.
 
+How verified branches land is per project too: `merge: github` (the wizard offers it for repositories with workflows) opens a pull request and merges when the checks pass, so the repository's CI gates every merge; `merge: local` merges and pushes at once, and the kernel then watches the CI run of that commit — a red one opens a ticket with the failing step and its log, instead of a vague "fix CI". `bunx holdco project set <id> --merge github` switches.
+
 Every change is one commit to `company.yaml`. Removing a project never touches its repository.
 
 **The real budget is your subscription.** Dollars are metered for comparability, but what actually runs out is the plans' rate-limit windows — Claude Code's 5-hour and 7-day, Codex's 5-hour and weekly. The kernel reads them from the same usage endpoints `/usage` and `/status` use (with your login on this host; Claude: `CLAUDE_CODE_OAUTH_TOKEN`, the keychain, or `~/.claude/.credentials.json`; Codex: `~/.codex/auth.json`), polls every five minutes, and also takes the rate-limit events sessions themselves report. They show as percentages on Home and in the dashboard's sidebar, on Sessions & spend, in `holdco status`, in Telegram's `/quota` and the daily brief (the weekly audit is there too: `/audit` sends the sample as blind cards with Pass / Fail buttons), and `holdco quota` reads them on demand. Policy (`budget.quota`): an engine past `pause_at` (default 90%) starts no new session until the window resets — the Operator is told once, and the stall line says so instead of going quiet; with `pace` (default on), when the 7-day window is more than `pace_margin` (15) points ahead of the clock, only core projects, Verification and the executive run until the week is back on pace. The CEO sees the same lines every cycle.
@@ -155,6 +157,8 @@ bunx holdco project remove old-repo                       # 열린 티켓이 있
 ```
 
 배분은 예산이기도 합니다. 프로젝트의 배분 × `budget.monthly_usd`가 그 달의 상한이고, 다 쓰면 다음 달이나 배분을 늘리기 전까지 새 작업 세션이 시작되지 않습니다(`budget.project_shares: soft`면 유도만 하고 상한은 없음). 대시보드는 프로젝트별 지출/상한을 보여주고, 정체 진단은 조용히 멈추는 대신 "배분을 다 씀"이라고 말하며, 운영자에게 한 번 알립니다. 프로젝트별 `min_tier`(설정 → 최소 등급, 또는 `--min-tier T3`)는 그 프로젝트의 모든 행동 등급 하한입니다 — 결제 저장소는 운영자 승인으로, 장난감 프로젝트는 자율로. 한 머신에 회사 둘이면 두 번째에 `runtime.dashboard_port`를 지정합니다.
+
+검증된 브랜치가 어떻게 들어가는지도 프로젝트별입니다: `merge: github`(워크플로가 있는 저장소에는 마법사가 제안)는 PR을 열고 체크가 통과하면 머지하므로 저장소의 CI가 모든 머지를 지키고, `merge: local`은 바로 머지·푸시하되 커널이 그 커밋의 CI 실행을 지켜봅니다 — 빨개지면 막연한 "CI 고쳐" 대신 실패 단계와 로그를 담은 티켓이 열립니다. `bunx holdco project set <id> --merge github`로 전환.
 
 모든 변경은 `company.yaml`에 커밋 하나입니다. 프로젝트 제거는 저장소를 건드리지 않습니다.
 

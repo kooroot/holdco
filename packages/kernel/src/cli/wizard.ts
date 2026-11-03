@@ -44,6 +44,8 @@ export interface WizardProject {
   readonly share: number
   /** D65: the command that proves the project works, run by the kernel before every judge. */
   readonly verify: Array<string> | undefined
+  /** D77: how verified branches land — through a PR gated by GitHub checks when the repository has workflows. */
+  readonly merge: "local" | "github"
 }
 
 /** The verify command a repository's files suggest (D65), or "" when nothing is recognizable. */
@@ -158,7 +160,7 @@ export const runWizard = async (checkoutPackages: string | undefined): Promise<W
   const ids = paths.map((x) => projectIdFor(x.path))
   if (new Set(ids).size !== ids.length) { p.log.error(`two repositories would get the same project id (${ids.join(", ")}); rename one or register it later with --id`); bail(undefined) }
 
-  const details: Array<{ verify: Array<string> | undefined; cls: WizardProject["class"] }> = []
+  const details: Array<{ verify: Array<string> | undefined; cls: WizardProject["class"]; merge: "local" | "github" }> = []
   for (const x of paths) {
     const name = basename(x.path)
     const verifyGuess = x.create ? "" : guessVerify(x.path)
@@ -177,7 +179,17 @@ export const runWizard = async (checkoutPackages: string | undefined): Promise<W
         { value: "brand", label: "Brand", hint: "site, docs, content" },
       ],
     })) as WizardProject["class"]
-    details.push({ verify, cls })
+    let merge: "local" | "github" = "local"
+    if (!x.create && existsSync(join(x.path, ".github", "workflows")) && sh("git", ["-C", x.path, "remote", "get-url", "origin"]) !== undefined) {
+      merge = await ask(p.select({
+        message: `${name}: how verified branches land`, initialValue: has("gh") ? "github" : "local",
+        options: [
+          { value: "github", label: "Pull request, merged when GitHub checks pass", hint: has("gh") ? "the repository's own CI gates every merge (needs gh login)" : "needs the gh CLI logged in" },
+          { value: "local", label: "Merge locally and push", hint: "fast; CI runs after the merge and a red main opens a fix ticket" },
+        ],
+      })) as "local" | "github"
+    }
+    details.push({ verify, cls, merge })
   }
   let shares: Array<number> = paths.map(() => 1 / paths.length)
   if (paths.length > 1) {
@@ -189,7 +201,7 @@ export const runWizard = async (checkoutPackages: string | undefined): Promise<W
     }))
     shares = parseSplit(text || equal.join(" "), paths.length) as Array<number>
   }
-  const projects: Array<WizardProject> = paths.map((x, i) => ({ path: x.path, create: x.create, class: details[i]!.cls, share: shares[i]!, verify: details[i]!.verify }))
+  const projects: Array<WizardProject> = paths.map((x, i) => ({ path: x.path, create: x.create, class: details[i]!.cls, share: shares[i]!, verify: details[i]!.verify, merge: details[i]!.merge }))
 
   const preset = await ask(p.select({
     message: "Organization",
@@ -325,7 +337,7 @@ const build = async (a: WizardAnswers, checkoutPackages: string | undefined, tar
     companyName: basename(target).toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "my-co", // a non-ASCII directory name still yields a usable id
     host: process.platform === "darwin" ? "macos-launchd" : "linux-systemd",
     ...(checkoutPackages ? { packagesDir: checkoutPackages } : {}),
-    projects: a.projects.map((pr) => ({ path: resolve(pr.path), class: pr.class, share: pr.share, ...(pr.verify ? { verify: pr.verify } : {}) })),
+    projects: a.projects.map((pr) => ({ path: resolve(pr.path), class: pr.class, share: pr.share, ...(pr.verify ? { verify: pr.verify } : {}), ...(pr.merge === "github" ? { merge: "github" as const } : {}) })),
     ...(a.quota ? { quota: a.quota } : {}),
   })
   s.stop(`Company ${r.config.company.name} in ${target} (${r.modules.length} modules)`)

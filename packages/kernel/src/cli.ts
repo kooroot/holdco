@@ -49,7 +49,7 @@ const flag = (name: string): string | undefined => {
   return i >= 0 ? argv[i + 1] : undefined
 }
 const has = (name: string): boolean => argv.includes(`--${name}`)
-const VALUE_FLAGS: ReadonlySet<string> = new Set(["dir", "preset", "github", "name", "brief", "title", "goal", "why", "criteria", "dept", "project", "action", "priority", "note", "reason", "id", "class", "share", "kill", "mission", "timezone", "autonomy", "cap", "minutes", "port", "dashboard-port", "verify", "min-tier", "project-id"])
+const VALUE_FLAGS: ReadonlySet<string> = new Set(["dir", "preset", "github", "name", "brief", "title", "goal", "why", "criteria", "dept", "project", "action", "priority", "note", "reason", "id", "class", "share", "kill", "mission", "timezone", "autonomy", "cap", "minutes", "port", "dashboard-port", "verify", "min-tier", "project-id", "merge"])
 const positional: Array<string> = []
 // `holdco project verify <id> <command…>`: everything after the id is the command, flags included (`cargo test --release`).
 const rawCommand = argv[0] === "project" && argv[1] === "verify" ? argv.slice(3) : undefined

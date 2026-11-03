@@ -48,6 +48,7 @@ export interface ScaffoldProject {
   /** Share of the company's effort, 0–1; the shares of all projects sum to at most 1. */
   readonly share?: number
   readonly verify?: ReadonlyArray<string>
+  readonly merge?: "local" | "github"
 }
 
 /** The id a repository gets when none is given: its directory name as a slug. */
@@ -170,6 +171,7 @@ export const scaffold = (opts: ScaffoldOptions): ScaffoldResult => {
     share: pr.share ?? (unsized ? Math.round((left / unsized) * 100) / 100 : 0),
     locked: [...DEFAULT_LOCKED],
     ...(pr.verify && pr.verify.length ? { verify: [...pr.verify] } : {}),
+    ...(pr.merge === "github" ? { merge: "github" as const } : {}),
     ...((pr.class ?? "core") === "experiment" ? { kill_criteria: "no progress in 4 weeks" } : {}),
   }))
   const named = {

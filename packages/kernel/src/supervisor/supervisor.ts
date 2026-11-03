@@ -23,6 +23,7 @@ import type { Engine, Outcome, RoleDefinition, SessionEvent, SessionSpec } from 
 import { appendSessionEvent } from "./journal.ts"
 import { renderVerify } from "../config/projects.ts"
 import { hashText, pendingTexts, tr, TRANSLATION_DAILY_USD, translatorFor } from "./i18n.ts"
+import { checkCi, CI_POLL_MS, CI_WATCH_MS, ciWatches, defaultGhRunner, endCiWatch, failingStep, hasWorkflows, startCiWatch } from "./ciwatch.ts"
 import { fmtReset, mergeSessionWindow, quotaPolicy, quotaVerdict, readQuota, renderQuota, WINDOW_LENGTH, writeQuota } from "./quota.ts"
 import { collectSignals, renderSignals } from "./signals.ts"
 import { feedbackContext } from "./feedback.ts"
@@ -446,6 +447,8 @@ export class Supervisor {
       const id = this.store.logAction({ at: now, actor: "kernel", ticket_id: t.id, action: t.action as string, effective_tier: tier, forced_by: forcedBy, inputs: { branch: t.branch }, outputs: r.outputs, undo: r.undo })
       const window = tier === "T2" ? now + durationMs(this.config.policy.windows.t2_internal) : null
       this.store.transition(t.id, "done", "kernel", `merged (${tier}); action-log ${id}`, now, { window_closes_at: window })
+      // D77: a local merge that was pushed is now on the repository's own CI; watch it so a red main opens a precise ticket
+      if (project && project.merge !== "github" && r.outputs["pushed"] === true && typeof r.outputs["after"] === "string" && hasWorkflows(repo)) startCiWatch(this.store, { ticket_id: t.id, project: project.id, repo, sha: r.outputs["after"] as string, started: now })
       if (t.department === "improvement") this.onImprovementMerged(t, now)
       if (project) removeTicketWorktrees(repo, t.id)
       void this.notifier.send("info", this.say(`${t.id} done: ${this.tx(t.title)} (${t.action}, ${tier})`, `${t.id} 완료: ${this.tx(t.title)} (${t.action}, ${tier})`))
@@ -812,6 +815,7 @@ export class Supervisor {
     else for (const t of this.store.ticketsIn(["awaiting_approval"]).filter((x) => x.approval_stage === "needs_review")) this.store.setStage(t.id, "inbox", now) // no COO in this organization: the Operator reviews
     if (this.due("tripwires", durationMs(this.config.runtime.tick), now)) this.tripwires(now)
     if (this.due("quota", QUOTA_POLL_MS, now)) void this.pollQuota(now)
+    if (this.due("ciwatch", CI_POLL_MS, now)) this.ciWatch(now)
     if ((this.config.company.language ?? "en") !== "en" && this.due("translate", 30_000, now)) void this.translatePending(now)
     this.stallWatch(now, active, lastCeo)
     if (this.due("audit", DAY, now)) this.auditWatch(now)
@@ -1095,6 +1099,32 @@ export class Supervisor {
       this.log(`translate (${t.engine.id}:${t.model}): ${String(e).slice(0, 200)}`)
     } finally {
       this.translating = false
+    }
+  }
+
+  /** D77: the CI runs of merge commits the kernel pushed; a red one opens one precise ticket with the failing log. */
+  ciWatch(now: number, gh = defaultGhRunner(this.executorEnvFor(["GH_TOKEN", "GITHUB_TOKEN"]))) {
+    for (const w of ciWatches(this.store)) {
+      if (now - w.started > CI_WATCH_MS) { endCiWatch(this.store, w.ticket_id); continue }
+      const o = checkCi(w, gh)
+      if (o.kind === "pending") continue
+      if (o.kind === "none") { if (w.polls >= 3) endCiWatch(this.store, w.ticket_id); else this.store.setMeta(`ciwatch:${w.ticket_id}`, JSON.stringify({ ...w, polls: w.polls + 1 })); continue }
+      endCiWatch(this.store, w.ticket_id)
+      if (o.kind === "error") { this.log(`ciwatch ${w.ticket_id}: ${o.message}`); continue }
+      if (o.kind === "green") continue
+      const src = this.store.ticket(w.ticket_id)
+      const step = failingStep(o.log)
+      const dup = this.store.ticketsIn(["new", "triaged", "in_progress", "ready_for_verification", "verified", "awaiting_approval", "rejected", "blocked"]).find((t) => t.title.startsWith(`CI red on main after ${w.ticket_id}`))
+      if (dup) continue
+      const t = this.store.createTicket({
+        department: src?.department ?? "engineering", project: w.project, state: "triaged", priority: 1, opened_by: "kernel", action: src?.action ?? null,
+        title: `CI red on main after ${w.ticket_id}: ${o.name}${step ? ` — ${step}` : ""} failed`,
+        goal: `main (${w.sha.slice(0, 7)}, the merge of ${w.ticket_id}) fails the repository's CI run "${o.name}"${step ? ` at step \`${step}\`` : ""}. Make that run green again with the smallest change that fixes the actual failure below; run the same check locally first (CI stops at the first failing step, so a later step may fail next — run the whole check).\n\nFailing log (tail):\n${o.log}`,
+        why: `${o.url} — the kernel merged on the project's verify command, which covers less than CI; until merge: github gates merges on the checks, red CI is found here.`,
+        done_criteria: [`the CI run for the fix commit on main is green (${o.name})`, `the local equivalent of the failing step passes${step ? ` (${step})` : ""}`, "no unrelated change"],
+        now,
+      })
+      void this.notifier.send("critical", this.say(`CI is red on main after ${w.ticket_id} (${o.name}${step ? `: ${step}` : ""}); ${t.id} opened with the failing log — ${o.url}`, `${w.ticket_id} 머지 뒤 main CI 실패 (${o.name}${step ? `: ${step}` : ""}); 실패 로그를 담은 ${t.id} 생성 — ${o.url}`))
     }
   }
 
