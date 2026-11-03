@@ -393,6 +393,26 @@ describe("the Operator reads the company in Korean (D75)", () => {
     expect(snap.translations["Add CSV export for the settings page"]).toBe("[ko] Add CSV export for the settings page")
     await sup.stop()
   })
+  test("the kernel's own alerts and stall reasons come in Korean too", async () => {
+    const c = company("i18n-alerts", (raw) => {
+      ;(raw["company"] as Record<string, unknown>)["language"] = "ko"
+      ;(raw["budget"] as Record<string, unknown>)["monthly_usd"] = 1
+      ;(raw["budget"] as Record<string, unknown>)["session_max_usd"] = 0.5
+    })
+    const clock = { now: Date.UTC(2026, 10, 3, 9) }
+    const engine = new FakeEngine({}, 0.5)
+    const { sup, store, sent } = makeSupervisor(c, engine, clock)
+    await sup.boot()
+    expect(sent[0]).toContain("슈퍼바이저 시작")
+    store.charge({ at: clock.now, role: "test", department: "engineering", project: null, session_id: null, usd: 1, source: "test" })
+    const t = store.createTicket({ department: "engineering", title: "Add CSV export for the settings page", goal: "y", why: "z", done_criteria: ["a"], opened_by: "operator", project: "app", state: "triaged", action: "code.merge.app", now: clock.now })
+    await cycle(sup, clock, 20)
+    expect(sent.some((s) => s.includes("트립와이어: engineering 월 배분 소진"))).toBe(true)
+    const stall = sent.find((s) => s.includes(t.id) && s.includes("분째 멈춤"))
+    expect(stall).toBeDefined()
+    expect(stall).toContain("시니어 세션을 시작할 수 없음")
+    await sup.stop()
+  })
   test("an English company translates nothing", async () => {
     const c = company("i18n-en")
     const clock = { now: Date.UTC(2026, 10, 3, 9) }

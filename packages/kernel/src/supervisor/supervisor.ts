@@ -22,7 +22,7 @@ import { evaluateInterrupts } from "../hooks/interrupts.ts"
 import type { Engine, Outcome, RoleDefinition, SessionEvent, SessionSpec } from "../engine/types.ts"
 import { appendSessionEvent } from "./journal.ts"
 import { renderVerify } from "../config/projects.ts"
-import { hashText, pendingTexts, TRANSLATION_DAILY_USD, translatorFor } from "./i18n.ts"
+import { hashText, pendingTexts, tr, TRANSLATION_DAILY_USD, translatorFor } from "./i18n.ts"
 import { fmtReset, mergeSessionWindow, quotaPolicy, quotaVerdict, readQuota, renderQuota, WINDOW_LENGTH, writeQuota } from "./quota.ts"
 import { collectSignals, renderSignals } from "./signals.ts"
 import { feedbackContext } from "./feedback.ts"
@@ -201,7 +201,7 @@ export class Supervisor {
     this.store.reap(this.config.runtime.max_attempts, now)
     this.store.setMeta("boot_id", this.bootId)
     this.store.setMeta("boot_at", String(now))
-    await this.notifier.send("info", `supervisor started: release ${this.org.tag}, ${crashed} crashed session(s) closed, ${reaped} lease(s) recovered, tools on :${this.tools.port}`)
+    await this.notifier.send("info", this.say(`supervisor started: release ${this.org.tag}, ${crashed} crashed session(s) closed, ${reaped} lease(s) recovered, tools on :${this.tools.port}`, `슈퍼바이저 시작: 릴리스 ${this.org.tag}, 크래시된 세션 ${crashed}개 정리, 리스 ${reaped}개 회수, 도구 포트 :${this.tools.port}`))
   }
 
   start() {
@@ -280,7 +280,7 @@ export class Supervisor {
       this.release(`L4 rollback to ${previous}`, now)
     }
     clearInterrupt(this.root, "L4", it.target)
-    void this.notifier.send("critical", `L4 executed: organization restored from ${previous ?? "(no previous release)"}; cleared`)
+    void this.notifier.send("critical", this.say(`L4 executed: organization restored from ${previous ?? "(no previous release)"}; cleared`, `L4 실행: 조직을 ${previous ?? "(이전 릴리스 없음)"}에서 복원; 해제됨`))
   }
 
   // ── kernel steps ─────────────────────────────────────────────────────────
@@ -335,7 +335,7 @@ export class Supervisor {
     if (effective === "T1" && envelope && this.envelopeExceeded(envelope, t.action, now)) {
       if (envelope.on_exceed === "pause_department") {
         raiseInterrupt(this.root, "L2", t.department, `envelope ${envelope.id} exceeded`, now)
-        void this.notifier.send("warning", `envelope ${envelope.id} exceeded; L2 on ${t.department}`)
+        void this.notifier.send("warning", this.say(`envelope ${envelope.id} exceeded; L2 on ${t.department}`, `한도 ${envelope.id} 초과; ${t.department}에 L2`))
       }
       effective = "T2"
       if (this.config.modules.executive !== "ceo+coo") effective = "T3"
@@ -429,7 +429,7 @@ export class Supervisor {
       this.store.transition(t.id, "done", "kernel", `merged (${tier}); action-log ${id}`, now, { window_closes_at: window })
       if (t.department === "improvement") this.onImprovementMerged(t, now)
       if (project) removeWorktree(repo, `t-${t.id}`)
-      void this.notifier.send("info", `${t.id} done: ${t.title} (${t.action}, ${tier})`)
+      void this.notifier.send("info", this.say(`${t.id} done: ${this.tx(t.title)} (${t.action}, ${tier})`, `${t.id} 완료: ${this.tx(t.title)} (${t.action}, ${tier})`))
     } else if (declared !== undefined) {
       // Operator-declared executor (D50): the kernel runs it with the declared env names only, off the tick
       if (this.executing.has(t.id)) return
@@ -447,7 +447,7 @@ export class Supervisor {
             // The external action ran; blindly retrying could duplicate an irreversible effect.
             this.store.transition(t.id, "blocked", "kernel", `postcheck failed after action applied: ${r.error}; inspect the action log before recovery`, end)
             this.store.inboxAdd("recovery", t.id, { title: `Verify recovery for ${t.id}`, note: r.error, action }, end, "urgent")
-            void this.notifier.send("critical", `${t.id}: action applied but postcheck failed; recovery required`)
+            void this.notifier.send("critical", this.say(`${t.id}: action applied but postcheck failed; recovery required`, `${t.id}: 행동은 적용됐지만 postcheck 실패; 복구 결정 필요`))
             return
           }
           this.store.transition(t.id, cur.state === "awaiting_approval" ? "blocked" : "rejected", "kernel", `executor failed: ${r.error}`, end)
@@ -458,9 +458,9 @@ export class Supervisor {
         const window = tier === "T2" ? end + durationMs(this.config.policy.windows.t2_internal) : null
         this.store.transition(t.id, "done", "kernel", `executed ${action} (${tier}); action-log ${id}`, end, { window_closes_at: window })
         if (project) removeWorktree(repo, `t-${t.id}`)
-        void this.notifier.send("info", `${t.id} done: ${t.title} (${action}, ${tier})`)
+        void this.notifier.send("info", this.say(`${t.id} done: ${this.tx(t.title)} (${action}, ${tier})`, `${t.id} 완료: ${this.tx(t.title)} (${action}, ${tier})`))
       }).catch((e) => {
-        void this.notifier.send("warning", `${t.id}: executor crashed: ${String(e)}`)
+        void this.notifier.send("warning", this.say(`${t.id}: executor crashed: ${String(e)}`, `${t.id}: 실행기 크래시: ${String(e)}`))
       }).finally(() => this.executing.delete(t.id))
       this.pending.add(run)
       void run.finally(() => this.pending.delete(run))
@@ -511,7 +511,7 @@ export class Supervisor {
     const tag = `rc-${n}`
     const r = spawnSync("git", ["tag", "-a", tag, "-m", `candidate: ${note}`], { cwd: this.root, encoding: "utf8" })
     if (r.status !== 0) {
-      void this.notifier.send("critical", `candidate tag failed: ${r.stderr}`)
+      void this.notifier.send("critical", this.say(`candidate tag failed: ${r.stderr}`, `후보 태그 실패: ${r.stderr}`))
       this.store.setMeta("release_pending", "1")
       return
     }
@@ -529,10 +529,10 @@ export class Supervisor {
     const judgeSide = changed.some((p) => p.startsWith("evals/rubrics/") || p === "org/departments/verification.md" || p === "org/roles/verification-senior.md")
     if (judgeSide) {
       this.store.setMeta(`replay:${tag}`, "pending")
-      void this.notifier.send("info", `candidate ${tag} changes the judge; replay gate running before any canary traffic`)
+      void this.notifier.send("info", this.say(`candidate ${tag} changes the judge; replay gate running before any canary traffic`, `후보 ${tag}가 심판을 바꿈; 카나리 전에 리플레이 게이트 실행 중`))
       this.startReplays(tag, now)
     } else {
-      void this.notifier.send("info", `candidate ${tag}: ${Math.round(this.config.policy.release.canary_traffic * 100)}% of production sessions run on it for ${this.config.policy.release.watch}`)
+      void this.notifier.send("info", this.say(`candidate ${tag}: ${Math.round(this.config.policy.release.canary_traffic * 100)}% of production sessions run on it for ${this.config.policy.release.watch}`, `후보 ${tag}: 세션의 ${Math.round(this.config.policy.release.canary_traffic * 100)}%가 ${this.config.policy.release.watch} 동안 그 위에서 실행됨`))
     }
   }
 
@@ -581,7 +581,7 @@ export class Supervisor {
     const pending = this.store.getMeta("release_pending") === "1"
     const tag = this.release(`promoted ${rc.tag}: ${why}`, now)
     if (tag === undefined) return
-    void this.notifier.send("info", `candidate ${rc.tag} promoted to ${tag} (${why})`)
+    void this.notifier.send("info", this.say(`candidate ${rc.tag} promoted to ${tag} (${why})`, `후보 ${rc.tag}가 ${tag}로 승격 (${why})`))
     if (pending) this.createCandidate("improvement merged during the previous canary", now)
   }
 
@@ -605,7 +605,7 @@ export class Supervisor {
     this.store.setMeta("release_pending", "0")
     const t = this.store.allTickets().find((x) => x.department === "improvement" && x.state === "done" && x.updated_at >= rc.at)
     this.store.inboxAdd("candidate_withdrawn", t?.id ?? null, { title: `Candidate ${rc.tag} withdrawn: ${why}`, changes: rc.changes, note: "main was reverted to the current release; approve to open a follow-up ticket for Improvement, reject to leave it" }, now, "urgent")
-    void this.notifier.send("critical", `candidate ${rc.tag} withdrawn: ${why}`)
+    void this.notifier.send("critical", this.say(`candidate ${rc.tag} withdrawn: ${why}`, `후보 ${rc.tag} 철회: ${why}`))
   }
 
   /** Replay gate (D54): re-judge labeled tickets with the candidate's judge and compare agreement. */
@@ -622,7 +622,7 @@ export class Supervisor {
     })
     if (sample.length === 0) {
       this.store.setMeta(`replay:${tag}`, "skipped")
-      void this.notifier.send("warning", `replay gate for ${tag}: no labeled ticket has a live branch; the canary decides alone`)
+      void this.notifier.send("warning", this.say(`replay gate for ${tag}: no labeled ticket has a live branch; the canary decides alone`, `${tag} 리플레이 게이트: 라벨된 티켓에 살아있는 브랜치가 없어 카나리만으로 판단`))
       return
     }
     this.store.setMeta(`replay:${tag}:remaining`, String(sample.length))
@@ -670,7 +670,7 @@ export class Supervisor {
     if (after < before + this.config.policy.release.min_gain || regressed.length > 0) {
       this.withdrawCandidate(`replay gate failed: ${summary}${regressed.length ? `; regressed on ${regressed.join(", ")}` : ""}`, now)
     } else {
-      void this.notifier.send("info", `replay gate passed for ${tag}: ${summary}; canary traffic starts`)
+      void this.notifier.send("info", this.say(`replay gate passed for ${tag}: ${summary}; canary traffic starts`, `${tag} 리플레이 게이트 통과: ${summary}; 카나리 시작`))
     }
   }
 
@@ -680,7 +680,7 @@ export class Supervisor {
       if (i.kind === "issue" || i.kind === "graduation" || i.kind === "manual_action" || i.kind === "recovery") continue
       if (now - i.created_at > timeout) {
         this.store.inboxDecide(i.id, "expired", "no answer within the timeout: rejected by default", now)
-        void this.notifier.send("warning", `inbox #${i.id} expired: ${String(i.payload["title"] ?? i.kind)}`)
+        void this.notifier.send("warning", this.say(`inbox #${i.id} expired: ${this.tx(String(i.payload["title"] ?? i.kind))}`, `인박스 #${i.id} 만료: ${this.tx(String(i.payload["title"] ?? i.kind))}`))
       }
     }
   }
@@ -713,7 +713,7 @@ export class Supervisor {
     for (const i of this.store.inboxOpen()) {
       if (i.urgency !== "urgent" || this.store.getMeta(`alerted:${i.id}`) === "1") continue
       this.store.setMeta(`alerted:${i.id}`, "1")
-      void this.notifier.send("critical", `inbox #${i.id} needs you now: ${String(i.payload["title"] ?? i.kind)} — holdco inbox approve|reject ${i.id}`)
+      void this.notifier.send("critical", this.say(`inbox #${i.id} needs you now: ${this.tx(String(i.payload["title"] ?? i.kind))} — holdco inbox approve|reject ${i.id}`, `인박스 #${i.id} 지금 결정 필요: ${this.tx(String(i.payload["title"] ?? i.kind))} — /inbox 또는 holdco inbox approve|reject ${i.id}`))
     }
   }
 
@@ -725,9 +725,9 @@ export class Supervisor {
     const quota = this.quotaLines(now)
     if (items.length === 0 && done.length === 0 && quota.length === 0) return
     void this.notifier.send("info", [
-      `daily: ${done.length} done in 24h · ${items.length} routine item(s) waiting · $${this.store.spentAll(now - DAY).toFixed(2)} spent`,
+      this.say(`daily: ${done.length} done in 24h · ${items.length} routine item(s) waiting · $${this.store.spentAll(now - DAY).toFixed(2)} spent`, `일일: 24시간 완료 ${done.length}건 · 루틴 대기 ${items.length}건 · 지출 $${this.store.spentAll(now - DAY).toFixed(2)}`),
       ...lines,
-      ...(quota.length ? ["limits:", ...quota] : []),
+      ...(quota.length ? [this.say("limits:", "구독 한도:"), ...quota] : []),
     ].join("\n"))
   }
 
@@ -741,7 +741,7 @@ export class Supervisor {
     const demotionsSince = this.store.allDemotions().filter((d) => d.since >= r.at)
     if (demotionsSince.length > 0 && !readControl(this.root).some((i) => i.level === "L4")) {
       raiseInterrupt(this.root, "L4", "*", `release ${r.tag} followed by demotion of ${demotionsSince.map((d) => d.action).join(", ")}`, now)
-      void this.notifier.send("critical", `release-watch: ${r.tag} caused a demotion; L4 raised`)
+      void this.notifier.send("critical", this.say(`release-watch: ${r.tag} caused a demotion; L4 raised`, `릴리스 감시: ${r.tag}가 강등을 일으킴; L4 발동`))
     }
   }
 
@@ -810,6 +810,7 @@ export class Supervisor {
     const found = stalls({
       config: this.config, store: this.store, now, lastCeoAt: lastCeo, after: stallAfterMs(this.config),
       nextCeoAt: this.config.modules.executive === "none" ? null : Math.min(lastCeo + durationMs(this.config.policy.executive.ceo_cycle), lastCeo + WORK_WAKE_MS),
+      lang: this.config.company.language ?? "en",
       admitReason: (t) => { const g = this.admit(t.state === "ready_for_verification" ? "verification" : t.department === "improvement" ? "improvement" : "senior", t.department, active, now, t.state === "ready_for_verification" ? undefined : t); return typeof g === "string" ? g : undefined },
     })
     const current = new Set(found.map((f) => f.ticket_id))
@@ -821,7 +822,7 @@ export class Supervisor {
       this.store.setMeta(key, rec)
       if (f.owner === "kernel") {
         this.log(`stall: ${f.ticket_id} — ${f.reason}`)
-        void this.notifier.send("warning", `${f.ticket_id} has not moved for ${Math.round((now - f.since) / 60_000)}m: ${f.reason}`)
+        void this.notifier.send("warning", this.say(`${f.ticket_id} has not moved for ${Math.round((now - f.since) / 60_000)}m: ${f.reason}`, `${f.ticket_id}가 ${Math.round((now - f.since) / 60_000)}분째 멈춤: ${f.reason}`))
       }
     }
     for (const t of this.store.allTickets()) if (!current.has(t.id) && this.store.getMeta(`stall:${t.id}`)) this.store.setMeta(`stall:${t.id}`, "")
@@ -898,20 +899,20 @@ export class Supervisor {
       const avg = this.store.spent(d.department, now - WEEK) / hours
       if (avg > 0 && d.usd > this.config.policy.tripwires.dept_spend_spike_x * avg && d.usd > this.config.budget.session_max_usd) {
         raiseInterrupt(this.root, "L2", d.department, `spend ${d.usd.toFixed(2)} USD/h > ${this.config.policy.tripwires.dept_spend_spike_x}× weekly hourly average`, now)
-        void this.notifier.send("critical", `tripwire: ${d.department} spend spike; L2 raised`)
+        void this.notifier.send("critical", this.say(`tripwire: ${d.department} spend spike; L2 raised`, `트립와이어: ${d.department} 지출 급증; L2 발동`))
       }
     }
     for (const [id, b] of this.projectBurn(now)) {
       const key = `project_cap:${id}:${new Date(now).toISOString().slice(0, 7)}`
       if (b.cap > 0 && b.cap - b.spent < MIN_SESSION_USD && !this.store.getMeta(key)) {
         this.store.setMeta(key, String(now))
-        void this.notifier.send("warning", (this.config.budget.project_shares ?? "hard") === "hard" ? `project ${id} has spent its ${Math.round(b.share * 100)}% share for the month ($${b.cap.toFixed(2)}); new sessions on it wait for next month or a bigger share (Settings → Projects)` : `project ${id} has spent its ${Math.round(b.share * 100)}% share for the month ($${b.cap.toFixed(2)}); shares are soft, so work continues`)
+        void this.notifier.send("warning", (this.config.budget.project_shares ?? "hard") === "hard" ? this.say(`project ${id} has spent its ${Math.round(b.share * 100)}% share for the month ($${b.cap.toFixed(2)}); new sessions on it wait for next month or a bigger share (Settings → Projects)`, `프로젝트 ${id}가 이달 배분 ${Math.round(b.share * 100)}%($${b.cap.toFixed(2)})를 다 씀; 다음 달이나 배분을 늘리기 전까지 새 세션 없음 (설정 → 프로젝트)`) : this.say(`project ${id} has spent its ${Math.round(b.share * 100)}% share for the month ($${b.cap.toFixed(2)}); shares are soft, so work continues`, `프로젝트 ${id}가 이달 배분 ${Math.round(b.share * 100)}%($${b.cap.toFixed(2)})를 다 씀; soft 배분이라 작업은 계속`))
       }
     }
     for (const [dept, share] of Object.entries(this.config.budget.shares)) {
       if (share * this.config.budget.monthly_usd - this.store.spent(dept, this.monthStart(now)) < MIN_SESSION_USD && !readControl(this.root).some((i) => i.level === "L2" && i.target === dept)) {
         raiseInterrupt(this.root, "L2", dept, "monthly share reached 100%", now)
-        void this.notifier.send("critical", `tripwire: ${dept} monthly share exhausted; L2 raised`)
+        void this.notifier.send("critical", this.say(`tripwire: ${dept} monthly share exhausted; L2 raised`, `트립와이어: ${dept} 월 배분 소진; L2 발동`))
       }
     }
   }
@@ -921,9 +922,9 @@ export class Supervisor {
     const missed = Math.floor((now - last) / WEEK)
     if (missed >= this.config.policy.audit.freeze_after_missed && !readControl(this.root).some((i) => i.level === "L3")) {
       raiseInterrupt(this.root, "L3", "*", `${missed} weekly audit(s) missed`, now)
-      void this.notifier.send("critical", `audit-watch: ${missed} audit(s) missed; graduation and improvement frozen (L3). Run holdco audit, then holdco resume L3 '*'`)
+      void this.notifier.send("critical", this.say(`audit-watch: ${missed} audit(s) missed; graduation and improvement frozen (L3). Run holdco audit, then holdco resume L3 '*'`, `감사 감시: 주간 감사 ${missed}회 누락; 승격·개선 동결(L3). /audit으로 채점한 뒤 holdco resume L3 '*'`))
     } else if (missed >= 1) {
-      void this.notifier.send("warning", `weekly audit is due (last ${new Date(last).toISOString().slice(0, 10)}): send /audit here to grade from your phone, or open the dashboard's Audit page`)
+      void this.notifier.send("warning", this.say(`weekly audit is due (last ${new Date(last).toISOString().slice(0, 10)}): send /audit here to grade from your phone, or open the dashboard's Audit page`, `주간 감사 기한 (마지막 ${new Date(last).toISOString().slice(0, 10)}): 여기서 /audit 보내면 폰으로 채점, 또는 대시보드 감사 화면`))
     }
   }
 
@@ -936,7 +937,7 @@ export class Supervisor {
       }
       if (demotionDue(this.config, labels) && this.store.demotions(a.id) === 0) {
         this.store.demote(a.id, "evaluator–Operator agreement fell below demotion_agreement", now)
-        void this.notifier.send("warning", `${a.id} demoted one tier: agreement below threshold`)
+        void this.notifier.send("warning", this.say(`${a.id} demoted one tier: agreement below threshold`, `${a.id} 한 등급 강등: 일치율이 기준 미달`))
       }
     }
   }
@@ -975,7 +976,7 @@ export class Supervisor {
   private digest(now: number) {
     const text = renderDigest(this.config, this.store, now, this.org.tag, readControl(this.root))
     const path = this.writeReport("digests", new Date(now).toISOString().slice(0, 10), text)
-    void this.notifier.send("info", `weekly digest written: ${path}`)
+    void this.notifier.send("info", this.say(`weekly digest written: ${path}`, `주간 다이제스트 작성: ${path}`))
     if (this.config.modules.executive !== "none") {
       const role = this.org.role("ceo")
       void this.startSession({ ticketId: "CEO-DIGEST", role, cwd: this.root, prompt: `Write the narrative section for this week's digest (report_write kind=digests, name=${new Date(now).toISOString().slice(0, 10)}-narrative). The deterministic digest:\n\n${text}` })
@@ -989,7 +990,7 @@ export class Supervisor {
     const tag = `r${n}`
     const r = spawnSync("git", ["tag", "-a", tag, "-m", note], { cwd: this.root, encoding: "utf8" })
     if (r.status !== 0) {
-      void this.notifier.send("critical", `release failed: ${r.stderr}`)
+      void this.notifier.send("critical", this.say(`release failed: ${r.stderr}`, `릴리스 실패: ${r.stderr}`))
       return undefined
     }
     this.store.addRelease(tag, now, now + durationMs(this.config.policy.release.watch), note)
@@ -999,7 +1000,7 @@ export class Supervisor {
       this.candidate = undefined
     }
     this.org = Org.load(this.root)
-    void this.notifier.send("info", `release ${tag}: ${note}`)
+    void this.notifier.send("info", this.say(`release ${tag}: ${note}`, `릴리스 ${tag}: ${note}`))
     return tag
   }
 
@@ -1025,11 +1026,16 @@ export class Supervisor {
         const key = `quota_alert:${id}:${w.id}:${w.resets_at ?? "none"}`
         if (w.used_pct >= policy.pause_at && !this.store.getMeta(key)) {
           this.store.setMeta(key, String(now))
-          void this.notifier.send("warning", `${id} is at ${Math.round(w.used_pct)}% of its ${w.label} limit${w.resets_at ? ` (resets in ${fmtReset(w.resets_at, now)})` : ""}; no new sessions on it until then. ${renderQuota(q, now)}`)
+          void this.notifier.send("warning", this.say(`${id} is at ${Math.round(w.used_pct)}% of its ${w.label} limit${w.resets_at ? ` (resets in ${fmtReset(w.resets_at, now)})` : ""}; no new sessions on it until then. ${renderQuota(q, now)}`, `${id}가 ${w.label} 한도의 ${Math.round(w.used_pct)}%${w.resets_at ? ` (${fmtReset(w.resets_at, now)} 후 리셋)` : ""}; 그때까지 새 세션 없음. ${renderQuota(q, now)}`))
         }
       }
     }
   }
+
+  /** D75: the kernel's own alert in the Operator's language. */
+  private say(en: string, ko: string): string { return (this.config.company.language ?? "en") === "ko" ? ko : en }
+  /** D75: agent-written text as the Operator reads it (cached translation, else the original). */
+  private tx(text: string): string { return tr(this.store, this.config.company.language ?? "en", text) }
 
   /** D75: translate what the Operator is looking at, in one cheap call per batch, under a daily cap; never twice. */
   private translating = false
@@ -1167,7 +1173,7 @@ export class Supervisor {
     } catch (e) {
       this.store.releaseLease(t.id, sessionId)
       this.store.transition(t.id, "blocked", "kernel", `cannot start session: ${String(e)}`, now)
-      void this.notifier.send("warning", `${t.id} blocked: ${String(e)}`)
+      void this.notifier.send("warning", this.say(`${t.id} blocked: ${String(e)}`, `${t.id} 막힘: ${String(e)}`))
     }
   }
 
@@ -1441,7 +1447,7 @@ export class Supervisor {
       r.toolErrors.set(e.name, n)
       if (n > this.config.policy.tripwires.loop_threshold) {
         raiseInterrupt(this.root, "L1", r.role, `same tool error ${n}× (${e.name})`, this.now())
-        void this.notifier.send("warning", `tripwire: ${r.role} looping on ${e.name}; L1 raised`)
+        void this.notifier.send("warning", this.say(`tripwire: ${r.role} looping on ${e.name}; L1 raised`, `트립와이어: ${r.role}이 ${e.name}에서 반복 실패; L1 발동`))
         r.abort.abort()
       }
     }
@@ -1452,13 +1458,13 @@ export class Supervisor {
       r.toolErrors.set("blocked", n)
       if (n > this.config.policy.tripwires.loop_threshold) {
         raiseInterrupt(this.root, "L1", r.role, `repeated write attempts to locked paths (${n}×): ${e.reason}`, this.now())
-        void this.notifier.send("warning", `tripwire: ${r.role} kept trying blocked actions (${n}×: ${e.reason}); L1 raised`)
+        void this.notifier.send("warning", this.say(`tripwire: ${r.role} kept trying blocked actions (${n}×: ${e.reason}); L1 raised`, `트립와이어: ${r.role}이 차단된 행동을 계속 시도 (${n}회: ${e.reason}); L1 발동`))
         r.abort.abort()
       }
     }
     if ((e.kind === "command" && SECRET.test(e.command)) || (e.kind === "file_change" && e.paths.some((p) => /\.(env|pem|key)$/.test(p)))) {
       raiseInterrupt(this.root, "L5", "*", `secret pattern in session ${r.sessionId}`, this.now())
-      void this.notifier.send("critical", `tripwire: secret pattern in ${r.role}'s session; L5 raised`)
+      void this.notifier.send("critical", this.say(`tripwire: secret pattern in ${r.role}'s session; L5 raised`, `트립와이어: ${r.role} 세션에 시크릿 패턴; L5 발동`))
     }
   }
 
