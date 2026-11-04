@@ -655,6 +655,13 @@
             }
           },
           "additionalProperties": false
+        },
+        "enforce": {
+          "type": "string",
+          "enum": [
+            "metered",
+            "advisory"
+          ]
         }
       },
       "required": [

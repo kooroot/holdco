@@ -9,7 +9,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs"
 import * as NodePath from "node:path"
 import { Exit, Schema } from "effect"
 import { assignmentFor, CompanyConfig, type RoleKind, ROLE_KINDS, type Tier } from "../config/company.ts"
-import { durationMs } from "../config/company.ts"
+import { budgetMode, durationMs } from "../config/company.ts"
 import { formatAssignment, parseAssignment } from "../config/models.ts"
 import { addProject, openTicketsFor, parseVerify, type ProjectClass, ProjectError, removeProject, renderVerify, setProject, setShares } from "../config/projects.ts"
 import { graduationCheck } from "../policy/graduation.ts"
@@ -220,7 +220,7 @@ export const snapshot = (ctx: DashboardContext) => {
     tickets,
     running,
     sessions: recentSessions,
-    budget: { monthly: config.budget.monthly_usd, session_max: config.budget.session_max_usd, spent_month: spentMonth, spent_today: store.spentAll(now - DAY), shares, daily: dailySpend },
+    budget: { mode: budgetMode(config), monthly: config.budget.monthly_usd, session_max: config.budget.session_max_usd, spent_month: spentMonth, spent_today: store.spentAll(now - DAY), shares, daily: dailySpend },
     audit: { weekly_sample: config.policy.audit.weekly_sample, sample: sample.map((t) => ({ id: t.id, title: t.title, department: t.department, action: t.action, branch: t.branch, confidence: store.verdictFor(t.id)?.confidence ?? null })), labels_total: labels.length, agreement: labels.length ? labels.filter((l) => l.agreement === 1).length / labels.length : null, last_audit_at: lastAudit, due: lastAudit === null || now - lastAudit > 7 * DAY, freeze_after_missed: config.policy.audit.freeze_after_missed, recent_labels: store.labelRows().slice(0, 20) },
     quality,
     graduation_policy: config.policy.graduation,

@@ -13,7 +13,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import * as NodePath from "node:path"
 import { spawnSync } from "node:child_process"
 import { Exit, Schema } from "effect"
-import { assignmentFor, authMode, type CompanyConfig, durationMs, type EngineId, type RoleKind } from "../config/company.ts"
+import { assignmentFor, authMode, budgetMode, type CompanyConfig, durationMs, type EngineId, type RoleKind } from "../config/company.ts"
 import { HOST_DENY_READ, UNREADABLE } from "../policy/paths.ts"
 import { effectiveTier, tierForChange, UnknownAction } from "../policy/tiers.ts"
 import { demotionDue, graduationCheck } from "../policy/graduation.ts"
@@ -870,7 +870,7 @@ export class Supervisor {
       `# CEO cycle at ${new Date(now).toISOString()}`,
       `Projects and the Operator's allocation (D70) — share of effort vs. share of this month's project spend, open tickets:`,
       ...this.projectAllocation(now),
-      `Budget this month: ${this.store.spentAll(this.monthStart(now)).toFixed(2)} of ${this.config.budget.monthly_usd} USD spent.`,
+      `Budget this month: ${this.store.spentAll(this.monthStart(now)).toFixed(2)} of ${this.config.budget.monthly_usd} USD spent${budgetMode(this.config) === "advisory" ? " (metered at API rates for comparison; the company runs on subscription logins, whose limits are below)" : ""}.`,
       ...(this.quotaLines(now).length ? ["Subscription limits (the real budget — sessions pause on an engine past its limit; when the week is burning faster than it passes, only core projects run):", ...this.quotaLines(now)] : []),
       "",
       `## New tickets to triage (${news.length}) — use ticket_triage for each${news.length > CEO_LIST_CAP ? `; the oldest ${CEO_LIST_CAP} are listed, the rest next cycle` : ""}`,
@@ -942,6 +942,7 @@ export class Supervisor {
         void this.notifier.send("critical", this.say(`tripwire: ${d.department} spend spike; L2 raised`, `트립와이어: ${d.department} 지출 급증; L2 발동`))
       }
     }
+    if (budgetMode(this.config) === "advisory") return // D79: on subscription logins the dollars never stop work; the plan limits (pollQuota) do
     for (const [id, b] of this.projectBurn(now)) {
       const key = `project_cap:${id}:${new Date(now).toISOString().slice(0, 7)}`
       if (b.cap > 0 && b.cap - b.spent < MIN_SESSION_USD && !this.store.getMeta(key)) {
@@ -1194,20 +1195,43 @@ export class Supervisor {
     const spender = this.spenderOf(kind, department)
     const share = this.config.budget.shares[spender] ?? 0
     const reserved = [...this.running.values()].filter((r) => this.spenderOf(r.kind, r.department) === spender).reduce((a, r) => a + r.cap, 0)
+    const metered = budgetMode(this.config) === "metered"
     let remaining = share * this.config.budget.monthly_usd - this.store.spent(spender, this.monthStart(now)) - reserved
-    if (remaining < MIN_SESSION_USD) return `${spender} has no budget left this month`
-    // D71: the ticket's project has its own share of the month (hard by default).
+    // D79: on subscription logins the dollars are a comparison; the plans' limits above are what pauses work.
+    if (metered && remaining < MIN_SESSION_USD) return `${spender} has no budget left this month`
+    if (!metered) remaining = this.config.budget.session_max_usd
+    // D71: the ticket's project has its own share of the month (hard by default when metered; relative when advisory).
     if (ticket?.project && (this.config.budget.project_shares ?? "hard") === "hard") {
       const b = this.projectBurn(now).get(ticket.project)
       if (b) {
-        if (b.cap === 0) return `project ${ticket.project} has no share of effort; give it one in Settings → Projects`
-        if (b.remaining < MIN_SESSION_USD) return `project ${ticket.project} has spent its ${Math.round(b.share * 100)}% share for the month ($${b.cap.toFixed(2)}); work there waits for next month or a bigger share`
-        remaining = Math.min(remaining, b.remaining)
+        if (b.share === 0) return `project ${ticket.project} has no share of effort; give it one in Settings → Projects`
+        if (metered) {
+          if (b.remaining < MIN_SESSION_USD) return `project ${ticket.project} has spent its ${Math.round(b.share * 100)}% share for the month ($${b.cap.toFixed(2)}); work there waits for next month or a bigger share`
+          remaining = Math.min(remaining, b.remaining)
+        } else {
+          // relative: this project already took far more than its share of what the company spent, and another project is waiting
+          const over = this.projectOvershare(now, ticket.project)
+          if (over) return over
+        }
       }
     }
     const slots = this.config.runtime.max_concurrent_sessions - this.running.size
     if (slots <= 0) return "no free slot"
     return { cap: Math.min(this.config.budget.session_max_usd, remaining) }
+  }
+
+  /** D79 (advisory budgets): a project more than 25 points over its share of this month's spend waits while an under-share project has work. */
+  private projectOvershare(now: number, projectId: string): string | undefined {
+    const burn = this.projectBurn(now)
+    const total = [...burn.values()].reduce((a, b) => a + b.spent, 0)
+    if (total < 5) return undefined // nothing to compare yet
+    const mine = burn.get(projectId)
+    if (!mine) return undefined
+    const actual = mine.spent / total
+    if (actual <= mine.share + 0.25) return undefined
+    const waiting = this.store.ticketsIn(["triaged", "rejected"]).some((t) => t.project && t.project !== projectId && (burn.get(t.project)?.spent ?? 0) / total < (burn.get(t.project)?.share ?? 0))
+    if (!waiting) return undefined
+    return `project ${projectId} has taken ${Math.round(actual * 100)}% of this month's spend against a ${Math.round(mine.share * 100)}% share; projects under their share go first`
   }
 
   /** D71: per project, its cap for the month (share × monthly), what is spent and reserved by running sessions, and the fraction used. */

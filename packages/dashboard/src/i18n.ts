@@ -137,5 +137,5 @@ const KO: Record<string, string> = {
   "w.session": "{d} 세션 실행 중", "w.ceo_triage": "CEO 분류", "w.ceo_proposal": "CEO 제안서 (T2/T3 승인 경로)", "w.coo_review": "COO 검토 (다음 틱)", "w.operator": "당신의 결정 (인박스)", "w.senior_slot": "시니어 세션 (다음 틱, 빈 슬롯)", "w.verification_slot": "검증 세션 (다음 틱)", "w.lease": "리스 (만료되면 회수)", "w.kernel": "커널 (다음 틱)",
   "in {t}": "{t} 후", "now": "지금", "CEO runs in {t}": "CEO {t} 후 실행", "CEO is due now": "CEO 곧 실행", "it opens the next tickets from the strategy": "전략에서 다음 티켓을 엽니다",
   // misc
-  "Dashboard unreachable": "대시보드에 연결할 수 없음", "prompt": "프롬프트", "{a} total · {b} a day": "합계 {a} · 하루 {b}", "{p}% of the monthly budget": "월 예산의 {p}%", "Could not load": "불러올 수 없음", "Loading {id}…": "{id} 불러오는 중…",
+  "Dashboard unreachable": "대시보드에 연결할 수 없음", "You run on subscription logins: these dollars are metered at API rates for comparison and never stop work — the plan limits above are the real cap. Shares steer the CEO and the dispatch order.": "구독 로그인으로 돌아갑니다: 이 달러는 API 단가로 환산한 비교용 수치이며 작업을 멈추지 않습니다 — 진짜 상한은 위의 구독 한도입니다. 배분은 CEO와 배정 순서를 유도합니다.", "prompt": "프롬프트", "{a} total · {b} a day": "합계 {a} · 하루 {b}", "{p}% of the monthly budget": "월 예산의 {p}%", "Could not load": "불러올 수 없음", "Loading {id}…": "{id} 불러오는 중…",
 }

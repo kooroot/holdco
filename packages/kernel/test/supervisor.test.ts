@@ -17,6 +17,7 @@ import { Supervisor } from "../src/supervisor/supervisor.ts"
 import { raise, readControl, clear } from "../src/supervisor/control.ts"
 import { FakeEngine } from "./fake-engine.ts"
 import { hashText } from "../src/supervisor/i18n.ts"
+import { budgetMode } from "../src/config/company.ts"
 import { ingestObservation, recordDecision } from "../src/supervisor/feedback.ts"
 
 const base = mkdtempSync(NodePath.join(tmpdir(), "holdco-sup-"))
@@ -225,6 +226,7 @@ describe("failure paths", () => {
 
   test("the budget gate refuses sessions once the department share is spent", async () => {
     const c = company("budget", (raw) => {
+      ;(raw["budget"] as Record<string, unknown>)["enforce"] = "metered" // this test is about the dollar gate (D79: advisory on subscription logins)
       ;(raw["budget"] as Record<string, unknown>)["monthly_usd"] = 1
       ;(raw["budget"] as Record<string, unknown>)["session_max_usd"] = 0.5
     })
@@ -275,6 +277,7 @@ describe("failure paths", () => {
 describe("project shares are budget (D71)", () => {
   test("a project that spent its share gets no new session; the other project keeps working; the Operator is told once", async () => {
     const c = company("projshare", (raw) => {
+      ;(raw["budget"] as Record<string, unknown>)["enforce"] = "metered" // this test is about the dollar gate (D79: advisory on subscription logins)
       ;(raw["budget"] as Record<string, unknown>)["monthly_usd"] = 100
       ;(raw["budget"] as Record<string, unknown>)["session_max_usd"] = 5
       ;(raw["projects"] as Array<Record<string, unknown>>).push({ id: "side", path: `../projshare-app`, class: "experiment", share: 0.1, kill_criteria: "none", locked: [] })
@@ -303,6 +306,7 @@ describe("project shares are budget (D71)", () => {
   })
   test("soft shares only steer: the capped project still runs", async () => {
     const c = company("projsoft", (raw) => {
+      ;(raw["budget"] as Record<string, unknown>)["enforce"] = "metered" // this test is about the dollar gate (D79: advisory on subscription logins)
       ;(raw["budget"] as Record<string, unknown>)["monthly_usd"] = 100
       ;(raw["budget"] as Record<string, unknown>)["project_shares"] = "soft"
       ;(raw["projects"] as Array<Record<string, unknown>>)[0]!["share"] = 0.05
@@ -395,6 +399,7 @@ describe("the Operator reads the company in Korean (D75)", () => {
   })
   test("the kernel's own alerts and stall reasons come in Korean too", async () => {
     const c = company("i18n-alerts", (raw) => {
+      ;(raw["budget"] as Record<string, unknown>)["enforce"] = "metered" // this test is about the dollar gate (D79: advisory on subscription logins)
       ;(raw["company"] as Record<string, unknown>)["language"] = "ko"
       ;(raw["budget"] as Record<string, unknown>)["monthly_usd"] = 1
       ;(raw["budget"] as Record<string, unknown>)["session_max_usd"] = 0.5
@@ -449,6 +454,33 @@ describe("inbox decisions reach the ticket (review D76)", () => {
     s.transition(t.id, "triaged", "ceo", "decided: go with option B", 2)
     expect(s.ticket(t.id)?.attempts).toBe(0)
     s.close()
+  })
+})
+
+describe("dollars are advisory on subscription logins (D79)", () => {
+  test("a spent department share raises no L2 and refuses no session; the plan limits still pause", async () => {
+    const c = company("advisory", (raw) => {
+      ;(raw["budget"] as Record<string, unknown>)["monthly_usd"] = 1
+      ;(raw["budget"] as Record<string, unknown>)["session_max_usd"] = 0.5
+    })
+    expect(budgetMode(c.config)).toBe("advisory") // the fixture's engines are subscription logins
+    const clock = { now: Date.UTC(2026, 10, 4, 9) }
+    const engine = new FakeEngine({}, 0.5)
+    const { sup, store, sent } = makeSupervisor(c, engine, clock)
+    await sup.boot()
+    store.charge({ at: clock.now, role: "test", department: "engineering", project: null, session_id: null, usd: 5, source: "test" }) // far past every share
+    const t = store.createTicket({ department: "engineering", title: "still works", goal: "y", why: "z", done_criteria: ["a"], opened_by: "operator", project: "app", state: "triaged", action: "code.merge.app", now: clock.now })
+    await cycle(sup, clock, 6)
+    expect(engine.runs.filter((r) => r.role.kind === "senior").map((r) => r.ticketId)).toContain(t.id)
+    expect(readControl(c.dir).some((i) => i.level === "L2")).toBe(false)
+    expect(sent.some((s) => s.includes("share exhausted") || s.includes("배분 소진"))).toBe(false)
+    // the real cap: a plan window past pause_at
+    engine.quotaAnswer = { plan: "max", windows: [{ id: "5h", label: "5-hour", usedPct: 95, resetsAt: clock.now + 3_600_000, lengthMs: 5 * 3_600_000 }] }
+    await cycle(sup, clock, 6)
+    const t2 = store.createTicket({ department: "engineering", title: "waits", goal: "y", why: "z", done_criteria: ["a"], opened_by: "operator", project: "app", state: "triaged", action: "code.merge.app", now: clock.now })
+    await cycle(sup, clock, 3)
+    expect(engine.runs.map((r) => r.ticketId)).not.toContain(t2.id)
+    await sup.stop()
   })
 })
 

@@ -15,7 +15,7 @@ export const Spend = () => {
   const rows = [...S.running.map((r) => ({ id: r.id, role: r.role, ticket_id: r.ticket_id, engine: r.engine, model: r.model, status: null as string | null, turns: 0, cost_usd: 0, started_at: r.started_at })), ...S.sessions.filter((x) => x.ended_at)]
   return (
     <>
-      <Head title={t("Sessions & spend")} lead={t("Costs are metered in USD at API rates even on a subscription, so budgets and tripwires mean the same everywhere.")} />
+      <Head title={t("Sessions & spend")} lead={b.mode === "advisory" ? t("You run on subscription logins: these dollars are metered at API rates for comparison and never stop work — the plan limits above are the real cap. Shares steer the CEO and the dispatch order.") : t("Costs are metered in USD at API rates even on a subscription, so budgets and tripwires mean the same everywhere.")} />
       <div {...ui.stack()}>
         {S.quotas.length ? <Card pad><div {...ui.stack()}>
           <div><h3 {...ui.h3()}>{t("Subscription limits")}</h3><p {...cn(ui.small(), ui.muted())} style={{ margin: "4px 0 0" }}>{t("The real budget: your Claude Code and Codex plans' rate-limit windows, read from their usage endpoints and from the sessions themselves. An engine past the pause threshold starts no new session until the window resets; when the week is burning faster than it passes, only core projects run.")}</p></div>

@@ -161,6 +161,10 @@ const Engines = Schema.Struct({
 })
 
 export const authMode = (e: { auth?: AuthMode | undefined } | undefined): AuthMode => e?.auth ?? "api_key"
+/** D79: are the dollar budgets real money (an API key somewhere) or a comparison (subscription logins only)? */
+export const budgetMode = (c: Pick<CompanyConfig, "engines" | "budget">): "metered" | "advisory" =>
+  c.budget.enforce ?? (Object.values(c.engines).some((e) => authMode(e as { auth?: AuthMode }) === "api_key") ? "metered" : "advisory")
+
 
 /** `ultra` exists only on Codex (maximum reasoning with automatic delegation); rejected for Claude roles. */
 export const Effort = Schema.Literals(["low", "medium", "high", "xhigh", "max", "ultra"])
@@ -208,6 +212,14 @@ const Budget = Schema.Struct({
    * executive run until it is back on pace.
    */
   quota: Schema.optionalKey(Schema.Struct({ pause_at: Schema.optionalKey(IntIn(50, 100)), pace: Schema.optionalKey(Schema.Boolean), pace_margin: Schema.optionalKey(IntIn(0, 50)) })),
+  /**
+   * D79: whether the dollar figures stop work. `metered` (the default when any engine uses an API key): a spender or
+   * project that has used its share gets no new session and an L2 is raised. `advisory` (the default when every
+   * engine is a subscription login): the dollars are a comparison metered at API rates — shares steer the CEO and the
+   * dispatch order, the project caps become relative (a project far over its share of spend waits while others have
+   * work), and only the plans' real limits (budget.quota) pause the company.
+   */
+  enforce: Schema.optionalKey(Schema.Literals(["metered", "advisory"])),
 })
 
 const Project = Schema.Struct({
