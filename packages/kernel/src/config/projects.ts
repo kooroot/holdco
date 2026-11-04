@@ -9,6 +9,7 @@ import * as NodePath from "node:path"
 import { Exit, Schema } from "effect"
 import { CompanyConfig } from "./company.ts"
 import { DEFAULT_LOCKED, projectIdFor } from "../scaffold/scaffold.ts"
+import { ensureFirstCommit } from "../supervisor/worktrees.ts"
 import { TRANSITIONS, type Store, type Ticket } from "../store/store.ts"
 
 export type Project = CompanyConfig["projects"][number]
@@ -58,6 +59,7 @@ export interface AddProject {
 export const addProject = (root: string, config: CompanyConfig, a: AddProject): { config: CompanyConfig; project: Project } => {
   const abs = NodePath.resolve(root, a.path)
   if (!existsSync(NodePath.join(abs, ".git"))) throw new ProjectError(`${abs} is not a git repository`)
+  ensureFirstCommit(abs) // an empty repository is a fine project; it just needs a commit to branch from
   const id = a.id ?? projectIdFor(abs)
   if (!/^[a-z][a-z0-9-]{0,31}$/.test(id)) throw new ProjectError(`project id '${id}': a lowercase letter, then letters, digits and dashes, at most 32 (pass --id)`)
   if (config.projects.some((p) => p.id === id)) throw new ProjectError(`project '${id}' is already registered (holdco project set ${id} … to change it)`)

@@ -449,6 +449,8 @@ export const act = async (ctx: DashboardContext, a: Action): Promise<Record<stri
       const title = a.title.trim()
       if (!title) throw new ActionError("a title is required")
       if (!config.modules.departments.includes(a.department) && a.department !== "improvement") throw new ActionError(`department '${a.department}' is not enabled`)
+      // D80: with several projects an unnamed one would land in the first — the wrong repository, silently
+      if (a.project == null && a.department !== "improvement" && config.projects.length > 1) throw new ActionError(`pick the project this ticket is for (${config.projects.map((p) => p.id).join(", ")})`)
       const project = a.project ?? config.projects[0]?.id ?? null
       if (project !== null && !config.projects.some((p) => p.id === project)) throw new ActionError(`unknown project '${project}'`)
       const action = a.action || null

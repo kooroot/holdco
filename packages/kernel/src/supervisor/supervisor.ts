@@ -41,7 +41,7 @@ import { consoleNotifier, type Notifier } from "./notify.ts"
 import { Org, projectInstructions } from "./org.ts"
 import { renderDigest } from "./digest.ts"
 import { type SessionBinding, ToolServer, type ToolHost } from "./tools.ts"
-import { changedPaths, createDetachedWorktree, createWorktree, defaultBranch, provisionDependencies, removeTicketWorktrees, removeWorktree } from "./worktrees.ts"
+import { changedPaths, createDetachedWorktree, createWorktree, defaultBranch, ensureFirstCommit, provisionDependencies, removeTicketWorktrees, removeWorktree } from "./worktrees.ts"
 
 export interface SupervisorOptions {
   readonly companyRoot: string
@@ -1292,8 +1292,11 @@ export class Supervisor {
       branch = `imp/${t.id}`
       cwd = createWorktree(this.root, `imp-${t.id}`, branch, this.org.tag)
     } else {
-      if (project === undefined) throw new Error(`ticket ${t.id} has no project; department work needs one`)
+      if (project === undefined) throw new Error(`ticket ${t.id} has no project; department work needs one (ticket_edit, or the CEO's ticket_create with project)`)
       projectRoot = this.resolveProject(project.path)
+      if (!existsSync(NodePath.join(projectRoot, ".git"))) throw new Error(`project ${project.id}: ${projectRoot} is not a git repository (projects[].path in company.yaml)`)
+      const first = ensureFirstCommit(projectRoot) // D80: a project registered before its first commit gets one from the kernel
+      if (first) { this.log(`${project.id}: ${first}`); void this.notifier.send("info", this.say(`${project.id}: ${first}`, `${project.id}: 첫 커밋 생성 (저장소가 비어 있었음)`)) }
       branch = `t/${t.id}`
       cwd = createWorktree(projectRoot, `t-${t.id}`, branch, defaultBranch(projectRoot))
     }

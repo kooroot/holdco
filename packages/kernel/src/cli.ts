@@ -253,6 +253,10 @@ const doctor = async (dir: string): Promise<Array<Check>> => {
     for (const p of config.projects) {
       const abs = NodePath.resolve(dir, p.path)
       add(`project '${p.id}' is a git repository (${p.path})`, existsSync(NodePath.join(abs, ".git")), "holdco project add <path>, or fix projects[].path")
+      if (existsSync(NodePath.join(abs, ".git"))) {
+        const { hasCommits, defaultBranch } = await import("./supervisor/worktrees.ts")
+        add(`project '${p.id}' has a commit to branch from (${hasCommits(abs) ? defaultBranch(abs) : "empty"})`, hasCommits(abs), "the kernel makes an empty first commit when the first ticket starts; or commit something yourself", true)
+      }
     }
     if (config.projects.length === 0) add("a project is registered", false, "holdco project add ../your-repo; departments cannot work without one", true)
     if (config.projects.some((p) => p.merge === "github")) {

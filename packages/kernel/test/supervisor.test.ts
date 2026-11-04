@@ -656,6 +656,60 @@ describe("Operator notes (D55)", () => {
   })
 })
 
+describe("a project that has no commits yet (D80)", () => {
+  test("the kernel makes the first commit — with the files sitting uncommitted — and the ticket starts in a worktree of it", async () => {
+    const fresh = NodePath.join(base, "fresh-proj")
+    mkdirSync(NodePath.join(fresh, "lib"), { recursive: true })
+    mkdirSync(NodePath.join(fresh, "build"), { recursive: true })
+    git(fresh, "init", "-q", "-b", "main")
+    writeFileSync(NodePath.join(fresh, "pubspec.yaml"), "name: fresh\n")
+    writeFileSync(NodePath.join(fresh, "lib", "main.dart"), "void main() {}\n")
+    writeFileSync(NodePath.join(fresh, ".env"), "SECRET=1\n")
+    writeFileSync(NodePath.join(fresh, "build", "out.bin"), "x\n")
+    const { defaultBranch, hasCommits } = await import("../src/supervisor/worktrees.ts")
+    expect(hasCommits(fresh)).toBe(false)
+    expect(defaultBranch(fresh)).toBe("main") // unborn HEAD still names its branch — never "HEAD"
+    const c = company("fresh", (raw) => {
+      ;(raw["projects"] as Array<Record<string, unknown>>).push({ id: "fresh", path: "../fresh-proj", class: "experiment", share: 0.5, kill_criteria: "none", locked: [] })
+      ;(raw["projects"] as Array<Record<string, unknown>>)[0]!["share"] = 0.5
+    })
+    const clock = { now: Date.UTC(2026, 10, 4, 9) }
+    const engine = new FakeEngine({ senior: async ({ spec }) => { expect(existsSync(NodePath.join(spec.cwd, "lib", "main.dart"))).toBe(true); return {} }, ceo: async () => ({}) })
+    const { sup, store, sent } = makeSupervisor(c, engine, clock)
+    await sup.boot()
+    const t = store.createTicket({ department: "engineering", title: "first feature", goal: "y", why: "z", done_criteria: ["a"], opened_by: "operator", project: "fresh", state: "triaged", action: "code.merge.app", now: clock.now })
+    await cycle(sup, clock, 3)
+    expect(engine.runs.filter((r) => r.role.kind === "senior").map((r) => r.ticketId)).toContain(t.id)
+    expect(store.ticket(t.id)?.state).not.toBe("blocked")
+    expect(hasCommits(fresh)).toBe(true)
+    const tracked = git(fresh, "ls-files").split("\n").filter(Boolean)
+    expect(tracked).toEqual(["lib/main.dart", "pubspec.yaml"]) // secrets and build output stayed out
+    expect(sent.some((s) => s.includes("first commit made on main with the 2 files"))).toBe(true)
+    await sup.stop()
+  })
+
+  test("with several projects the CEO must name the ticket's project; one project is still the default", async () => {
+    const c = company("twoproj", (raw) => {
+      ;(raw["projects"] as Array<Record<string, unknown>>).push({ id: "side", path: "../twoproj-app", class: "experiment", share: 0.2, kill_criteria: "none", locked: [] })
+      ;(raw["projects"] as Array<Record<string, unknown>>)[0]!["share"] = 0.8
+    })
+    const clock = { now: Date.UTC(2026, 10, 4, 9) }
+    const errors: Array<string> = []
+    const engine = new FakeEngine({ ceo: async ({ spec, call }) => {
+      if (!spec.prompt.startsWith("# CEO cycle")) return {}
+      try { await call("ticket_create", { department: "engineering", title: "where?", goal: "g", why: "w", done_criteria: ["d"] }) } catch (e) { errors.push(String(e)) }
+      await call("ticket_create", { department: "engineering", title: "named", goal: "g", why: "w", done_criteria: ["d"], project: "side" })
+      return {}
+    } })
+    const { sup, store } = makeSupervisor(c, engine, clock)
+    await sup.boot()
+    await cycle(sup, clock, 3)
+    expect(errors.some((e) => e.includes("name the one this ticket is for"))).toBe(true)
+    expect(store.ticketsIn(["new", "triaged"]).map((t) => [t.title, t.project])).toEqual([["named", "side"]])
+    await sup.stop()
+  })
+})
+
 describe("worktree dependencies", () => {
   test("a fresh worktree shares the main checkout's node_modules by symlink; nothing happens without a lockfile", async () => {
     const { provisionDependencies, createWorktree } = await import("../src/supervisor/worktrees.ts")

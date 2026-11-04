@@ -19,13 +19,41 @@ export const defaultBranch = (repo: string): string => {
   for (const b of ["main", "master"]) {
     if (spawnSync("git", ["rev-parse", "--verify", "--quiet", b], { cwd: repo }).status === 0) return b
   }
-  return spawnSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: repo, encoding: "utf8" }).stdout.trim()
+  // the checked-out branch; on a repository with no commits yet HEAD is unborn and `--abbrev-ref` prints "HEAD", so read the symbolic ref
+  const head = spawnSync("git", ["symbolic-ref", "--short", "-q", "HEAD"], { cwd: repo, encoding: "utf8" }).stdout.trim()
+  return head || spawnSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: repo, encoding: "utf8" }).stdout.trim() || "main"
+}
+
+/** Does the repository have a commit at all? A freshly `git init`ed project does not, and no worktree can branch from nothing. */
+export const hasCommits = (repo: string): boolean => spawnSync("git", ["rev-parse", "--verify", "--quiet", "HEAD"], { cwd: repo }).status === 0
+
+/**
+ * D80: a project registered before its first commit (a new idea, `git init` and nothing else) gets its first commit
+ * from the kernel — empty, on the branch HEAD points to — so the first ticket can start instead of failing with
+ * "bad revision HEAD". Returns what was done, for the log; undefined when nothing was needed.
+ */
+/** Never swept into the kernel's first commit when the project has no .gitignore of its own: secrets and generated trees. */
+const FIRST_COMMIT_SKIP = [".env", ".env.*", "*.pem", "*.key", "*.p12", "*.jks", "node_modules/", "build/", "dist/", "out/", "target/", ".dart_tool/", ".venv/", "__pycache__/", ".DS_Store"]
+
+export const ensureFirstCommit = (repo: string): string | undefined => {
+  if (hasCommits(repo)) return undefined
+  const git = (args: ReadonlyArray<string>) => spawnSync("git", ["-c", "user.name=holdco", "-c", "user.email=holdco@localhost", "-c", "commit.gpgsign=false", ...args], { cwd: repo, encoding: "utf8" })
+  // files already there (a project written before anyone committed) go into the commit — a worktree branched from
+  // an empty commit would show the department an empty project and it would start over. Secrets and build output stay out.
+  const skip = existsSync(NodePath.join(repo, ".gitignore")) ? [] : FIRST_COMMIT_SKIP.flatMap((p) => [`:(exclude,glob)${p.endsWith("/") ? `**/${p}**` : `**/${p}`}`])
+  const add = git(["add", "-A", "--", ".", ...skip])
+  if (add.status !== 0) throw new Error(`${repo} has no commits and the kernel could not stage its files: ${add.stderr.trim()}`)
+  const staged = git(["diff", "--cached", "--name-only"]).stdout.split("\n").filter(Boolean).length
+  const r = git(["commit", "--allow-empty", "-q", "-m", staged ? `holdco: first commit (${staged} files were in the working tree, uncommitted, when work started)` : "holdco: first commit (the repository was empty when work started)"])
+  if (r.status !== 0) throw new Error(`${repo} has no commits and the kernel could not make the first one: ${(r.stderr || r.stdout).trim()}`)
+  return staged ? `first commit made on ${defaultBranch(repo)} with the ${staged} files that were sitting uncommitted` : `first commit made on ${defaultBranch(repo)} (the repository was empty)`
 }
 
 /** Create (or reuse) the worktree for a branch; the branch is created from `base` when missing. */
 export const createWorktree = (repo: string, name: string, branch: string, base: string): string => {
   const dir = worktreeDir(repo, name)
   if (existsSync(dir)) return dir
+  ensureFirstCommit(repo)
   const exists = spawnSync("git", ["rev-parse", "--verify", "--quiet", branch], { cwd: repo }).status === 0
   git(repo, exists ? ["worktree", "add", dir, branch] : ["worktree", "add", "-b", branch, dir, base])
   initSubmodules(dir)

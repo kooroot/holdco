@@ -23,7 +23,7 @@ export const NewTicket = ({ onClose }: { onClose: () => void }) => {
   const existing = useTicket(editId)
   const depts = useMemo(() => [...(S?.departments ?? []), ...(S?.org.improvement ? ["improvement"] : [])], [S])
   const [f, setF] = useState({ department: "", project: "", action: "", priority: "3", title: "", goal: "", why: "", criteria: "" })
-  useEffect(() => { if (S && !f.department) setF((x) => ({ ...x, department: depts[0] ?? "", project: S.projects[0]?.id ?? "" })) }, [S, depts, f.department])
+  useEffect(() => { if (S && !f.department) setF((x) => ({ ...x, department: depts[0] ?? "", project: S.projects.length === 1 ? S.projects[0]!.id : "" })) }, [S, depts, f.department])
   useEffect(() => { const t = existing.data?.ticket; if (t) setF({ department: t.department, project: t.project ?? "", action: t.action ?? "", priority: String(t.priority), title: t.title, goal: t.goal, why: t.why, criteria: t.done_criteria.join("\n") }) }, [existing.data])
   const actions = S?.settings.actions.filter((a) => a.department === f.department) ?? []
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF((x) => ({ ...x, [k]: e.target.value }))
