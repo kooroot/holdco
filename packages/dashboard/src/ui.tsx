@@ -108,8 +108,9 @@ export const VerdictPill = ({ verdict }: { verdict: string }) => <Pill tone={ver
 export const Card = ({ pad, children, className, style: st }: { pad?: boolean; children: ReactNode; className?: string; style?: React.CSSProperties }) => (
   <div className={join(cx(s.card(), pad && s.pad()).className, className)} style={st}>{children}</div>
 )
-export const Meter = ({ ratio, tip }: { ratio: number; tip?: string }) => {
-  const bar = <div {...ui.meter()}><i {...cx(s.meterFill(), ratio > 0.9 && s.meterBad(), ratio > 0.7 && ratio <= 0.9 && s.meterWarn())} style={{ width: `${Math.min(100, Math.max(0, ratio * 100))}%` }} /></div>
+/** `plain` keeps the fill neutral: the ratio is a share, not a fill level, so a high value is not a warning. */
+export const Meter = ({ ratio, tip, plain }: { ratio: number; tip?: string; plain?: boolean }) => {
+  const bar = <div {...ui.meter()}><i {...cx(s.meterFill(), !plain && ratio > 0.9 && s.meterBad(), !plain && ratio > 0.7 && ratio <= 0.9 && s.meterWarn())} style={{ width: `${Math.min(100, Math.max(0, ratio * 100))}%` }} /></div>
   return tip ? <Tip text={tip} block>{bar}</Tip> : bar
 }
 

@@ -91,6 +91,8 @@ describe("dashboard", () => {
     expect(t3.verdict.summary).toBe("looks right")
     expect(body.tickets.length).toBe(2)
     expect(body.budget.spent_month).toBeCloseTo(0.42)
+    expect(body.budget.mode).toBe("advisory") // subscription logins: the dollars are a comparison, so no project is ever "capped" (D81)
+    expect(body.projects.every((p: any) => p.capped === false)).toBe(true)
     expect(body.audit.sample.map((t: any) => t.id)).toEqual(["ENG-1"])
     expect(body.audit.due).toBe(true)
     expect(body.quality.find((q: any) => q.id === "code.merge.app").tier).toBe("T2")

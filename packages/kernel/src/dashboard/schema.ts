@@ -40,7 +40,7 @@ export const SessionRow = Schema.Struct({
   started_at: Num, ended_at: NullNum, status: NullStr, turns: Num, cost_usd: Num, cost_source: NullStr, report: NullStr, boot_id: Str, release: NullStr, engine_session_id: Schema.optionalKey(NullStr),
 })
 
-export const Share = Schema.Struct({ department: Str, cap: Num, used: Num, ratio: Num })
+export const Share = Schema.Struct({ department: Str, share: Num, cap: Num, used: Num, ratio: Num, actual: Num })
 export const Budget = Schema.Struct({ mode: Schema.Literals(["metered", "advisory"]), monthly: Num, session_max: Num, spent_month: Num, spent_today: Num, shares: Schema.Array(Share), daily: Schema.Array(Schema.Struct({ day: Str, usd: Num })) })
 
 export const AuditSampleItem = Schema.Struct({ id: Str, title: Str, department: Str, action: NullStr, branch: NullStr, confidence: NullStr })

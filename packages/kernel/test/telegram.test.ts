@@ -120,6 +120,11 @@ describe("telegram bridge", () => {
   test("commands: status, tickets, note, unblock, new, pause/resume", async () => {
     const b = bridge()
     expect(await b.command("/status")).toContain("Inbox: 1")
+    expect(await b.command("/status")).toContain("Month: $0.00 of $400") // the full preset meters real money
+    const advisory = { ...config, budget: { ...config.budget, enforce: "advisory" as const } }
+    const ba = new TelegramBridge({ ctx: { root: dir, config: () => advisory, store, now: () => now, saveConfig: () => {} }, token: "T", chatId: "4242", fetch: fakeFetch, pollSeconds: 0 })
+    expect(await ba.command("/status")).toContain("(API-rate equivalent)") // D81: no "of $N" cap on subscription logins
+    expect(await ba.command("/status")).not.toContain(" of $")
     expect(await b.command("/tickets")).toContain("⛔ <code>RES-1</code>")
     expect(await b.command("/note eng-1 Round to cents first")).toContain("Noted on ENG-1")
     expect(store.comments("ENG-1").map((c) => c.body)).toEqual(["Round to cents first"])

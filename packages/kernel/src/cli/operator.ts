@@ -7,7 +7,7 @@ import { spawnSync } from "node:child_process"
 import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs"
 import * as NodePath from "node:path"
 import { Exit, Schema } from "effect"
-import { assignmentFor, authMode, CompanyConfig, type EngineId, ENGINE_IDS, ROLE_KINDS, type RoleKind, type Tier } from "../config/company.ts"
+import { assignmentFor, authMode, CompanyConfig, type EngineId, ENGINE_IDS, ROLE_KINDS, type RoleKind, type Tier, budgetMode } from "../config/company.ts"
 import { defaultRoles, EXAMPLE_PRICES, formatAssignment, MODEL_DEFAULTS, MODEL_MODES, type ModelMode, parseAssignment, PRICES_CHECKED_ON } from "../config/models.ts"
 import type { Engine } from "../engine/types.ts"
 import { renderCompanyYaml } from "../scaffold/scaffold.ts"
@@ -304,7 +304,7 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
       const inter = readControl(dir)
       console.log(`interrupts: ${inter.length ? inter.map((i) => `${i.level}:${i.target} (${i.reason ?? ""})`).join(", ") : "none"}`)
       const monthAgo = now - 30 * 86_400_000
-      console.log(`spend (30d): $${store.spentAll(monthAgo).toFixed(2)} of $${config.budget.monthly_usd} — ${store.spentByDepartment(monthAgo).map((d) => `${d.department} $${d.usd.toFixed(2)}`).join(", ") || "nothing"}`)
+      console.log(`spend (30d): $${store.spentAll(monthAgo).toFixed(2)}${budgetMode(config) === "advisory" ? " (API-rate equivalent; the plan limits are the cap)" : ` of $${config.budget.monthly_usd}`} — ${store.spentByDepartment(monthAgo).map((d) => `${d.department} $${d.usd.toFixed(2)}`).join(", ") || "nothing"}`)
       for (const id of Object.keys(config.engines) as Array<EngineId>) { const q = readQuota(store, id); if (q) { const v = quotaVerdict(q, quotaPolicy(config), now); console.log(`limits: ${renderQuota(q, now)}${v.kind === "ok" ? "" : ` — ${v.reason}`}`) } }
       const open = store.openSessions()
       console.log(`sessions running: ${open.length}${open.length ? ` (${open.map((s) => `${s.role}@${s.ticket_id}`).join(", ")})` : ""}`)
@@ -521,8 +521,10 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
           const store = Store.open(dir)
           const since = new Date(); since.setUTCDate(1); since.setUTCHours(0, 0, 0, 0)
           const spent = Object.fromEntries(store.spentByProject(since.getTime()).map((r) => [r.project ?? "", r.usd]))
-          console.log("id               class        share   spent / cap (month)   open  path  ·  verify  ·  min tier")
-          for (const pr of config.projects) console.log(`${pr.id.padEnd(16)} ${pr.class.padEnd(12)} ${pct(pr.share).padStart(5)}   ${`$${(spent[pr.id] ?? 0).toFixed(2)} / $${(pr.share * config.budget.monthly_usd).toFixed(2)}`.padStart(19)}  ${String(openTicketsFor(store, pr.id).length).padStart(4)}  ${pr.path}${pr.verify ? `  ·  ${renderVerify(pr.verify)}` : ""}${pr.min_tier ? `  ·  ≥${pr.min_tier}` : ""}`)
+          const advisory = budgetMode(config) === "advisory"
+          const spentTotal = Object.values(spent).reduce((a, b) => a + b, 0)
+          console.log(`id               class        share   ${advisory ? "spent · actual share " : "spent / cap (month) "}  open  path  ·  verify  ·  min tier`)
+          for (const pr of config.projects) console.log(`${pr.id.padEnd(16)} ${pr.class.padEnd(12)} ${pct(pr.share).padStart(5)}   ${(advisory ? `$${(spent[pr.id] ?? 0).toFixed(2)} · ${spentTotal > 0 ? pct((spent[pr.id] ?? 0) / spentTotal) : "—"}` : `$${(spent[pr.id] ?? 0).toFixed(2)} / $${(pr.share * config.budget.monthly_usd).toFixed(2)}`).padStart(19)}  ${String(openTicketsFor(store, pr.id).length).padStart(4)}  ${pr.path}${pr.verify ? `  ·  ${renderVerify(pr.verify)}` : ""}${pr.min_tier ? `  ·  ≥${pr.min_tier}` : ""}`)
           const total = config.projects.reduce((a, pr) => a + pr.share, 0)
           if (total < 0.999) console.log(`${pct(1 - total)} of effort is unallocated (the CEO treats it as free)`)
           store.close()

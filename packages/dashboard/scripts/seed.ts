@@ -26,6 +26,7 @@ const dir = NodePath.join(base, "co")
 scaffold({ dir, preset: "full", github: "operator", kernelVersion: "0.0.0", companyName: "acme", mission: "Ship acme: the product this seed pretends to run" })
 const raw = Bun.YAML.parse(readFileSync(NodePath.join(dir, "company.yaml"), "utf8")) as any
 raw.projects = [{ id: "acme", path: "../acme", class: "core", share: 1, locked: [] }]
+raw.budget.enforce = process.env["ENFORCE"] ?? "advisory" // the seed shows the subscription-login look by default (D81)
 raw.budget.shares = { engineering: 0.3, research: 0.05, gtm: 0.05, operations: 0.05, verification: 0.2, executive: 0.25, improvement: 0.1 }
 const config = Schema.decodeUnknownSync(CompanyConfig)(raw)
 writeFileSync(NodePath.join(dir, "company.yaml"), renderCompanyYaml(config, "full"))

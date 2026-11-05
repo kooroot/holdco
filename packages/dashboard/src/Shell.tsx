@@ -88,8 +88,10 @@ export const Shell = ({ children }: { children: ReactNode }) => {
             <div {...cn(st.status(), ui.num())}><span>{q.engine}{q.verdict.kind !== "ok" ? ` · ${q.verdict.kind === "pause" ? t("paused") : t("pacing")}` : ""}</span><span style={{ marginLeft: "auto" }}>{q.windows.map((w) => `${w.label.replace("-hour", "h").replace("-day", "d")} ${Math.round(w.used_pct)}%`).join(" · ")}</span></div>
             {q.windows.slice(0, 2).map((w) => <div key={w.id} style={{ marginTop: 3 }}><Meter ratio={w.used_pct / 100} tip={`${q.engine} ${w.label} · ${Math.round(w.used_pct)}%${w.resets_at ? ` · ↻ ${left(w.resets_at - S.now)}` : ""}`} /></div>)}
           </div>)}
-          <div {...cn(st.status(), ui.num())}>{S ? t("{a} of {b} this month", { a: usd(S.budget.spent_month), b: usd(S.budget.monthly) }) : "—"}</div>
-          <Meter ratio={ratio} tip={S ? `${usd(S.budget.spent_month)} / ${usd(S.budget.monthly)} · ${Math.round(ratio * 100)}%` : ""} />
+          {S?.budget.mode === "advisory"
+            ? <div {...cn(st.status(), ui.num())} title={t("metered at API rates for comparison; the plan limits above are the cap")}>{t("{a} this month (API-rate equivalent)", { a: usd(S.budget.spent_month) })}</div>
+            : <><div {...cn(st.status(), ui.num())}>{S ? t("{a} of {b} this month", { a: usd(S.budget.spent_month), b: usd(S.budget.monthly) }) : "—"}</div>
+              <Meter ratio={ratio} tip={S ? `${usd(S.budget.spent_month)} / ${usd(S.budget.monthly)} · ${Math.round(ratio * 100)}%` : ""} /></>}
         </div>
       </aside>
       <main {...st.main()}>{q.isError && !S ? <Empty title={t("Dashboard unreachable")}>{q.error.message}</Empty> : children}</main>

@@ -5,7 +5,7 @@
  * NAT. Only the configured chat may act; every action is the same operation the dashboard and CLI
  * perform (`act`), so the kernel's rules apply unchanged.
  */
-import type { CompanyConfig } from "../config/company.ts"
+import { budgetMode, type CompanyConfig } from "../config/company.ts"
 import { act, ActionError, auditSample, type DashboardContext, ticketFiles } from "../dashboard/api.ts"
 import { readControl } from "./control.ts"
 import { quotaPolicy, quotaVerdict, readQuota, fmtReset } from "./quota.ts"
@@ -128,8 +128,11 @@ export class TelegramBridge {
       `<b>${esc(config.company.name)}</b>`,
       L(`Inbox: ${store.inboxOpen().length} · Open tickets: ${open.length}${blocked.length ? ` (${blocked.length} blocked)` : ""} · Running: ${running.length}`,
         `인박스: ${store.inboxOpen().length} · 열린 티켓: ${open.length}${blocked.length ? ` (막힘 ${blocked.length})` : ""} · 실행 중: ${running.length}`),
-      L(`Spent 24h: $${spend.toFixed(2)} · Month: $${store.spentAll(this.monthStart(config)).toFixed(2)} of $${config.budget.monthly_usd}`,
-        `24시간 지출: $${spend.toFixed(2)} · 이달: $${config.budget.monthly_usd} 중 $${store.spentAll(this.monthStart(config)).toFixed(2)}`),
+      budgetMode(config) === "advisory"
+        ? L(`Spent 24h: $${spend.toFixed(2)} · Month: $${store.spentAll(this.monthStart(config)).toFixed(2)} (API-rate equivalent)`,
+            `24시간 지출: $${spend.toFixed(2)} · 이달: $${store.spentAll(this.monthStart(config)).toFixed(2)} (API 단가 환산)`)
+        : L(`Spent 24h: $${spend.toFixed(2)} · Month: $${store.spentAll(this.monthStart(config)).toFixed(2)} of $${config.budget.monthly_usd}`,
+            `24시간 지출: $${spend.toFixed(2)} · 이달: $${config.budget.monthly_usd} 중 $${store.spentAll(this.monthStart(config)).toFixed(2)}`),
       interrupts.length ? `⚠️ ${L("Interrupts", "인터럽트")}: ${interrupts.map((i) => `${i.level} ${i.target}`).join(", ")}` : L("No interrupts", "인터럽트 없음"),
       ...running.map((r) => `· ${esc(r.role)} ${L("on", "→")} <code>${esc(r.ticket_id)}</code>`),
     ].join("\n")

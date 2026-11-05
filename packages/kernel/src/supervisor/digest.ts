@@ -1,5 +1,5 @@
 /** The weekly digest, rendered by the kernel from the database (D30). The CEO only adds narrative. */
-import type { CompanyConfig } from "../config/company.ts"
+import { budgetMode, type CompanyConfig } from "../config/company.ts"
 import type { Store } from "../store/store.ts"
 import type { Interrupt } from "../schema/interrupts.ts"
 import { quotaPolicy, quotaVerdict, readQuota, renderQuota } from "./quota.ts"
@@ -34,7 +34,7 @@ export const renderDigest = (config: CompanyConfig, store: Store, now: number, r
     "",
     "## Spend",
     `- Week: ${usd(spend.reduce((a, d) => a + d.usd, 0))} — ${spend.map((d) => `${d.department} ${usd(d.usd)}`).join(", ") || "nothing"}`,
-    `- Month to date: ${usd(store.spentAll(now - 30 * 86_400_000))} of ${usd(config.budget.monthly_usd)}`,
+    `- Month to date: ${usd(store.spentAll(now - 30 * 86_400_000))}${budgetMode(config) === "advisory" ? " (API-rate equivalent; the plan limits are the cap)" : ` of ${usd(config.budget.monthly_usd)}`}`,
     ...(Object.keys(config.engines) as Array<"claude" | "codex">).flatMap((id) => { const q = readQuota(store, id); if (!q) return []; const v = quotaVerdict(q, quotaPolicy(config), now); return [`- Plan limits: ${renderQuota(q, now)}${v.kind === "ok" ? "" : ` — ${v.reason}`}`] }),
     "",
     "## Verification and calibration",

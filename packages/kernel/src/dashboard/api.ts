@@ -104,7 +104,8 @@ export const snapshot = (ctx: DashboardContext) => {
   const shares = Object.entries(config.budget.shares).map(([department, share]) => {
     const cap = share * config.budget.monthly_usd
     const used = store.spent(department, month)
-    return { department, cap, used, ratio: cap > 0 ? used / cap : 0 }
+    // D81: advisory budgets compare each department's slice of actual spend with its share; metered ones compare spend with the cap
+    return { department, share, cap, used, ratio: cap > 0 ? used / cap : 0, actual: spentMonth > 0 ? used / spentMonth : 0 }
   })
   const dailySpend = Array.from({ length: 14 }, (_, i) => {
     const dayStart = now - (13 - i) * DAY
@@ -213,7 +214,7 @@ export const snapshot = (ctx: DashboardContext) => {
     }),
     projects: config.projects.map((p) => ({
       id: p.id, path: p.path, class: p.class, share: p.share, merge: p.merge ?? "local", verify: p.verify ? [...p.verify] : null, verify_text: renderVerify(p.verify), kill_criteria: p.kill_criteria ?? null, min_tier: p.min_tier ?? null,
-      spent_month: spentByProject[p.id] ?? 0, cap_month: p.share * config.budget.monthly_usd, capped: (config.budget.project_shares ?? "hard") === "hard" && p.share * config.budget.monthly_usd - (spentByProject[p.id] ?? 0) < 0.05, open: openTicketsFor(store, p.id).length, running: running.filter((r) => store.ticket(r.ticket_id)?.project === p.id).length, exists: existsSync(NodePath.join(ctx.root, p.path, ".git")),
+      spent_month: spentByProject[p.id] ?? 0, cap_month: p.share * config.budget.monthly_usd, capped: budgetMode(config) === "metered" && (config.budget.project_shares ?? "hard") === "hard" && p.share * config.budget.monthly_usd - (spentByProject[p.id] ?? 0) < 0.05, open: openTicketsFor(store, p.id).length, running: running.filter((r) => store.ticket(r.ticket_id)?.project === p.id).length, exists: existsSync(NodePath.join(ctx.root, p.path, ".git")),
     })),
     inbox,
     inbox_timeout_ms: timeout,
