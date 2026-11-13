@@ -14,7 +14,7 @@ import { Spend } from "./views/Spend.tsx"
 
 const root = createRootRoute({
   component: () => <Shell><Outlet /></Shell>,
-  validateSearch: (s: Record<string, unknown>): Search => ({ ...(typeof s["ticket"] === "string" ? { ticket: s["ticket"] } : {}), ...(s["new"] === true || s["new"] === "true" ? { new: true } : {}) }),
+  validateSearch: (s: Record<string, unknown>): Search => ({ ...(typeof s["ticket"] === "string" ? { ticket: s["ticket"] } : {}), ...(s["new"] === true || s["new"] === "true" ? { new: true } : {}), ...(s["chat"] === true || s["chat"] === "true" ? { chat: true } : {}) }),
 })
 const r = <const P extends string>(path: P, component: () => React.JSX.Element) => createRoute({ getParentRoute: () => root, path, component })
 export const router = createRouter({

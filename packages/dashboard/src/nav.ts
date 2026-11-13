@@ -1,7 +1,7 @@
 /** Drawer and modal live in the URL (`?ticket=ENG-1`, `?new=1`) so a link can open them and Back closes them. */
 import { useNavigate, useSearch } from "@tanstack/react-router"
 
-export type Search = { ticket?: string; new?: boolean }
+export type Search = { ticket?: string; new?: boolean; chat?: boolean }
 export const useOpenTicket = () => {
   const navigate = useNavigate()
   return (id: string | null) => void navigate({ to: ".", search: (prev: Search) => { const { ticket: _t, ...rest } = prev; return id ? { ...rest, ticket: id } : rest } })
@@ -9,6 +9,10 @@ export const useOpenTicket = () => {
 export const useNewTicket = () => {
   const navigate = useNavigate()
   return (open: boolean) => void navigate({ to: ".", search: (prev: Search) => { const { new: _n, ...rest } = prev; return open ? { ...rest, new: true } : rest } })
+}
+export const useChatPanel = () => {
+  const navigate = useNavigate()
+  return (open: boolean) => void navigate({ to: ".", search: (prev: Search) => { const { chat: _c, ...rest } = prev; return open ? { ...rest, chat: true } : rest } })
 }
 export const useSearchState = () => useSearch({ strict: false }) as Search
 

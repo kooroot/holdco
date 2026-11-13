@@ -9,7 +9,7 @@ import { writeFileSync } from "node:fs"
 import * as NodePath from "node:path"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
-import type { Engine, Outcome, SessionEvent, SessionSpec, EngineQuota, TranslateRequest, TranslateResult } from "../src/engine/types.ts"
+import type { Engine, Outcome, SessionEvent, SessionSpec, EngineQuota, TranslateRequest, TranslateResult, AskRequest, AskResult } from "../src/engine/types.ts"
 
 export type Script = (ctx: Ctx) => Promise<Partial<Outcome> & { report?: unknown }>
 export interface Ctx {
@@ -97,6 +97,10 @@ export class FakeEngine implements Engine {
   /** D75: translations as "[<lang>] <text>"; `translateCalls` counts the batches. */
   translateCalls: Array<ReadonlyArray<string>> = []
   async translate(req: TranslateRequest): Promise<TranslateResult> { this.translateCalls.push(req.texts); return { texts: req.texts.map((t) => `[${req.to}] ${t}`), costUsd: 0.01 * req.texts.length } }
+  /** D82: what `ask()` answers (set by a test); every request is kept in `askCalls`. */
+  askAnswer: (req: AskRequest) => { answer: string; proposals: Array<Record<string, unknown>> } | Promise<never> = () => ({ answer: "all quiet", proposals: [] })
+  askCalls: Array<AskRequest> = []
+  async ask(req: AskRequest): Promise<AskResult> { this.askCalls.push(req); return { output: await this.askAnswer(req), costUsd: 0.2 } }
   async quota(): Promise<EngineQuota | undefined> { return typeof this.quotaAnswer === "function" ? this.quotaAnswer() : this.quotaAnswer }
   constructor(readonly scripts: Partial<Record<string, Script>> = {}, readonly costPerRun = 0.1, readonly id: "claude" | "codex" = "claude") {}
 

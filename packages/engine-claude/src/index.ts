@@ -6,7 +6,7 @@
 import { query, type Options, type SDKMessage, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk"
 import { spawnSync } from "node:child_process"
 import { existsSync, readFileSync } from "node:fs"
-import type { Engine, EngineCapabilities, EngineQuota, EngineQuotaWindow, Outcome, ProbeContext, ProbeResult, SessionEvent, SessionSpec, TranslateRequest, TranslateResult } from "@holdco/kernel/engine"
+import type { Engine, EngineCapabilities, EngineQuota, EngineQuotaWindow, Outcome, ProbeContext, ProbeResult, SessionEvent, SessionSpec, TranslateRequest, TranslateResult, AskRequest, AskResult } from "@holdco/kernel/engine"
 import { resolveClaudeBinary } from "./binary.ts"
 import { toClaudeOptions } from "./options.ts"
 import { aborted, fromResult } from "./outcome.ts"
@@ -108,6 +108,36 @@ export const translateTexts = async (req: TranslateRequest): Promise<TranslateRe
   return { texts: out, costUsd: result.total_cost_usd ?? 0 }
 }
 
+/** D82: one call, no tools, structured answer — the Operator's question answered from the context the kernel assembled. */
+export const ask = async (req: AskRequest): Promise<AskResult> => {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), req.timeoutMs)
+  const options: Options = {
+    cwd: req.cwd,
+    model: req.model,
+    systemPrompt: req.system,
+    allowedTools: [],
+    disallowedTools: ["Bash", "Edit", "Write", "Read", "Glob", "Grep", "WebFetch", "WebSearch", "Task", "Agent", "NotebookEdit"],
+    settingSources: [],
+    maxTurns: 4, // the structured answer is itself a tool call; one retry if the first does not validate
+    maxBudgetUsd: 5,
+    outputFormat: { type: "json_schema", schema: req.schema },
+    abortController: controller,
+    env: { ...req.env } as Record<string, string>,
+  }
+  try {
+    let result: SDKResultMessage | undefined
+    for await (const msg of query({ prompt: req.prompt, options })) if (msg.type === "result") result = msg
+    if (!result || result.subtype !== "success") throw new Error(`ask: ${result?.subtype ?? "no result"}`)
+    if (result.structured_output === undefined || result.structured_output === null) throw new Error("ask: the model returned no structured answer")
+    return { output: result.structured_output, costUsd: result.total_cost_usd ?? 0 }
+  } catch (e) {
+    throw controller.signal.aborted ? new Error(`ask: no answer within ${Math.round(req.timeoutMs / 1000)}s`) : e
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 const oauthToken = (env: Record<string, string | undefined>): string | undefined => {
   if (env["CLAUDE_CODE_OAUTH_TOKEN"]) return env["CLAUDE_CODE_OAUTH_TOKEN"]
   const parse = (text: string) => { try { return (JSON.parse(text) as { claudeAiOauth?: { accessToken?: string } }).claudeAiOauth?.accessToken } catch { return undefined } }
@@ -196,7 +226,7 @@ export const probe = async (_ctx: ProbeContext): Promise<ReadonlyArray<ProbeResu
   return out
 }
 
-export const engine: Engine = { id: "claude", capabilities, run, loginStatus, probe, quota, translate: translateTexts }
+export const engine: Engine = { id: "claude", capabilities, run, loginStatus, probe, quota, translate: translateTexts, ask }
 export { resolveClaudeBinary } from "./binary.ts"
 export { CLAUDE_TOOLS, toClaudeOptions, toolLists } from "./options.ts"
 export { fromResult } from "./outcome.ts"

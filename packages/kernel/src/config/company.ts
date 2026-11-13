@@ -188,6 +188,8 @@ const Roles = Schema.Struct({
   improvement: Schema.optionalKey(RoleAssignment),
   junior_worker: Schema.optionalKey(RoleAssignment),
   junior_reader: Schema.optionalKey(RoleAssignment),
+  /** D82: who answers the Operator's questions in chat (Telegram, dashboard). Default: the engine's executive model. */
+  assistant: Schema.optionalKey(RoleAssignment),
   /** Per-department override of `senior`, e.g. a cheaper model for GTM. */
   by_department: Schema.optionalKey(Schema.Record(Slug, RoleAssignment)),
 })

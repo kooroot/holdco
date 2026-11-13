@@ -14,7 +14,7 @@ import { formatAssignment, parseAssignment } from "../config/models.ts"
 import { addProject, openTicketsFor, parseVerify, type ProjectClass, ProjectError, removeProject, renderVerify, setProject, setShares } from "../config/projects.ts"
 import { graduationCheck } from "../policy/graduation.ts"
 import type { Level } from "../schema/interrupts.ts"
-import { Store, type Ticket } from "../store/store.ts"
+import { type ChatRow, Store, type Ticket } from "../store/store.ts"
 import { clear as clearInterrupt, raise as raiseInterrupt, readControl } from "../supervisor/control.ts"
 import { undoAction } from "../supervisor/executors.ts"
 import { latestReleaseTag } from "../supervisor/org.ts"
@@ -22,6 +22,7 @@ import { idleWakeMs, Supervisor, WORK_WAKE_MS } from "../supervisor/supervisor.t
 import { defaultBranch } from "../supervisor/worktrees.ts"
 import { aheadOfWeek, quotaPolicy, quotaVerdict, readQuota } from "../supervisor/quota.ts"
 import { translationsFor } from "../supervisor/i18n.ts"
+import { resolveProposal, type StoredProposal } from "../supervisor/ask.ts"
 
 const DAY = 86_400_000
 
@@ -36,6 +37,19 @@ export interface DashboardContext {
   readonly supervisor?: Supervisor
   /** Writes `company.yaml` and commits (promotions). */
   readonly saveConfig: (config: CompanyConfig, message: string) => void
+  /** D82: who answers the Operator's chat. Defaults to the supervisor; tests pass their own. */
+  readonly assistant?: Assistant
+}
+
+export interface Assistant {
+  ask(text: string, channel: string): { id: number; done: Promise<ChatRow> }
+}
+
+/** D82: the chat thread after message `after`, and whether an answer is still being written. */
+export const chat = (ctx: DashboardContext, after: number): { messages: Array<ChatRow & { proposals: ReadonlyArray<StoredProposal> }>; busy: boolean; available: boolean; epoch: number } => {
+  const epoch = Number(ctx.store.getMeta("chat:epoch") ?? 0)
+  const messages = ctx.store.chatSince(Math.max(after, epoch), 200) as Array<ChatRow & { proposals: ReadonlyArray<StoredProposal> }>
+  return { messages, busy: ctx.store.chatSince(epoch, 400).some((m) => m.status === "pending"), available: (ctx.assistant ?? ctx.supervisor) !== undefined, epoch }
 }
 
 const supervisorAlive = (root: string): { alive: boolean; pid: number } => {
@@ -323,6 +337,9 @@ export type Action =
   | { kind: "grade"; id: string; verdict: "approve" | "reject"; note?: string }
   | { kind: "audit_done" }
   | { kind: "improve_now" }
+  | { kind: "ask"; text: string; channel?: string }
+  | { kind: "ask_resolve"; id: number; index: number; apply: boolean }
+  | { kind: "ask_reset" }
   | { kind: "interrupt"; level: Level; target: string; reason: string }
   | { kind: "resume"; level: Level; target: string }
   | { kind: "release"; note?: string }
@@ -401,6 +418,20 @@ export const act = async (ctx: DashboardContext, a: Action): Promise<Record<stri
       if (!ctx.supervisor) throw new ActionError("the supervisor is not running in this process; use holdco improve --now")
       if (!ctx.config().modules.improvement.enabled) throw new ActionError("Improvement is off in company.yaml")
       ctx.supervisor.runImprovementNow(now)
+      return { ok: true }
+    }
+    case "ask": {
+      const who = ctx.assistant ?? ctx.supervisor
+      if (!who) throw new ActionError("questions are answered by the running supervisor: holdco service start (or holdco supervise)")
+      return { ok: true, id: who.ask(a.text, a.channel ?? "dashboard").id }
+    }
+    case "ask_resolve": {
+      const r = await resolveProposal(ctx, a.id, a.index, a.apply)
+      return { ok: r.status !== "failed", status: r.status, result: r.result }
+    }
+    case "ask_reset": {
+      const last = store.chatSince(0, 1).at(-1)?.id ?? 0
+      store.setMeta("chat:epoch", String(last))
       return { ok: true }
     }
     case "audit_done": {

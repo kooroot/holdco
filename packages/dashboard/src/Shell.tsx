@@ -4,7 +4,8 @@ import { cx } from "zyzz"
 import { style, vars } from "../zyzz.config.ts"
 import { useSnapshot, useToastState } from "./hooks.ts"
 import { usd, left } from "./format.ts"
-import { useNewTicket, useOpenTicket, useSearchState, VIEWS } from "./nav.ts"
+import { useChatPanel, useNewTicket, useOpenTicket, useSearchState, VIEWS } from "./nav.ts"
+import { Chat } from "./Chat.tsx"
 import { NewTicket } from "./ticket/NewTicket.tsx"
 import { Drawer } from "./ticket/Drawer.tsx"
 import { Button, cn, Meter, ui, Empty } from "./ui.tsx"
@@ -27,6 +28,7 @@ const st = {
   dotOff: style({ backgroundColor: "bad" }),
   dotHold: style({ backgroundColor: "warn" }),
   main: style({ padding: "26px 32px 60px !custom", maxWidth: "1240px !custom", width: "100% !custom", minWidth: "0 !custom", overflowX: "auto", "@media (max-width: 900px)": { padding: "18px 16px 60px !custom" } }),
+  mainChat: style({ "@media (min-width: 1280px)": { paddingRight: "472px !custom" } }),
   help: style({ position: "fixed", bottom: "12px !custom", right: "16px !custom", fontSize: "12px !custom", color: "muted", display: "flex", gap: "10px !custom", pointerEvents: "none", backgroundColor: "bg", padding: "4px 8px !custom", borderRadius: "md", opacity: 0.9, "@media (max-width: 900px)": { display: "none" } }),
   helpKbd: style({ fontFamily: "mono", padding: "0 5px !custom", border: `1px solid ${vars.color.lineStrong} !custom`, borderRadius: "sm" }),
 }
@@ -45,19 +47,21 @@ export const Shell = ({ children }: { children: ReactNode }) => {
   const search = useSearchState()
   const openTicket = useOpenTicket()
   const setNew = useNewTicket()
+  const setChat = useChatPanel()
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey) return // browser shortcuts (Cmd+1..9 tabs, Ctrl+N) are not ours
       if ((e.target as HTMLElement).matches("input, textarea, select")) return
-      if (e.key === "Escape") { if (search.new) setNew(false); else if (search.ticket) openTicket(null); return }
+      if (e.key === "Escape") { if (search.new) setNew(false); else if (search.ticket) openTicket(null); else if (search.chat) setChat(false); return }
       if (e.key === "n" && !search.new) { setNew(true); return }
+      if (e.key === "c" && !search.new) { e.preventDefault(); setChat(!search.chat); return }
       const i = Number(e.key)
       if (i >= 1 && i <= VIEWS.length && !search.new) void navigate({ to: VIEWS[i - 1]![0], search: (prev: Record<string, unknown>) => prev })
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
-  }, [search.new, search.ticket, navigate, openTicket, setNew])
+  }, [search.new, search.ticket, search.chat, navigate, openTicket, setNew, setChat])
 
   const urgent = S?.inbox.filter((i) => i.urgency === "urgent").length ?? 0
   const blocked = S?.tickets.filter((t) => t.state === "blocked").length ?? 0
@@ -82,6 +86,7 @@ export const Shell = ({ children }: { children: ReactNode }) => {
           })}
         </nav>
         <Button tone="primary" kbd="n" onClick={() => setNew(true)} style={{ margin: "8px 10px 0" }}>{t("New ticket")}</Button>
+        <Button kbd="c" onClick={() => setChat(!search.chat)} style={{ margin: "6px 10px 0" }}>{t("Ask the company")}</Button>
         <div {...st.foot()}>
           <div {...st.status()}><i {...cx(st.dot(), !alive && st.dotOff(), alive && held && st.dotHold(), alive && !held && st.dotOn())} /><span>{q.isError ? t("unreachable: {m}", { m: q.error.message }) : !S ? t("connecting…") : !S.supervisor.alive ? t("supervisor not running") : halted ? t("halted (L5)") : S.interrupts.length ? t("running · {n} interrupts", { n: S.interrupts.length }) : t("running · {n} sessions", { n: S.running.length })}</span></div>
           {S?.quotas.map((q) => <div key={q.engine} title={q.verdict.reason ?? t("{e} plan limits · from {s}", { e: q.engine, s: q.source === "endpoint" ? t("the usage endpoint") : t("the last session") })}>
@@ -94,11 +99,12 @@ export const Shell = ({ children }: { children: ReactNode }) => {
               <Meter ratio={ratio} tip={S ? `${usd(S.budget.spent_month)} / ${usd(S.budget.monthly)} · ${Math.round(ratio * 100)}%` : ""} /></>}
         </div>
       </aside>
-      <main {...st.main()}>{q.isError && !S ? <Empty title={t("Dashboard unreachable")}>{q.error.message}</Empty> : children}</main>
+      <main {...cx(st.main(), search.chat && st.mainChat())}>{q.isError && !S ? <Empty title={t("Dashboard unreachable")}>{q.error.message}</Empty> : children}</main>
       {search.ticket ? <Drawer id={search.ticket} onClose={() => openTicket(null)} /> : null}
+      {search.chat ? <Chat onClose={() => setChat(false)} /> : null}
       {search.new ? <NewTicket onClose={() => setNew(false)} /> : null}
       {toast ? <div {...cn(ui.toast(), toast.error && ui.toastErr())}>{toast.text}</div> : null}
-      <div {...st.help()}><span><kbd {...st.helpKbd()}>n</kbd> {t("new ticket")}</span><span><kbd {...st.helpKbd()}>a</kbd> {t("approve")}</span><span><kbd {...st.helpKbd()}>r</kbd> {t("reject")}</span><span><kbd {...st.helpKbd()}>1</kbd>–<kbd {...st.helpKbd()}>9</kbd> {t("views")}</span><span><kbd {...st.helpKbd()}>esc</kbd> {t("close")}</span></div>
+      <div {...st.help()} style={search.chat ? { display: "none" } : undefined}><span><kbd {...st.helpKbd()}>n</kbd> {t("new ticket")}</span><span><kbd {...st.helpKbd()}>c</kbd> {t("ask")}</span><span><kbd {...st.helpKbd()}>a</kbd> {t("approve")}</span><span><kbd {...st.helpKbd()}>r</kbd> {t("reject")}</span><span><kbd {...st.helpKbd()}>1</kbd>–<kbd {...st.helpKbd()}>9</kbd> {t("views")}</span><span><kbd {...st.helpKbd()}>esc</kbd> {t("close")}</span></div>
     </div>
   )
 }

@@ -11,7 +11,8 @@ const params = new URLSearchParams(location.search)
 const fromUrl = params.get("t")
 let token = fromUrl
 try { if (!token) token = localStorage.getItem("holdco.token") } catch {}
-if (fromUrl) history.replaceState(null, "", location.pathname + location.hash)
+// drop only the token from the address bar: `?ticket=ENG-1` and `?chat=true` in the same link must survive
+if (fromUrl) { params.delete("t"); const rest = params.toString(); history.replaceState(null, "", location.pathname + (rest ? `?${rest}` : "") + location.hash) }
 /** The URL's token is kept only once it worked, so a stale bookmark cannot replace a good one. */
 const rememberToken = () => { try { if (fromUrl) localStorage.setItem("holdco.token", fromUrl) } catch {} }
 
@@ -40,6 +41,7 @@ export const api = {
   files: (id: string) => run(client.dashboard.files({ params: { id } })),
   file: (id: string, path: string) => run(client.dashboard.file({ params: { id }, query: { path } })),
   events: (id: string, after: number) => run(client.dashboard.events({ params: { id }, query: after >= 0 ? { after: String(after) } : {} })),
+  chat: () => run(client.dashboard.chat({ query: {} })),
   act: (a: Action) => run(client.dashboard.act({ payload: a })),
 }
 export type { Action, Snapshot, TicketDetail } from "@holdco/kernel/dashboard"

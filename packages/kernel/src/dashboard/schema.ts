@@ -134,6 +134,15 @@ export const SessionEvents = Schema.Struct({ session_id: Str, running: Bool, sta
 export const TicketFiles = Schema.Struct({ base: Str, files: Schema.Array(Schema.Struct({ path: Str, status: Str })) })
 export const TicketFile = Schema.Struct({ path: Str, content: Str, truncated: Bool, binary: Bool })
 
+/** D82: the Operator's chat with the company. A proposal is an action prepared from an instruction; it takes effect when confirmed. */
+export const ChatProposal = Schema.Struct({
+  kind: Str, summary: Str, ticket: Str, inbox_id: Num, decision: Str, department: Str, project: Str, title: Str, goal: Str, criteria: Schema.Array(Str), priority: Num, note: Str,
+  status: Schema.Literals(["open", "applied", "dismissed", "failed"]), result: Schema.optionalKey(Str),
+})
+export const ChatMessage = Schema.Struct({ id: Num, at: Num, channel: Str, author: Schema.Literals(["operator", "assistant"]), text: Str, status: Schema.Literals(["pending", "done", "failed"]), proposals: Schema.Array(ChatProposal), cost_usd: Num })
+export const Chat = Schema.Struct({ messages: Schema.Array(ChatMessage), busy: Bool, available: Bool, epoch: Num })
+export type ChatMessage = typeof ChatMessage.Type
+
 const Level = Schema.Literals(["L1", "L2", "L3", "L4", "L5"])
 export const Action = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("inbox"), id: Num, decision: Schema.Literals(["approved", "rejected"]), note: Schema.optionalKey(Str) }),
@@ -142,6 +151,9 @@ export const Action = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("grade"), id: Str, verdict: Schema.Literals(["approve", "reject"]), note: Schema.optionalKey(Str) }),
   Schema.Struct({ kind: Schema.Literal("audit_done") }),
   Schema.Struct({ kind: Schema.Literal("improve_now") }),
+  Schema.Struct({ kind: Schema.Literal("ask"), text: Str, channel: Schema.optionalKey(Str) }),
+  Schema.Struct({ kind: Schema.Literal("ask_resolve"), id: Num, index: Num, apply: Bool }),
+  Schema.Struct({ kind: Schema.Literal("ask_reset") }),
   Schema.Struct({ kind: Schema.Literal("interrupt"), level: Level, target: Str, reason: Str }),
   Schema.Struct({ kind: Schema.Literal("resume"), level: Level, target: Str }),
   Schema.Struct({ kind: Schema.Literal("release"), note: Schema.optionalKey(Str) }),

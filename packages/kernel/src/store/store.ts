@@ -82,6 +82,19 @@ export interface InboxItem {
   readonly batched_at: number | null
 }
 
+export type ChatStatus = "pending" | "done" | "failed"
+export interface ChatRow {
+  readonly id: number
+  readonly at: number
+  readonly channel: string
+  readonly author: "operator" | "assistant"
+  readonly text: string
+  readonly status: ChatStatus
+  readonly proposals: ReadonlyArray<unknown>
+  readonly cost_usd: number
+}
+const chatRow = (r: Record<string, unknown>): ChatRow => ({ ...(r as unknown as ChatRow), proposals: (() => { try { return JSON.parse(String(r["proposals"] ?? "[]")) as Array<unknown> } catch { return [] } })() })
+
 export interface LabelRow {
   readonly ticket_id: string
   readonly action: string | null
@@ -91,6 +104,10 @@ export interface LabelRow {
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS chat (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, channel TEXT NOT NULL, author TEXT NOT NULL, text TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'done', proposals TEXT NOT NULL DEFAULT '[]', cost_usd REAL NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS translations (hash TEXT NOT NULL, lang TEXT NOT NULL, text TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (hash, lang));
 CREATE TABLE IF NOT EXISTS product_observations (
   project TEXT NOT NULL, source TEXT NOT NULL, event_id TEXT NOT NULL, fingerprint TEXT NOT NULL,
@@ -465,6 +482,29 @@ export class Store {
     return action === undefined
       ? this.db.query<LabelRow, []>("SELECT ticket_id, action, at, agreement FROM labels ORDER BY at").all()
       : this.db.query<LabelRow, [string]>("SELECT ticket_id, action, at, agreement FROM labels WHERE action = ? ORDER BY at").all(action)
+  }
+  // ── chat (D82): the Operator's conversation with the company, one thread across Telegram and the dashboard ──
+  chatAdd(m: { at: number; channel: string; author: "operator" | "assistant"; text: string; status?: ChatStatus }): number {
+    this.db.run("INSERT INTO chat(at, channel, author, text, status) VALUES (?, ?, ?, ?, ?)", [m.at, m.channel, m.author, m.text, m.status ?? "done"])
+    return Number(this.db.query<{ id: number }, []>("SELECT last_insert_rowid() AS id").get()?.id)
+  }
+  chatFinish(id: number, r: { text: string; status: ChatStatus; proposals?: ReadonlyArray<unknown>; cost_usd?: number }) {
+    this.db.run("UPDATE chat SET text = ?, status = ?, proposals = ?, cost_usd = ? WHERE id = ?", [r.text, r.status, JSON.stringify(r.proposals ?? []), r.cost_usd ?? 0, id])
+  }
+  chatSetProposals(id: number, proposals: ReadonlyArray<unknown>) {
+    this.db.run("UPDATE chat SET proposals = ? WHERE id = ?", [JSON.stringify(proposals), id])
+  }
+  chatMessage(id: number): ChatRow | undefined {
+    const r = this.db.query<Record<string, unknown>, [number]>("SELECT * FROM chat WHERE id = ?").get(id)
+    return r ? chatRow(r) : undefined
+  }
+  /** Messages with id > `after`, oldest first; the newest `limit` when there are more. */
+  chatSince(after: number, limit = 200): Array<ChatRow> {
+    return this.db.query<Record<string, unknown>, [number, number]>("SELECT * FROM (SELECT * FROM chat WHERE id > ? ORDER BY id DESC LIMIT ?) ORDER BY id").all(after, limit).map(chatRow)
+  }
+  /** Answers still marked pending by a process that is gone can never finish; say so instead of spinning forever. */
+  chatAbandon(note: string): number {
+    return this.db.run("UPDATE chat SET status = 'failed', text = ? WHERE status = 'pending'", [note]).changes
   }
   /** D75: a cached translation of the text with this content hash, in `lang`. */
   translation(hash: string, lang: string): string | undefined {

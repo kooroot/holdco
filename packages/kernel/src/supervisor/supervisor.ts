@@ -23,6 +23,7 @@ import type { Engine, Outcome, RoleDefinition, SessionEvent, SessionSpec } from 
 import { appendSessionEvent } from "./journal.ts"
 import { renderVerify } from "../config/projects.ts"
 import { hashText, pendingTexts, tr, TRANSLATION_DAILY_USD, translatorFor } from "./i18n.ts"
+import { startAsk } from "./ask.ts"
 import { checkCi, CI_POLL_MS, CI_WATCH_MS, ciWatches, defaultGhRunner, endCiWatch, failingStep, hasWorkflows, startCiWatch } from "./ciwatch.ts"
 import { fmtReset, mergeSessionWindow, quotaPolicy, quotaVerdict, readQuota, renderQuota, WINDOW_LENGTH, writeQuota } from "./quota.ts"
 import { collectSignals, renderSignals } from "./signals.ts"
@@ -210,6 +211,7 @@ export class Supervisor {
     const crashed = this.store.markCrashed(this.bootId, now)
     const reaped = this.store.db.run("UPDATE tickets SET lease_expires = ? WHERE lease_holder IS NOT NULL", [now - 1]).changes
     this.store.reap(this.config.runtime.max_attempts, now)
+    this.store.chatAbandon(this.say("The supervisor restarted before this was answered; ask again.", "답하기 전에 슈퍼바이저가 재시작됐습니다. 다시 물어봐 주세요."))
     this.store.setMeta("boot_id", this.bootId)
     this.store.setMeta("boot_at", String(now))
     await this.notifier.send("info", this.say(`supervisor started: release ${this.org.tag}, ${crashed} crashed session(s) closed, ${reaped} lease(s) recovered, tools on :${this.tools.port}`, `슈퍼바이저 시작: 릴리스 ${this.org.tag}, 크래시된 세션 ${crashed}개 정리, 리스 ${reaped}개 회수, 도구 포트 :${this.tools.port}`))
@@ -989,6 +991,11 @@ export class Supervisor {
    * tickets, failed sessions, guard refusals, cost per ticket — not only on the Operator's grades. The
    * replay gate still needs labeled tickets; without them a candidate is judged by its canary alone.
    */
+  /** D82: answer the Operator in chat. Returns at once with the pending answer's id; `done` settles when it is written. */
+  ask(text: string, channel: string) {
+    return startAsk({ root: this.root, config: () => this.config, store: this.store, now: () => this.now(), engines: this.engines, env: (e) => this.engineEnv(e), log: (l) => this.log(l) }, text, channel)
+  }
+
   /** D78: `holdco improve --now` / the dashboard: run the Improvement cycle without waiting for the week. */
   runImprovementNow(now = this.now()) { this.lastJob.set("improvement", now); this.store.setMeta("job:improvement", String(now)); this.improvementCycle(now) }
 

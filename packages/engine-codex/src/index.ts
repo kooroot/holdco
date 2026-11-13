@@ -8,7 +8,7 @@ import { spawnSync } from "node:child_process"
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { Codex } from "@openai/codex-sdk"
-import type { Engine, EngineCapabilities, EngineQuota, EngineQuotaWindow, Outcome, ProbeContext, ProbeResult, SessionEvent, SessionSpec, TranslateRequest, TranslateResult } from "@holdco/kernel/engine"
+import type { Engine, EngineCapabilities, EngineQuota, EngineQuotaWindow, Outcome, ProbeContext, ProbeResult, SessionEvent, SessionSpec, TranslateRequest, TranslateResult, AskRequest, AskResult } from "@holdco/kernel/engine"
 import { type CodexBinary, resolveCodexBinary } from "./binary.ts"
 import { type CodexPlan, toCodexOptions } from "./options.ts"
 import { CodexRunState, costUsd } from "./outcome.ts"
@@ -208,7 +208,26 @@ export const translate = async (req: TranslateRequest): Promise<TranslateResult>
   return { texts: out, costUsd: r.usage && req.price ? costUsd(r.usage, req.price) : 0 }
 }
 
-export const engine: Engine = { id: "codex", capabilities, run, probe: (ctx) => probe(ctx), loginStatus, quota, translate }
+/** D82: one read-only turn with a structured answer; Codex has no system prompt, so the instructions lead the prompt. */
+export const ask = async (req: AskRequest): Promise<AskResult> => {
+  const binary = resolveCodexBinary()
+  const codex = new Codex({ codexPathOverride: binary.path, env: { ...req.env, PATH: req.env["PATH"] ?? process.env["PATH"] ?? "" } as Record<string, string> })
+  const thread = codex.startThread({ model: req.model, sandboxMode: "read-only", workingDirectory: req.cwd, skipGitRepoCheck: true, networkAccessEnabled: false, ...(req.effort ? { modelReasoningEffort: req.effort as "low" | "medium" | "high" } : {}) })
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), req.timeoutMs)
+  try {
+    const r = await thread.run(`${req.system}\n\nAnswer from the text below only; run no commands and read no files.\n\n${req.prompt}`, { outputSchema: req.schema, signal: controller.signal })
+    const m = /\{[\s\S]*\}/.exec(r.finalResponse)
+    if (!m) throw new Error("ask: the model returned no structured answer")
+    return { output: JSON.parse(m[0]) as unknown, costUsd: r.usage && req.price ? costUsd(r.usage, req.price) : 0 }
+  } catch (e) {
+    throw controller.signal.aborted ? new Error(`ask: no answer within ${Math.round(req.timeoutMs / 1000)}s`) : e
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+export const engine: Engine = { id: "codex", capabilities, run, probe: (ctx) => probe(ctx), loginStatus, quota, translate, ask }
 export { type CodexBinary, resolveCodexBinary, wrapperScript } from "./binary.ts"
 export { codexConfig, codexHome, codexHooks, DISABLED_FEATURES, toCodexOptions, workspaceAccess } from "./options.ts"
 export { CodexRunState, costUsd } from "./outcome.ts"

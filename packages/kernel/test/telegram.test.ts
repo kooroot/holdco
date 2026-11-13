@@ -138,7 +138,8 @@ describe("telegram bridge", () => {
     expect(await b.command("/resume engineering")).toContain("Resumed L2")
     expect(readControl(dir)).toEqual([])
     expect(await b.command("/approve x")).toContain("Usage")
-    expect(await b.command("hello")).toContain("/help")
+    await b.command("hello") // D82: a plain message is a question; this bridge has no supervisor to answer it
+    expect(sent().at(-1)?.text).toContain("/help")
     // language: /lang ko saves company.language and every later reply is Korean
     expect(await b.command("/lang ko")).toContain("한국어")
     expect(config.company.language).toBe("ko")

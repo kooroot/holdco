@@ -1,7 +1,8 @@
 /**
  * Telegram as the Operator's pocket console (D56): inbox items arrive with Approve / Reject
  * buttons, and a few commands cover what a phone is good for (status, notes, unblocking, opening a
- * ticket, pausing a department, halting). Long polling: no public URL, works from a laptop behind
+ * ticket, pausing a department, halting). A message that is not a command is a question to the company
+ * (D82): the answer comes back as a message, and anything it was told to do as cards to confirm. Long polling: no public URL, works from a laptop behind
  * NAT. Only the configured chat may act; every action is the same operation the dashboard and CLI
  * perform (`act`), so the kernel's rules apply unchanged.
  */
@@ -10,6 +11,7 @@ import { act, ActionError, auditSample, type DashboardContext, ticketFiles } fro
 import { readControl } from "./control.ts"
 import { quotaPolicy, quotaVerdict, readQuota, fmtReset } from "./quota.ts"
 import { tr as translated } from "./i18n.ts"
+import { describeProposal, type StoredProposal } from "./ask.ts"
 
 type Fetch = typeof fetch
 
@@ -184,6 +186,40 @@ export class TelegramBridge {
     ].filter(Boolean).join("\n")
   }
 
+  /**
+   * D82: a plain message is a question (or an instruction) to the company. The answer is one model call over the
+   * company's records; what it was told to do arrives as cards and happens only when the Operator taps Apply.
+   */
+  async answer(text: string): Promise<void> {
+    const L = this.L()
+    const who = this.o.ctx.assistant ?? this.o.ctx.supervisor
+    if (!who) { await this.send(L("Questions are answered by the running supervisor; this bot is running without one. /help lists the commands.", "질문은 실행 중인 슈퍼바이저가 답합니다. 지금 이 봇은 슈퍼바이저 없이 떠 있습니다. 명령은 /help.")); return }
+    let started: ReturnType<typeof who.ask>
+    try { started = who.ask(text, "telegram") } catch (e) { await this.send(`⚠️ ${esc(e instanceof Error ? e.message : String(e))}`); return }
+    const typing = () => void this.call("sendChatAction", { chat_id: this.o.chatId, action: "typing" })
+    typing()
+    const timer = setInterval(typing, 4500) // Telegram shows "typing…" for five seconds per call
+    const m = await started.done.finally(() => clearInterval(timer))
+    await this.send(m.status === "failed" ? `⚠️ ${esc(m.text)}` : esc(m.text))
+    const proposals = m.proposals as ReadonlyArray<StoredProposal>
+    for (const [i, p] of proposals.entries()) {
+      if (p.status === "open") await this.send(this.proposalCard(p), { reply_markup: { inline_keyboard: [[{ text: L("✅ Apply", "✅ 적용"), callback_data: `p:${m.id}:${i}:y` }, { text: L("Dismiss", "취소"), callback_data: `p:${m.id}:${i}:n` }]] } })
+      else if (p.status === "failed") await this.send(`⚠️ ${L("Could not prepare", "준비하지 못함")}: ${esc(describeProposal(p))} — ${esc(p.result ?? "")}`)
+    }
+  }
+
+  private proposalCard(p: StoredProposal): string {
+    const L = this.L()
+    const lines = [`📝 <b>${esc(describeProposal(p))}</b>`]
+    if (p.kind === "open_ticket") {
+      lines.push(`${esc(p.department || "—")}${p.project ? ` · ${esc(p.project)}` : ""}${p.priority ? ` · p${p.priority}` : ""}`, `<b>${esc(p.title)}</b>`)
+      if (p.goal) lines.push(`${L("Goal", "목표")}: ${esc(p.goal.slice(0, 500))}`)
+      if (p.criteria.length) lines.push(`${L("Done when", "완료 조건")}:\n${p.criteria.slice(0, 6).map((c) => `• ${esc(c.slice(0, 200))}`).join("\n")}`)
+    } else if (p.note) lines.push(esc(p.note.slice(0, 600)))
+    lines.push(`<i>${L("Nothing changes until you tap Apply.", "적용을 누르기 전에는 아무것도 바뀌지 않습니다.")}</i>`)
+    return lines.join("\n")
+  }
+
   private monthStart(config: CompanyConfig): number {
     const now = this.o.ctx.now()
     const parts = new Intl.DateTimeFormat("en-US", { timeZone: config.company.timezone, year: "numeric", month: "numeric" }).formatToParts(new Date(now))
@@ -222,6 +258,8 @@ export class TelegramBridge {
           "/audit — 주간 감사: 샘플을 카드로 받고 버튼으로 채점 (심판 판정은 채점 뒤에 공개)",
           "/quota — Claude·Codex 구독 한도(%)와 지금 회사가 그걸로 뭘 하는지",
           "/lang en|ko — 메시지 언어",
+          "",
+          "명령 없이 그냥 물어보세요: \"Mapae 결제 어디까지 됐어?\", \"ENG-11 왜 멈췄어?\", \"이거 먼저 해줘\". 답은 회사 기록에서 나오고, 지시는 확인 버튼을 눌러야 적용됩니다. /clear — 대화 새로 시작",
         ] : [
           "<b>Holdco</b> — your company in your pocket.",
           "/status — what is running, spend, interrupts",
@@ -236,6 +274,8 @@ export class TelegramBridge {
           "/audit — weekly audit: the sample as cards, graded with buttons (the judge's verdict is revealed after yours)",
           "/quota — Claude/Codex plan limits (%) and what the company does about them now",
           "/lang en|ko — message language",
+          "",
+          "Or just ask, no command: \"how far is the payment flow?\", \"why is ENG-11 stuck?\", \"do this first\". Answers come from the company's records; instructions take effect only when you tap Apply. /clear — start the conversation over",
         ]).join("\n")
       case "/lang": {
         const want = rest[0]?.toLowerCase()
@@ -243,6 +283,12 @@ export class TelegramBridge {
         this.o.ctx.saveConfig({ ...config, company: { ...config.company, language: want } }, `language: ${want}`)
         return want === "ko" ? "이제 한국어로 보냅니다." : "Messages are in English now."
       }
+      case "/ask":
+        if (!arg) return `${L("Usage", "사용법")}: /ask <${L("question", "질문")}> — ${L("or just send the question", "또는 그냥 질문을 보내세요")}`
+        await this.answer(arg)
+        return ""
+      case "/clear":
+        return run({ kind: "ask_reset" }, () => L("Starting over: earlier messages are no longer context.", "새로 시작합니다. 이전 대화는 더 이상 문맥에 넣지 않습니다."))
       case "/status":
         return this.status()
       case "/quota":
@@ -317,7 +363,9 @@ export class TelegramBridge {
         return ""
       }
       default:
-        return text.startsWith("/") ? L("Unknown command. /help lists them.", "모르는 명령입니다. /help에 목록이 있습니다.") : L("Send /help for commands, or /inbox for decisions waiting.", "명령은 /help, 기다리는 결정은 /inbox.")
+        if (text.startsWith("/")) return L("Unknown command. /help lists them.", "모르는 명령입니다. /help에 목록이 있습니다.")
+        await this.answer(text.trim())
+        return ""
     }
   }
 
@@ -352,6 +400,15 @@ export class TelegramBridge {
         } catch (e) {
           result = `⚠️ ${e instanceof ActionError ? e.message : String(e)}`
         }
+      } else if (/^p:\d+:\d+:[yn]$/.test(data)) {
+        // D82: confirm or dismiss something the Operator told the assistant to do
+        const [, id, index, yn] = data.split(":") as [string, string, string, "y" | "n"]
+        try {
+          const r = await act(this.o.ctx, { kind: "ask_resolve", id: Number(id), index: Number(index), apply: yn === "y" })
+          result = r["status"] === "applied" ? `✅ ${L("Applied", "적용됨")}${r["result"] ? ` · ${String(r["result"])}` : ""}` : r["status"] === "dismissed" ? L("Dismissed.", "취소됨.") : `⚠️ ${String(r["result"] ?? "")}`
+        } catch (e) {
+          result = `⚠️ ${e instanceof ActionError ? e.message : String(e)}`
+        }
       } else {
         const m = /^(a|r):(\d+)$/.exec(data)
         if (m) {
@@ -369,6 +426,8 @@ export class TelegramBridge {
       return
     }
     if (u.message?.text) {
+      // a question takes the model a while: answer in the background so buttons and commands keep working meanwhile
+      if (!u.message.text.trim().startsWith("/")) { void this.answer(u.message.text.trim()).catch((e) => this.log(`telegram ask: ${String(e)}`)); return }
       const reply = await this.command(u.message.text)
       if (reply) await this.send(reply)
     }
@@ -377,7 +436,7 @@ export class TelegramBridge {
   /** Long-poll until stop(). */
   async start() {
     this.running = true
-    await this.call("setMyCommands", { commands: [["status", "what is running, spend, interrupts"], ["inbox", "decisions waiting"], ["tickets", "open tickets"], ["new", "open a ticket"], ["note", "instruct the next session on a ticket"], ["unblock", "release a blocked ticket"], ["pause", "pause a department"], ["resume", "lift an interrupt"], ["halt", "stop everything"], ["help", "all commands"]].map(([command, description]) => ({ command, description })) })
+    await this.call("setMyCommands", { commands: [["status", "what is running, spend, interrupts"], ["ask", "ask the company anything (or just send the question)"], ["inbox", "decisions waiting"], ["tickets", "open tickets"], ["new", "open a ticket"], ["note", "instruct the next session on a ticket"], ["unblock", "release a blocked ticket"], ["pause", "pause a department"], ["resume", "lift an interrupt"], ["halt", "stop everything"], ["help", "all commands"]].map(([command, description]) => ({ command, description })) })
     while (this.running) {
       const updates = (await this.call("getUpdates", { offset: this.offset, timeout: this.o.pollSeconds ?? 25, allowed_updates: ["message", "callback_query"] })) as Array<Update> | undefined
       if (!updates) {

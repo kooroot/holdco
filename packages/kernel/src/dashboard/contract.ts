@@ -4,7 +4,7 @@
  */
 import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/http-api"
-import { Action, ActionResult, DashboardErrorSchema, SessionEvents, Snapshot, TicketDetail, TicketFile, TicketFiles } from "./schema.ts"
+import { Action, ActionResult, Chat, DashboardErrorSchema, SessionEvents, Snapshot, TicketDetail, TicketFile, TicketFiles } from "./schema.ts"
 
 export const DashboardGroup = HttpApiGroup.make("dashboard")
   .add(HttpApiEndpoint.get("state", "/state", { success: Snapshot }))
@@ -13,6 +13,7 @@ export const DashboardGroup = HttpApiGroup.make("dashboard")
   .add(HttpApiEndpoint.get("file", "/ticket/:id/file", { params: { id: Schema.String }, query: { path: Schema.String }, success: TicketFile, error: DashboardErrorSchema }))
   .add(HttpApiEndpoint.get("events", "/session/:id/events", { params: { id: Schema.String }, query: { after: Schema.optionalKey(Schema.String) }, success: SessionEvents, error: DashboardErrorSchema }))
   .add(HttpApiEndpoint.get("audit", "/audit", { success: Schema.Struct({ sample: Schema.Array(Schema.String) }) }))
+  .add(HttpApiEndpoint.get("chat", "/chat", { query: { after: Schema.optionalKey(Schema.String) }, success: Chat }))
   .add(HttpApiEndpoint.post("act", "/act", { payload: Action, success: ActionResult, error: DashboardErrorSchema }))
 
 export const DashboardApi = HttpApi.make("holdco")

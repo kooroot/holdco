@@ -81,6 +81,8 @@ Every change is one commit to `company.yaml`. Removing a project never touches i
 
 **Reading it in your language.** With `company.language: ko`, everything an agent wrote that you see — titles, goals, done criteria, the senior's and the judge's words, inbox items — is translated once by the cheapest model you have (Claude haiku, or the cheapest Codex model), cached, and shown translated on the dashboard (hover for the original) and in Telegram. Agents still work in English; the records stay English. It costs cents (capped at $1 a day, charged to a `translator` role).
 
+**Asking it.** Message the Telegram bot without a command, or press `c` in the dashboard ("Ask the company"): *how far is the payment flow? why is ENG-11 stuck? what happened today?* The answer is one model call over the company's own records — every project's progress, each open ticket and what it waits on, the judge's verdicts, running sessions, the inbox, recent commits — so it knows what has a ticket and says so when you ask past that. It is one thread across both places. It cannot change anything: tell it to *do this first*, *open a ticket for refunds*, *unblock it with Base*, and each instruction comes back as a card that takes effect only when you tap **Apply**. It answers with the executive model of your first engine (Opus on Claude); set `roles.assistant` in `company.yaml` to choose another. `/clear` (or "Start over") drops the earlier turns from its context. It needs the supervisor running, and each answer uses your plan like a short session.
+
 ### 5. Your weekly ten minutes
 
 | Command | What it is |
@@ -167,6 +169,8 @@ bunx holdco project remove old-repo                       # 열린 티켓이 있
 **진짜 예산은 구독입니다.** 구독 로그인에서는 달러 예산이 참고용입니다(`budget.enforce: advisory`, API 키 엔진이 없으면 기본): 배분은 유도만 하고, 달러로는 아무것도 멈추지 않으며, 아래 구독 한도가 멈춥니다. 그때 대시보드와 텔레그램은 이달의 API 단가 환산치와 부서·프로젝트별 실제 지출 비중 대 배분만 보여주고 달러 상한은 보여주지 않습니다. 달러는 비교를 위해 계량하지만 실제로 바닥나는 건 구독의 레이트 리밋 창 — Claude Code의 5시간·7일, Codex의 5시간·주간 — 입니다. 커널은 `/usage`·`/status`가 쓰는 사용량 엔드포인트를 이 호스트의 로그인으로 읽고(Claude: `CLAUDE_CODE_OAUTH_TOKEN`, 키체인, 또는 `~/.claude/.credentials.json`; Codex: `~/.codex/auth.json`), 5분마다 폴링하며, 세션 자체가 보고하는 레이트 리밋 이벤트도 반영합니다. 홈과 대시보드 사이드바, 세션·지출 화면, `holdco status`, 텔레그램 `/quota`와 일일 브리핑(주간 감사도 거기서: `/audit`이 샘플을 통과/반려 버튼이 달린 블라인드 카드로 보냄)에 퍼센트로 보이고 `holdco quota`로 즉시 읽을 수 있습니다. 정책(`budget.quota`): `pause_at`(기본 90%)을 넘긴 엔진은 창이 리셋될 때까지 새 세션을 시작하지 않고 — 운영자에게 한 번 알리고 정체 진단이 이유를 말함 — `pace`(기본 켜짐)는 7일 창이 시계보다 `pace_margin`(15)p 이상 앞서면 주간 페이스로 돌아올 때까지 core 프로젝트·검증·경영진만 돌립니다. CEO도 매 사이클 같은 줄을 봅니다.
 
 **당신의 언어로 읽기.** `company.language: ko`면 에이전트가 쓴 글 중 당신이 보는 것 — 제목, 목표, 완료 조건, 시니어와 심판의 말, 인박스 항목 — 은 가장 싼 모델(Claude haiku 또는 가장 싼 Codex 모델)이 한 번 번역해 캐시하고, 대시보드(원문은 호버)와 텔레그램에 번역으로 보입니다. 에이전트는 여전히 영어로 일하고 기록도 영어입니다. 비용은 몇 센트(하루 $1 상한, `translator` 역할에 과금).
+
+**물어보기.** 텔레그램 봇에 명령 없이 메시지를 보내거나, 대시보드에서 `c`를 누르세요("회사에 물어보기"): *결제 플로우 어디까지 됐어? ENG-11 왜 멈췄어? 오늘 뭐 했어?* 답은 회사 기록 — 프로젝트별 진행률, 열린 티켓과 각각 무엇을 기다리는지, 심판 판정, 실행 중인 세션, 인박스, 최근 커밋 — 을 읽은 모델 호출 한 번에서 나옵니다. 그래서 티켓이 있는 일은 알고, 그 너머를 물으면 모른다고 말합니다. 두 곳이 같은 대화입니다. 스스로는 아무것도 바꾸지 못합니다: *이거 먼저 해*, *환불 티켓 열어줘*, *Base로 풀어*처럼 시키면 지시마다 카드가 오고 **적용**을 눌러야 반영됩니다. 답하는 모델은 첫 엔진의 경영진 모델(Claude면 Opus)이고, `company.yaml`의 `roles.assistant`로 바꿀 수 있습니다. `/clear`(또는 "새로 시작")는 이전 대화를 문맥에서 뺍니다. 슈퍼바이저가 돌고 있어야 하고, 답 하나가 짧은 세션만큼 구독 사용량을 씁니다.
 
 ### 5. 매주 10분
 

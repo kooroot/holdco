@@ -560,6 +560,38 @@
           ],
           "additionalProperties": false
         },
+        "assistant": {
+          "type": "object",
+          "properties": {
+            "engine": {
+              "type": "string",
+              "enum": [
+                "claude",
+                "codex"
+              ]
+            },
+            "model": {
+              "type": "string",
+              "minLength": 1
+            },
+            "effort": {
+              "type": "string",
+              "enum": [
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max",
+                "ultra"
+              ]
+            }
+          },
+          "required": [
+            "engine",
+            "model"
+          ],
+          "additionalProperties": false
+        },
         "by_department": {
           "type": "object",
           "patternProperties": {

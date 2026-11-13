@@ -149,6 +149,28 @@ export interface Engine {
    * no sandbox needed (nothing is written). Returns the texts in order and what the call cost.
    */
   translate?(req: TranslateRequest): Promise<TranslateResult>
+  /**
+   * D82: one model call that answers from the text it is given and returns an object matching `schema` — no tools,
+   * nothing read or written, so no sandbox is needed. The kernel uses it to answer the Operator's questions.
+   */
+  ask?(req: AskRequest): Promise<AskResult>
+}
+
+export interface AskRequest {
+  readonly system: string
+  readonly prompt: string
+  /** JSON Schema of the answer (an object; every property required, so both engines accept it). */
+  readonly schema: Record<string, unknown>
+  readonly model: string
+  readonly effort?: string
+  readonly price?: Price
+  readonly env: Record<string, string | undefined>
+  readonly cwd: string
+  readonly timeoutMs: number
+}
+export interface AskResult {
+  readonly output: unknown
+  readonly costUsd: number
 }
 
 export interface TranslateRequest {

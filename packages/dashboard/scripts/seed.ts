@@ -10,6 +10,8 @@ import { CompanyConfig } from "../../kernel/src/config/company.ts"
 import { renderCompanyYaml, scaffold } from "../../kernel/src/scaffold/scaffold.ts"
 import { Store } from "../../kernel/src/store/store.ts"
 import { startDashboard } from "../../kernel/src/dashboard/server.ts"
+import { startAsk } from "../../kernel/src/supervisor/ask.ts"
+import type { Engine } from "../../kernel/src/engine/types.ts"
 const base = process.env["SEED_DIR"] ?? `${process.env["TMPDIR"] ?? "/tmp"}/holdco-seed`
 rmSync(base, { recursive: true, force: true }); mkdirSync(base)
 const git = (cwd: string, ...a: string[]) => spawnSync("git", a, { cwd, encoding: "utf8" }).stdout.trim()
@@ -83,6 +85,12 @@ mkdirSync(NodePath.join(app, "docs/holdco/research"), { recursive: true })
 writeFileSync(NodePath.join(app, "docs/holdco/research/RES-1.md"), "# x402 vs ERC-7715 for delegated payments\n\n## Recommendation\n\nStart with **x402** on Base; add ERC-7715 permissions once wallets ship it.\n\n| Criterion | x402 | ERC-7715 |\n|---|---|---|\n| Wallet support today | broad (HTTP) | 2 wallets |\n| Settlement finality | per request | per permission |\n| Agent identity | header | on-chain |\n\n- Sources: [x402 spec](https://x402.org), [ERC-7715](https://eips.ethereum.org/EIPS/eip-7715)\n- Open question: refund path on failed delivery\n")
 git(app, "add", "-A"); git(app, "commit", "-qm", "research report"); git(app, "checkout", "-q", "main")
 store.db.run("UPDATE tickets SET branch='t/RES-1' WHERE id=?", [t2.id])
-const dash = startDashboard({ root: dir, config: () => config, store, now: () => Date.now(), saveConfig: () => {} }, Number(process.env["PORT"] ?? 7118))
+// D82: a canned assistant so the chat panel can be tried without a model; the context it would be shown is printed
+const seedEngine: Engine = { id: "claude", capabilities: {} as Engine["capabilities"], run: async () => { throw new Error("the seed runs no sessions") },
+  ask: async (req) => { await Bun.sleep(2500); console.error(`--- ask context (${req.prompt.length} chars) ---`); return { costUsd: 0.31, output: /first|먼저|티켓|open/i.test(req.prompt.split("THE OPERATOR NOW SAYS:")[1] ?? "")
+    ? { answer: `Prepared two changes for you to confirm: ${t1.id} goes to the front of the queue, and a new ticket covers refunds.`, proposals: [{ kind: "set_priority", summary: `${t1.id}: priority 1`, ticket: t1.id, inbox_id: 0, decision: "", department: "", project: "", title: "", goal: "", criteria: [], priority: 1, note: "" }, { kind: "open_ticket", summary: "Open a ticket for refunds on acme", ticket: "", inbox_id: 0, decision: "", department: "engineering", project: config.projects[0]!.id, title: "Refund a settled payment", goal: "A seller can refund a settled payment in full or in part", criteria: ["a full refund returns the net amount and the fee", "a partial refund is capped at what is left", "tests cover both"], priority: 2, note: "" }] }
+    : { answer: `acme is about a third of the way through what has a ticket: ${t1.id} is waiting on your approval in the inbox, ${t2.id} is in verification, and nothing is blocked on the plan limits.\n\nWhat moves it: approve inbox #1 and ${t1.id} merges within a tick.`, proposals: [] } } } }
+const seedDeps = { root: dir, config: () => config, store, now: () => Date.now(), engines: new Map([["claude" as const, seedEngine]]), env: () => ({}) }
+const dash = startDashboard({ root: dir, config: () => config, store, now: () => Date.now(), saveConfig: () => {}, assistant: { ask: (text, channel) => startAsk(seedDeps, text, channel) } }, Number(process.env["PORT"] ?? 7118))
 console.log(dash.url)
 await new Promise(() => {})
