@@ -119,12 +119,23 @@ describe("telegram bridge", () => {
   })
   test("commands: status, tickets, note, unblock, new, pause/resume", async () => {
     const b = bridge()
-    expect(await b.command("/status")).toContain("Inbox: 1")
-    expect(await b.command("/status")).toContain("Month: $0.00 of $400") // the full preset meters real money
+    expect(await b.command("/counts")).toContain("Inbox: 1")
+    expect(await b.command("/counts")).toContain("Month: $0.00 of $400") // the full preset meters real money
+    // D84: /status is the home screen — one message with the company's state and its controls as buttons
+    expect(await b.command("/status")).toBe("")
+    const home = sent().at(-1)!
+    expect(home.text).toContain("👉 1 decisions waiting · 1 blocked")
+    expect(home.text).toContain("of $400 this month")
+    expect(home.text).toMatch(/<i>holdco \d+\.\d+\.\d+.* · \d\d:\d\d:\d\d<\/i>$/)
+    const buttons = home.reply_markup.inline_keyboard.flat().map((k: any) => k.callback_data)
+    expect(buttons).toEqual(expect.arrayContaining(["h:inbox", "h:tickets", "h:quota", "h:home"]))
     const advisory = { ...config, budget: { ...config.budget, enforce: "advisory" as const } }
     const ba = new TelegramBridge({ ctx: { root: dir, config: () => advisory, store, now: () => now, saveConfig: () => {} }, token: "T", chatId: "4242", fetch: fakeFetch, pollSeconds: 0 })
-    expect(await ba.command("/status")).toContain("(API-rate equivalent)") // D81: no "of $N" cap on subscription logins
-    expect(await ba.command("/status")).not.toContain(" of $")
+    expect(await ba.command("/counts")).toContain("(API-rate equivalent)") // D81: no "of $N" cap on subscription logins
+    expect(await ba.command("/counts")).not.toContain(" of $")
+    await ba.command("/status")
+    expect(sent().at(-1)?.text).toContain("(API-rate equivalent)")
+    expect(sent().at(-1)?.text).not.toContain(" of $")
     expect(await b.command("/tickets")).toContain("⛔ <code>RES-1</code>")
     expect(await b.command("/note eng-1 Round to cents first")).toContain("Noted on ENG-1")
     expect(store.comments("ENG-1").map((c) => c.body)).toEqual(["Round to cents first"])
@@ -143,7 +154,10 @@ describe("telegram bridge", () => {
     // language: /lang ko saves company.language and every later reply is Korean
     expect(await b.command("/lang ko")).toContain("한국어")
     expect(config.company.language).toBe("ko")
-    expect(await b.command("/status")).toContain("인박스")
+    expect(await b.command("/counts")).toContain("인박스")
+    await b.command("/status")
+    expect(sent().at(-1)?.text).toContain("결정 대기")
+    expect(sent().at(-1)?.reply_markup.inline_keyboard.flat().map((k: any) => k.text)).toContain("🔄 새로고침")
     expect(await b.command("/help")).toContain("주머니")
     expect(await b.command("/lang en")).toContain("English")
   })

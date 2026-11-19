@@ -55,6 +55,7 @@ export const Home = () => {
           // The one thing the Operator should do now, or the assurance that there is nothing (D64).
           const stalled = S.waiting.filter((w) => w.stall)
           const moves: Array<{ to: string; main: string; sub?: string; hot?: boolean }> = []
+          if (S.supervisor.restart_pending) moves.push({ to: "/controls", main: t("New code is on disk but not running yet"), sub: t("bunx holdco service restart — this process still runs {b}", { b: S.supervisor.build }), hot: true })
           if (!S.supervisor.alive) moves.push({ to: "/controls", main: t("The supervisor is not running"), sub: t("bunx holdco service install — nothing happens until it runs"), hot: true })
           if (S.interrupts.some((i) => i.level === "L5")) moves.push({ to: "/controls", main: t("Everything is halted (L5)"), sub: t("Resume it in Controls when you are ready"), hot: true })
           const first = [...S.inbox].sort((a, b) => (a.urgency === b.urgency ? a.created_at - b.created_at : a.urgency === "urgent" ? -1 : 1))[0]

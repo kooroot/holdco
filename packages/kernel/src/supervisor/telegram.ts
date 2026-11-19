@@ -7,12 +7,13 @@
  * perform (`act`), so the kernel's rules apply unchanged.
  */
 import { budgetMode, type CompanyConfig } from "../config/company.ts"
-import { act, ActionError, auditSample, type DashboardContext, ticketFiles } from "../dashboard/api.ts"
+import { act, ActionError, auditSample, type DashboardContext, snapshot, ticketFiles } from "../dashboard/api.ts"
+import { buildLabel, LOADED, pendingRestart } from "../config/build.ts"
 import { readControl } from "./control.ts"
 import { quotaPolicy, quotaVerdict, readQuota, fmtReset } from "./quota.ts"
 import { tr as translated } from "./i18n.ts"
 import { describeProposal, type StoredProposal } from "./ask.ts"
-import { progressLines } from "./roadmap.ts"
+import { progressLines, projectProgress } from "./roadmap.ts"
 
 type Fetch = typeof fetch
 
@@ -33,6 +34,7 @@ const clipHtml = (text: string, max: number): string => {
 
 /** A ten-cell meter for a percentage. */
 const bar = (pct: number): string => { const n = Math.max(0, Math.min(10, Math.round(pct / 10))); return "▰".repeat(n) + "▱".repeat(10 - n) }
+const clipText = (s: string, n: number) => { const t = s.replace(/\s+/g, " ").trim(); return t.length > n ? `${t.slice(0, n - 1)}…` : t }
 const esc = (s: unknown) => String(s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c] as string))
 const left = (ms: number) => { if (ms <= 0) return "expired"; const h = Math.floor(ms / 3_600_000); const m = Math.floor((ms % 3_600_000) / 60_000); return h > 0 ? `${h}h ${m}m` : `${m}m` }
 
@@ -116,6 +118,131 @@ export class TelegramBridge {
       expires ? L(`⏱ rejects itself in ${left(expires - this.o.ctx.now())}`, `⏱ ${left(expires - this.o.ctx.now())} 후 자동 거절`) : "",
     ].filter((l) => l.length > 0)
     return lines.join("\n")
+  }
+
+  /**
+   * D84: the home screen, in Telegram — what the dashboard's Home shows, with the same controls as buttons.
+   * One message: is the company running (and on which build), what needs the Operator, each project's progress,
+   * status and current work, the plan limits. Buttons pause/resume a project, open its roadmap, the inbox, the
+   * tickets, the limits, and refresh the message in place.
+   */
+  home(): { text: string; reply_markup: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } } {
+    const S = snapshot(this.o.ctx)
+    const config = this.o.ctx.config()
+    const L = this.L()
+    const now = S.now
+    const age = (ms: number) => { const m = Math.max(0, Math.floor(ms / 60_000)); return m < 60 ? L(`${m}m`, `${m}분`) : m < 2880 ? L(`${Math.floor(m / 60)}h`, `${Math.floor(m / 60)}시간`) : L(`${Math.floor(m / 1440)}d`, `${Math.floor(m / 1440)}일`) }
+    const lines: Array<string> = []
+    lines.push(`<b>${esc(S.company.name)}</b> · ${S.supervisor.alive ? `🟢 ${L("running", "실행 중")}${S.supervisor.boot_at ? ` (${L(`up ${age(now - S.supervisor.boot_at)}`, `${age(now - S.supervisor.boot_at)} 전 시작`)})` : ""}` : `🔴 ${L("the supervisor is not running — nothing progresses (holdco service start)", "슈퍼바이저가 꺼져 있음 — 아무것도 진행되지 않습니다 (holdco service start)")}`}`)
+    const pending = pendingRestart()
+    if (pending) lines.push(`⚠️ ${L(`New code (${pending}) is on disk but this process still runs ${LOADED.commit}: holdco service restart`, `새 코드(${pending})를 받았지만 이 프로세스는 아직 ${LOADED.commit}로 돌고 있습니다: holdco service restart`)}`)
+    const blocked = S.tickets.filter((t) => t.state === "blocked").length
+    const moves = [
+      ...(S.inbox.length ? [L(`${S.inbox.length} decisions waiting`, `결정 대기 ${S.inbox.length}건`)] : []),
+      ...(blocked ? [L(`${blocked} blocked`, `막힘 ${blocked}건`)] : []),
+      ...S.interrupts.map((i) => `${i.level} ${i.target}`),
+      ...S.quotas.filter((q) => q.verdict.kind === "pause").map((q) => L(`${q.engine} at its plan limit`, `${q.engine} 구독 한도 도달`)),
+    ]
+    lines.push(moves.length ? `👉 ${esc(moves.join(" · "))}` : `✓ ${L("Nothing needs you right now.", "지금 당신이 할 일은 없습니다.")}`)
+    const projectOf = new Map(S.tickets.map((t) => [t.id, t.project]))
+    for (const p of S.projects) {
+      const g = p.progress
+      const pct = g.pct === null ? "—" : `${Math.round(g.pct * 100)}%`
+      lines.push("", `<b>${esc(p.id)}</b> ${esc(p.class)}${p.paused ? ` · ⏸ ${L("paused", "일시정지")}` : ""}${p.exists ? "" : ` · ⚠️ ${L("repository missing", "저장소 없음")}`}`)
+      lines.push(g.basis === "roadmap"
+        ? `${bar((g.pct ?? 0) * 100)} <b>${pct}</b> · ${L(`${g.milestones_done} of ${g.milestones_total} milestones`, `마일스톤 ${g.milestones_done}/${g.milestones_total}`)}${g.current ? `\n${L("now", "지금")}: ${esc(this.tx(g.current.title))}` : ""}`
+        : g.basis === "tickets" ? `<b>${pct}</b> · ${L(`no roadmap yet — ${g.tickets.done} of ${g.tickets.total} tickets done, not product progress`, `로드맵 없음 — 티켓 ${g.tickets.done}/${g.tickets.total} 완료 기준 (제품 완성도 아님)`)}`
+        : L("no roadmap and no tickets yet", "로드맵도 티켓도 아직 없음"))
+      if (g.status) lines.push(`<i>${esc(clipText(this.tx(g.status.text), 420))}</i> — CEO, ${L(`${age(now - g.status.at)} ago`, `${age(now - g.status.at)} 전`)}`)
+      const running = S.running.filter((r) => projectOf.get(r.ticket_id) === p.id)
+      const facts = [
+        running.length ? `▶ ${running.map((r) => `<code>${esc(r.ticket_id)}</code>`).join(" ")}` : p.paused ? "" : g.tickets.open ? L(`idle, ${g.tickets.open} open`, `실행 중 없음, 열린 티켓 ${g.tickets.open}`) : L("no open work", "열린 작업 없음"),
+        p.waiting_operator ? L(`🟠 ${p.waiting_operator} waiting on you`, `🟠 당신 대기 ${p.waiting_operator}`) : "",
+        g.tickets.blocked ? L(`⛔ ${g.tickets.blocked} blocked`, `⛔ 막힘 ${g.tickets.blocked}`) : "",
+        g.last_done ? L(`last shipped <code>${esc(g.last_done.id)}</code> ${age(now - g.last_done.at)} ago`, `최근 완료 <code>${esc(g.last_done.id)}</code> ${age(now - g.last_done.at)} 전`) : "",
+      ].filter(Boolean)
+      if (facts.length) lines.push(facts.join(" · "))
+    }
+    if (S.projects.length === 0) lines.push("", L("No project is registered: holdco project add <path>", "등록된 프로젝트가 없습니다: holdco project add <path>"))
+    if (S.quotas.length) lines.push("", `${L("Limits", "한도")}: ${S.quotas.map((q) => `${esc(q.engine)} ${q.windows.map((w) => `${esc(w.label)} ${Math.round(w.used_pct)}%`).join(" · ")}${q.verdict.kind === "pause" ? ` ⏸` : ""}`).join("  |  ")}`)
+    lines.push(S.budget.mode === "advisory"
+      ? L(`Spend: $${S.budget.spent_today.toFixed(2)} in 24h · $${S.budget.spent_month.toFixed(2)} this month (API-rate equivalent)`, `지출: 24시간 $${S.budget.spent_today.toFixed(2)} · 이달 $${S.budget.spent_month.toFixed(2)} (API 단가 환산)`)
+      : L(`Spend: $${S.budget.spent_today.toFixed(2)} in 24h · $${S.budget.spent_month.toFixed(2)} of $${S.budget.monthly} this month`, `지출: 24시간 $${S.budget.spent_today.toFixed(2)} · 이달 $${S.budget.monthly} 중 $${S.budget.spent_month.toFixed(2)}`))
+    const at = new Intl.DateTimeFormat("en-GB", { timeZone: config.company.timezone, hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(now))
+    lines.push(`<i>holdco ${esc(buildLabel())} · ${at}</i>`)
+    const keyboard: Array<Array<{ text: string; callback_data: string }>> = S.projects.slice(0, 8).map((p) => [
+      { text: `📋 ${p.id}`, callback_data: `h:rm:${p.id}` },
+      { text: p.paused ? `▶ ${L("Resume", "재개")}` : `⏸ ${L("Pause", "일시정지")}`, callback_data: `h:pp:${p.id}` },
+    ])
+    keyboard.push([{ text: `📥 ${L("Inbox", "인박스")}${S.inbox.length ? ` ${S.inbox.length}` : ""}`, callback_data: "h:inbox" }, { text: `🎫 ${L("Tickets", "티켓")}`, callback_data: "h:tickets" }, { text: `📊 ${L("Limits", "한도")}`, callback_data: "h:quota" }])
+    keyboard.push([{ text: `🔄 ${L("Refresh", "새로고침")}`, callback_data: "h:home" }])
+    return { text: clipHtml(lines.join("\n"), 3900), reply_markup: { inline_keyboard: keyboard } }
+  }
+
+  /** D84: one project's roadmap, with the controls that go with it. */
+  roadmapView(projectId: string): { text: string; reply_markup: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } } {
+    const { store } = this.o.ctx
+    const config = this.o.ctx.config()
+    const L = this.L()
+    const p = config.projects.find((x) => x.id === projectId)
+    const back = [{ text: `⬅ ${L("Home", "홈")}`, callback_data: "h:home" }]
+    if (!p) return { text: L(`No project '${esc(projectId)}'.`, `'${esc(projectId)}' 프로젝트가 없습니다.`), reply_markup: { inline_keyboard: [back] } }
+    const g = projectProgress(store, p.id)
+    const tickets = store.allTickets()
+    const lines = [`<b>${esc(p.id)}</b> ${esc(p.class)}${p.paused ? ` · ⏸ ${L("paused", "일시정지")}` : ""} · ${g.pct === null ? "—" : `${bar(g.pct * 100)} <b>${Math.round(g.pct * 100)}%</b>`}`]
+    if (g.status) lines.push(`<i>${esc(clipText(this.tx(g.status.text), 600))}</i>`)
+    lines.push("")
+    for (const m of g.milestones) {
+      if (m.status === "dropped") continue
+      const open = tickets.filter((t) => t.milestone === m.id && !["done", "declined", "rolled_back"].includes(t.state))
+      lines.push(`${m.phase === "done" ? "✅" : m.phase === "active" ? "▶" : "▫"} ${m.phase === "active" ? `<b>${esc(this.tx(m.title))}</b>` : esc(this.tx(m.title))}${m.status === "done" ? "" : m.tickets_total ? ` — ${L(`${m.tickets_done}/${m.tickets_total} tickets`, `티켓 ${m.tickets_done}/${m.tickets_total}`)}` : ` — ${L("no tickets yet", "티켓 없음")}`}`)
+      if (m.phase === "active" && open.length) lines.push(`   ${open.slice(0, 6).map((t) => `<code>${esc(t.id)}</code> ${esc(t.state)}`).join(" · ")}`)
+    }
+    if (g.basis !== "roadmap") lines.push(L("No roadmap yet. The CEO drafts one on its next cycle — or tap the button to run it now.", "아직 로드맵이 없습니다. CEO가 다음 사이클에 초안을 씁니다 — 아래 버튼으로 지금 실행할 수 있습니다."))
+    if (g.tickets.unassigned) lines.push("", L(`${g.tickets.unassigned} open tickets serve no milestone (they do not move the number).`, `마일스톤 없는 열린 티켓 ${g.tickets.unassigned}건 (진행률에 반영 안 됨).`))
+    const cur = g.current ? g.milestones.find((m) => m.id === g.current?.id) : undefined
+    const keyboard: Array<Array<{ text: string; callback_data: string }>> = []
+    if (cur) keyboard.push([{ text: `✓ ${L("Mark done", "완료 처리")}: ${clipText(this.tx(cur.title), 28)}`, callback_data: `h:md:${cur.id}` }])
+    keyboard.push([{ text: `🤖 ${L("Refresh with the CEO", "CEO로 갱신")}`, callback_data: `h:ceo:${p.id}` }, { text: p.paused ? `▶ ${L("Resume", "재개")}` : `⏸ ${L("Pause", "일시정지")}`, callback_data: `h:pr:${p.id}` }])
+    keyboard.push([...back, { text: `🔄 ${L("Refresh", "새로고침")}`, callback_data: `h:rm:${p.id}` }])
+    return { text: clipHtml(lines.join("\n"), 3900), reply_markup: { inline_keyboard: keyboard } }
+  }
+
+  /** A button on the home screen or a roadmap: do it, then redraw the message it sits on. */
+  private async homeCallback(q: NonNullable<Update["callback_query"]>, data: string): Promise<void> {
+    const L = this.L()
+    const [, verb, ...restParts] = data.split(":")
+    const arg = restParts.join(":")
+    let toast = ""
+    let view: { text: string; reply_markup: unknown } | undefined
+    const fail = (e: unknown) => `⚠️ ${e instanceof ActionError ? e.message : String(e)}`
+    try {
+      if (verb === "home") view = this.home()
+      else if (verb === "rm") view = this.roadmapView(arg)
+      else if (verb === "pp" || verb === "pr") {
+        const paused = !(this.o.ctx.config().projects.find((p) => p.id === arg)?.paused === true)
+        await act(this.o.ctx, { kind: "project_pause", id: arg, paused })
+        toast = paused ? L(`${arg} paused: what is running finishes, nothing new starts`, `${arg} 일시정지: 실행 중인 것은 끝내고 새 작업은 시작 안 함`) : L(`${arg} resumed`, `${arg} 재개됨`)
+        view = verb === "pp" ? this.home() : this.roadmapView(arg)
+      } else if (verb === "md") {
+        const m = this.o.ctx.store.milestone(Number(arg))
+        await act(this.o.ctx, { kind: "milestone_edit", id: Number(arg), status: "done" })
+        toast = L("Marked done", "완료 처리됨")
+        view = m ? this.roadmapView(m.project) : this.home()
+      } else if (verb === "ceo") {
+        const r = await act(this.o.ctx, { kind: "roadmap_now" })
+        toast = r["started"] ? L("The CEO is running; refresh in a few minutes", "CEO 실행 시작. 몇 분 뒤 새로고침하세요") : L("The CEO is already running", "CEO가 이미 실행 중입니다")
+      } else if (verb === "inbox" || verb === "tickets" || verb === "quota") {
+        await this.call("answerCallbackQuery", { callback_query_id: q.id })
+        const reply = await this.command(`/${verb}`)
+        if (reply) await this.send(reply)
+        return
+      }
+    } catch (e) {
+      toast = fail(e)
+    }
+    await this.call("answerCallbackQuery", { callback_query_id: q.id, ...(toast ? { text: toast.slice(0, 190) } : {}) })
+    if (view && q.message) await this.call("editMessageText", { chat_id: q.message.chat.id, message_id: q.message.message_id, text: view.text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: view.reply_markup })
   }
 
   private status(): string {
@@ -247,7 +374,8 @@ export class TelegramBridge {
       case "/help":
         return (this.lang() === "ko" ? [
           "<b>Holdco</b> — 주머니 속의 회사.",
-          "/status — 실행 중인 것, 지출, 인터럽트",
+          "/status — 홈 화면: 프로젝트별 진행률·상태·지금 하는 일, 버튼으로 일시정지/재개·로드맵·인박스·티켓·한도",
+          "/roadmap <프로젝트> — 그 프로젝트의 로드맵과 제어 버튼",
           "/inbox — 기다리는 결정, 버튼 포함",
           "/approve &lt;id&gt; [메모] · /reject &lt;id&gt; [메모]",
           "/tickets — 열린 티켓 · /ticket &lt;id&gt; — 하나 자세히",
@@ -264,7 +392,8 @@ export class TelegramBridge {
           "명령 없이 그냥 물어보세요: \"Mapae 결제 어디까지 됐어?\", \"ENG-11 왜 멈췄어?\", \"이거 먼저 해줘\". 답은 회사 기록에서 나오고, 지시는 확인 버튼을 눌러야 적용됩니다. /clear — 대화 새로 시작",
         ] : [
           "<b>Holdco</b> — your company in your pocket.",
-          "/status — what is running, spend, interrupts",
+          "/status — the home screen: each project's progress, status and current work, with buttons to pause/resume, open the roadmap, inbox, tickets and limits",
+          "/roadmap <project> — that project's roadmap with its controls",
           "/inbox — decisions waiting, with buttons",
           "/approve &lt;id&gt; [note] · /reject &lt;id&gt; [note]",
           "/tickets — open tickets · /ticket &lt;id&gt; — one in detail",
@@ -293,9 +422,20 @@ export class TelegramBridge {
       case "/clear":
         return run({ kind: "ask_reset" }, () => L("Starting over: earlier messages are no longer context.", "새로 시작합니다. 이전 대화는 더 이상 문맥에 넣지 않습니다."))
       case "/status":
+      case "/home": {
+        // D84: the home screen with its buttons, not a line of counters
+        const h = this.home()
+        await this.send(h.text, { reply_markup: h.reply_markup })
+        return ""
+      }
+      case "/counts":
         return this.status()
-      case "/progress":
       case "/roadmap": {
+        const id = rest[0] ?? (config.projects.length === 1 ? config.projects[0]?.id : undefined)
+        if (id && config.projects.some((p) => p.id === id)) { const v = this.roadmapView(id); await this.send(v.text, { reply_markup: v.reply_markup }); return "" }
+        return `${L("Usage", "사용법")}: /roadmap <${config.projects.map((p) => p.id).join("|")}>`
+      }
+      case "/progress": {
         const lines = progressLines(store, config, { detail: true, ko: this.lang() === "ko", tr: (x) => this.tx(x) })
         return lines.length ? `<b>${L("Progress", "진행 상황")}</b>\n<pre>${esc(lines.join("\n"))}</pre>` : L("No project is registered.", "등록된 프로젝트가 없습니다.")
       }
@@ -391,6 +531,7 @@ export class TelegramBridge {
       const data = q.data ?? ""
       let result = ""
       const L = this.L()
+      if (data.startsWith("h:")) { await this.homeCallback(q, data); return }
       if (data === "noop") result = L("Cancelled.", "취소됨.")
       else if (data.startsWith("halt:")) {
         try {
@@ -443,10 +584,26 @@ export class TelegramBridge {
     }
   }
 
+  /**
+   * D84: when the company comes up on a different build than the one this chat last saw, say so and show the
+   * home screen — so "did the update take?" is answered by the bot itself, once per update.
+   */
+  private async greet() {
+    const { store } = this.o.ctx
+    const build = buildLabel()
+    const seen = store.getMeta("tg:build")
+    if (seen === build) return
+    store.setMeta("tg:build", build)
+    const L = this.L()
+    const h = this.home()
+    await this.send(`${seen ? L(`🔄 Updated: ${esc(seen)} → <b>${esc(build)}</b>`, `🔄 업데이트됨: ${esc(seen)} → <b>${esc(build)}</b>`) : L(`holdco <b>${esc(build)}</b> is serving this chat`, `holdco <b>${esc(build)}</b>가 이 채팅을 맡습니다`)}\n${L("/status is the home screen now; just type to ask anything.", "/status가 홈 화면입니다. 궁금한 건 그냥 입력하세요.")}\n\n${h.text}`, { reply_markup: h.reply_markup })
+  }
+
   /** Long-poll until stop(). */
   async start() {
     this.running = true
-    await this.call("setMyCommands", { commands: [["status", "what is running, spend, interrupts"], ["progress", "each project's roadmap and how far along it is"], ["ask", "ask the company anything (or just send the question)"], ["inbox", "decisions waiting"], ["tickets", "open tickets"], ["new", "open a ticket"], ["note", "instruct the next session on a ticket"], ["unblock", "release a blocked ticket"], ["pause", "pause a department"], ["resume", "lift an interrupt"], ["halt", "stop everything"], ["help", "all commands"]].map(([command, description]) => ({ command, description })) })
+    await this.call("setMyCommands", { commands: [["status", "home: every project at a glance, with controls"], ["progress", "each project's roadmap and how far along it is"], ["ask", "ask the company anything (or just send the question)"], ["inbox", "decisions waiting"], ["tickets", "open tickets"], ["new", "open a ticket"], ["note", "instruct the next session on a ticket"], ["unblock", "release a blocked ticket"], ["pause", "pause a department"], ["resume", "lift an interrupt"], ["halt", "stop everything"], ["help", "all commands"]].map(([command, description]) => ({ command, description })) })
+    await this.greet()
     while (this.running) {
       const updates = (await this.call("getUpdates", { offset: this.offset, timeout: this.o.pollSeconds ?? 25, allowed_updates: ["message", "callback_query"] })) as Array<Update> | undefined
       if (!updates) {

@@ -1651,6 +1651,7 @@ export class Supervisor {
       store: this.store,
       now: this.now,
       writeReport: (kind, name, body) => this.writeReport(kind, name, body),
+      notify: (en, ko) => void this.notifier.send("info", this.say(en, ko)),
       delegateStart: async (binding, brief) => this.delegateStart(binding, brief),
       delegateWait: async (_binding, ids) => Promise.all(ids.map((id) => this.delegations.get(id) ?? Promise.resolve({ brief_id: id, status: "failed", result: "unknown brief id" }))),
     }

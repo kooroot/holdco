@@ -143,6 +143,69 @@ describe("what the Operator sees and can change", () => {
     expect(config.projects.find((p) => p.id === "arcade")?.paused).toBeUndefined()
   })
 
+  test("Telegram home (D84): every project at a glance, and its buttons pause, open the roadmap, mark a milestone done — redrawing the message", async () => {
+    const calls: Array<{ method: string; body: any }> = []
+    let queue: Array<any> = []
+    const fakeFetch = (async (url: string | URL | Request, init?: RequestInit) => { const method = String(url).split("/").at(-1)!; calls.push({ method, body: init?.body ? JSON.parse(String(init.body)) : {} }); return new Response(JSON.stringify({ ok: true, result: method === "getUpdates" ? queue.splice(0) : true }), { headers: { "content-type": "application/json" } }) }) as unknown as typeof fetch
+    const b = new TelegramBridge({ ctx: ctx(), token: "T", chatId: "1", fetch: fakeFetch, pollSeconds: 0 })
+    const press = async (data: string) => { queue = [{ update_id: calls.length, callback_query: { id: "cb", from: { id: 1 }, message: { message_id: 7, chat: { id: 1 }, text: "x" }, data } }]; await b.pollOnce(); return { toast: calls.filter((c) => c.method === "answerCallbackQuery").at(-1)?.body.text as string | undefined, edit: calls.filter((c) => c.method === "editMessageText").at(-1)?.body } }
+    const h = b.home()
+    expect(h.text).toContain("<b>shop</b> core")
+    expect(h.text).toContain("<b>67%</b> · 2 of 3 milestones")
+    expect(h.text).toContain("now: Refunds")
+    expect(h.text).toContain("<i>Checkout and fees work. Refunds are being built.</i> — CEO")
+    expect(h.text).toContain("<b>0%</b> · 0 of 12 milestones")
+    expect(h.text).toContain("🔴 the supervisor is not running")
+    expect(h.reply_markup.inline_keyboard.slice(0, 2).map((r) => r.map((k) => k.callback_data))).toEqual([["h:rm:shop", "h:pp:shop"], ["h:rm:arcade", "h:pp:arcade"]])
+
+    const paused = await press("h:pp:shop")
+    expect(paused.toast).toContain("shop paused")
+    expect(config.projects.find((p) => p.id === "shop")?.paused).toBe(true)
+    expect(paused.edit.text).toContain("<b>shop</b> core · ⏸ paused") // the same message, redrawn
+    expect(paused.edit.reply_markup.inline_keyboard[0][1]).toEqual({ text: "▶ Resume", callback_data: "h:pp:shop" })
+    await press("h:pp:shop")
+    expect(config.projects.find((p) => p.id === "shop")?.paused).toBeUndefined()
+
+    const road = await press("h:rm:shop")
+    expect(road.edit.text).toContain("✅ A buyer can pay")
+    expect(road.edit.text).toContain("▶ <b>Refunds</b> — 0/4 tickets")
+    expect(road.edit.reply_markup.inline_keyboard[0][0]).toEqual({ text: "✓ Mark done: Refunds", callback_data: `h:md:${m3}` })
+    const done = await press(`h:md:${m3}`)
+    expect(done.toast).toBe("Marked done")
+    expect(store.milestone(m3)?.status).toBe("done")
+    expect(done.edit.text).toContain("✅ Refunds")
+    store.milestoneEdit(m3, { status: "open" }, now)
+    expect((await press("h:ceo:shop")).toast).toContain("the CEO runs in the supervisor") // no supervisor in this test
+    expect((await press("h:home")).edit.text).toContain("<b>shop</b> core")
+    await press("h:tickets")
+    expect(calls.filter((c) => c.method === "sendMessage").at(-1)?.body.text).toContain("<code>")
+  })
+
+  test("Telegram greets once per build: an update announces itself with the home screen", async () => {
+    const calls: Array<{ method: string; body: any }> = []
+    const fakeFetch = (async (url: string | URL | Request, init?: RequestInit) => { const method = String(url).split("/").at(-1)!; calls.push({ method, body: init?.body ? JSON.parse(String(init.body)) : {} }); if (method === "getUpdates") b.stop(); return new Response(JSON.stringify({ ok: true, result: method === "getUpdates" ? [] : true }), { headers: { "content-type": "application/json" } }) }) as unknown as typeof fetch
+    const b: TelegramBridge = new TelegramBridge({ ctx: ctx(), token: "T", chatId: "1", fetch: fakeFetch, pollSeconds: 0 })
+    store.setMeta("tg:build", "0.0.1 @ old1234")
+    await b.start()
+    const first = calls.filter((c) => c.method === "sendMessage")
+    expect(first).toHaveLength(1)
+    expect(first[0]?.body.text).toContain("🔄 Updated: 0.0.1 @ old1234 → <b>")
+    expect(first[0]?.body.reply_markup.inline_keyboard.flat().map((k: any) => k.callback_data)).toContain("h:home")
+    await b.start()
+    expect(calls.filter((c) => c.method === "sendMessage")).toHaveLength(1) // the same build says nothing
+  })
+
+  test("a milestone the CEO marks done is announced to the Operator", async () => {
+    const notes: Array<string> = []
+    const t = TOOLS.find((x) => x.name === "milestone_update")!
+    store.db.run("UPDATE tickets SET state = 'done' WHERE milestone = ?", [m3])
+    await t.run({ id: m3, status: "done", evidence: "main: refunds merged" }, ceo, { ...host(), notify: (en) => void notes.push(en) })
+    expect(notes).toEqual(["🏁 shop: milestone reached — Refunds (3 of 3, 100%). Evidence: main: refunds merged"])
+    await t.run({ id: m3, title: "Refunds, full and partial" }, ceo, { ...host(), notify: (en) => void notes.push(en) })
+    expect(notes).toHaveLength(1) // only reaching it is news
+    store.milestoneEdit(m3, { status: "open" }, now)
+  })
+
   test("the chat reads the roadmaps and can prepare roadmap and pause changes", () => {
     const text = askContext(src(), "shop 어디까지 됐어?", [])
     expect(text).toContain("ROADMAPS")

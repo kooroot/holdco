@@ -78,7 +78,7 @@ export const Shell = ({ children }: { children: ReactNode }) => {
   return (
     <div {...st.app()}>
       <aside {...st.rail()}>
-        <div {...st.brand()}><h1 {...st.brandName()}>{S?.company.name ?? "Holdco"}</h1><span {...st.rel()}>{S ? S.supervisor.release + (S.supervisor.candidate ? ` → ${S.supervisor.candidate}` : "") : ""}</span></div>
+        <div {...st.brand()}><h1 {...st.brandName()}>{S?.company.name ?? "Holdco"}</h1><span {...st.rel()} title={S ? `holdco ${S.supervisor.build}` : undefined}>{S ? S.supervisor.release + (S.supervisor.candidate ? ` → ${S.supervisor.candidate}` : "") : ""}</span></div>
         <nav style={{ display: "grid", gap: 2 }}>
           {VIEWS.map(([to, label]) => {
             const [n, hot] = counts[to] ?? [0, false]

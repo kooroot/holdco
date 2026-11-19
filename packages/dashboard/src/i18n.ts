@@ -137,7 +137,7 @@ const KO: Record<string, string> = {
   "w.project_paused": "프로젝트 {d} 일시정지됨", "w.session": "{d} 세션 실행 중", "w.ceo_triage": "CEO 분류", "w.ceo_proposal": "CEO 제안서 (T2/T3 승인 경로)", "w.coo_review": "COO 검토 (다음 틱)", "w.operator": "당신의 결정 (인박스)", "w.senior_slot": "시니어 세션 (다음 틱, 빈 슬롯)", "w.verification_slot": "검증 세션 (다음 틱)", "w.lease": "리스 (만료되면 회수)", "w.kernel": "커널 (다음 틱)",
   "in {t}": "{t} 후", "now": "지금", "CEO runs in {t}": "CEO {t} 후 실행", "CEO is due now": "CEO 곧 실행", "it opens the next tickets from the strategy": "전략에서 다음 티켓을 엽니다",
   // misc
-  "Dashboard unreachable": "대시보드에 연결할 수 없음",
+  "Dashboard unreachable": "대시보드에 연결할 수 없음", "New code is on disk but not running yet": "새 코드를 받았지만 아직 적용되지 않음", "bunx holdco service restart — this process still runs {b}": "bunx holdco service restart — 이 프로세스는 아직 {b}로 돌고 있습니다",
   "Progress": "진행 상황", "done": "완료", "not started": "시작 전", "in progress": "진행 중", "dropped": "제외됨", "{d} of {n} tickets": "티켓 {d}/{n}", "{d} of {n} milestones": "마일스톤 {d}/{n}", "{n}% of effort": "노력 배분 {n}%",
   "{id} resumed": "{id} 재개됨", "{id} paused: what is running finishes, nothing new starts": "{id} 일시정지: 실행 중인 것은 끝내고 새 작업은 시작하지 않습니다", "How far along is {id}, and what is next?": "{id} 어디까지 됐고 다음은 뭐야?",
   "The CEO is drafting; the roadmap appears here when it finishes": "CEO가 작성 중입니다. 끝나면 여기에 로드맵이 나타납니다", "The CEO is already running": "CEO가 이미 실행 중입니다",

@@ -23,6 +23,7 @@ import { defaultBranch } from "../supervisor/worktrees.ts"
 import { aheadOfWeek, quotaPolicy, quotaVerdict, readQuota } from "../supervisor/quota.ts"
 import { translationsFor } from "../supervisor/i18n.ts"
 import { resolveProposal, type StoredProposal } from "../supervisor/ask.ts"
+import { buildLabel, pendingRestart } from "../config/build.ts"
 import { allProgress, type ProjectProgress } from "../supervisor/roadmap.ts"
 
 const DAY = 86_400_000
@@ -227,7 +228,7 @@ export const snapshot = (ctx: DashboardContext) => {
       ...done24h.map((t) => t.title),
       ...sample.map((t) => t.title),
     ]),
-    supervisor: { alive: sup.alive, pid: sup.pid, release, candidate: candidate?.tag ?? null, boot_at: Number(store.getMeta("boot_at") ?? 0) || null },
+    supervisor: { alive: sup.alive, pid: sup.pid, release, candidate: candidate?.tag ?? null, boot_at: Number(store.getMeta("boot_at") ?? 0) || null, build: buildLabel(), restart_pending: pendingRestart() ?? null },
     interrupts,
     roles: Object.fromEntries(Object.entries(config.roles).filter(([k]) => k !== "by_department").map(([k, v]) => [k, v])),
     departments: config.modules.departments,

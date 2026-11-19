@@ -88,7 +88,7 @@ export const Snapshot = Schema.Struct({
   company: Schema.Struct({ name: Str, mission: Str, timezone: Str, language: Str }),
   /** D75: translations of the English texts in this snapshot into company.language, keyed by the original. */
   translations: Schema.Record(Str, Str),
-  supervisor: Schema.Struct({ alive: Bool, pid: Num, release: Str, candidate: NullStr, boot_at: NullNum }),
+  supervisor: Schema.Struct({ alive: Bool, pid: Num, release: Str, candidate: NullStr, boot_at: NullNum, build: Str, restart_pending: NullStr }),
   interrupts: Schema.Array(Interrupt),
   departments: Schema.Array(Str),
   executive: Str,

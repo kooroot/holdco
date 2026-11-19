@@ -40,6 +40,8 @@ export interface ToolHost {
   /** A ticket moved by a tool; the supervisor may react (e.g. schedule verification). */
   onTicketChanged?(ticketId: string): void
   writeReport(kind: string, name: string, body: string): string
+  /** Tell the Operator something happened (their alert channels), in English and Korean. */
+  notify?(en: string, ko: string): void
 }
 
 type JsonSchema = Record<string, unknown>
@@ -177,6 +179,12 @@ export const TOOLS: ReadonlyArray<Tool> = [
         if (open.length) throw new ToolError(`${open.map((t) => t.id).join(", ")} still open under this milestone`)
       }
       host.store.milestoneEdit(m.id, { ...(a["title"] !== undefined ? { title: String(a["title"]).trim() || m.title } : {}), ...(a["detail"] !== undefined ? { detail: String(a["detail"]) } : {}), ...(a["status"] === "done" || a["status"] === "open" ? { status: a["status"] } : {}), ...(a["evidence"] !== undefined ? { evidence: String(a["evidence"]) } : {}) }, host.now())
+      if (a["status"] === "done" && m.status !== "done") {
+        // D84: a milestone reached is the news the Operator is waiting for
+        const g = projectProgress(host.store, m.project)
+        const pct = g.pct === null ? "" : `, ${Math.round(g.pct * 100)}%`
+        host.notify?.(`🏁 ${m.project}: milestone reached — ${m.title} (${g.milestones_done} of ${g.milestones_total}${pct}). Evidence: ${String(a["evidence"]).slice(0, 200)}`, `🏁 ${m.project}: 마일스톤 달성 — ${m.title} (${g.milestones_done}/${g.milestones_total}${pct}). 근거: ${String(a["evidence"]).slice(0, 200)}`)
+      }
       return { ok: true }
     },
   },
