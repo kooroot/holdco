@@ -22,7 +22,7 @@ export const Urgency = Schema.Literals(["routine", "urgent"])
 export const Ticket = Schema.Struct({
   id: Str, project: NullStr, department: Str, action: NullStr, state: TicketState, approval_stage: NullStr, interrupt_flag: NullStr,
   priority: Num, title: Str, goal: Str, why: Str, done_criteria: Schema.Array(Str), opened_by: Str, attempts: Num,
-  lease_holder: NullStr, lease_expires: NullNum, window_closes_at: NullNum, branch: NullStr, note: NullStr, created_at: Num, updated_at: Num,
+  lease_holder: NullStr, lease_expires: NullNum, window_closes_at: NullNum, branch: NullStr, note: NullStr, milestone: NullNum, created_at: Num, updated_at: Num,
 })
 export const TicketListed = Schema.Struct({ ...Ticket.fields, verdict: NullStr, cost: Num })
 
@@ -58,7 +58,15 @@ export const Activity = Schema.Struct({ ticket_id: Str, at: Num, actor: Str, fro
 
 /** D70: a registered project with what the Operator weighs it against — spend this month and open work. */
 export const ProjectClass = Schema.Literals(["core", "experiment", "maintenance", "brand"])
-export const ProjectRow = Schema.Struct({ id: Str, path: Str, class: ProjectClass, share: Num, merge: Str, verify: Schema.NullOr(Schema.Array(Str)), verify_text: Str, kill_criteria: NullStr, min_tier: Schema.NullOr(Tier), spent_month: Num, cap_month: Num, capped: Bool, open: Num, running: Num, exists: Bool })
+/** D83: a project's roadmap and how far along it is. */
+export const MilestoneRow = Schema.Struct({ id: Num, title: Str, detail: Str, status: Schema.Literals(["open", "done", "dropped"]), phase: Schema.Literals(["done", "active", "next", "dropped"]), position: Num, tickets_total: Num, tickets_done: Num, tickets_open: Num, ratio: Num, done_at: Schema.NullOr(Num), evidence: NullStr, created_by: Str })
+export const Progress = Schema.Struct({
+  project: Str, pct: Schema.NullOr(Num), basis: Schema.Literals(["roadmap", "tickets", "none"]), milestones_done: Num, milestones_total: Num,
+  current: Schema.NullOr(Schema.Struct({ id: Num, title: Str })), milestones: Schema.Array(MilestoneRow),
+  tickets: Schema.Struct({ done: Num, total: Num, open: Num, blocked: Num, unassigned: Num }),
+  status: Schema.NullOr(Schema.Struct({ text: Str, at: Num, by: Str })), last_done: Schema.NullOr(Schema.Struct({ id: Str, title: Str, at: Num })),
+})
+export const ProjectRow = Schema.Struct({ paused: Bool, progress: Progress, waiting_operator: Num, id: Str, path: Str, class: ProjectClass, share: Num, merge: Str, verify: Schema.NullOr(Schema.Array(Str)), verify_text: Str, kill_criteria: NullStr, min_tier: Schema.NullOr(Tier), spent_month: Num, cap_month: Num, capped: Bool, open: Num, running: Num, exists: Bool })
 /** D72: an engine's plan rate-limit windows and what the kernel does about them right now. */
 export const QuotaView = Schema.Struct({
   engine: Str, plan: NullStr, fetched_at: Num, source: Schema.Literals(["endpoint", "session"]), error: NullStr,
@@ -151,6 +159,11 @@ export const Action = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("grade"), id: Str, verdict: Schema.Literals(["approve", "reject"]), note: Schema.optionalKey(Str) }),
   Schema.Struct({ kind: Schema.Literal("audit_done") }),
   Schema.Struct({ kind: Schema.Literal("improve_now") }),
+  Schema.Struct({ kind: Schema.Literal("project_pause"), id: Str, paused: Bool }),
+  Schema.Struct({ kind: Schema.Literal("milestone_add"), project: Str, title: Str, detail: Schema.optionalKey(Str) }),
+  Schema.Struct({ kind: Schema.Literal("milestone_edit"), id: Num, title: Schema.optionalKey(Str), detail: Schema.optionalKey(Str), status: Schema.optionalKey(Schema.Literals(["open", "done", "dropped"])) }),
+  Schema.Struct({ kind: Schema.Literal("milestone_move"), id: Num, dir: Schema.Literals([-1, 1]) }),
+  Schema.Struct({ kind: Schema.Literal("roadmap_now"), project: Schema.optionalKey(Str) }),
   Schema.Struct({ kind: Schema.Literal("ask"), text: Str, channel: Schema.optionalKey(Str) }),
   Schema.Struct({ kind: Schema.Literal("ask_resolve"), id: Num, index: Num, apply: Bool }),
   Schema.Struct({ kind: Schema.Literal("ask_reset") }),
@@ -160,8 +173,8 @@ export const Action = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("withdraw"), note: Schema.optionalKey(Str) }),
   Schema.Struct({ kind: Schema.Literal("rollback"), id: Num, note: Schema.optionalKey(Str) }),
   Schema.Struct({ kind: Schema.Literal("promote"), action: Str }),
-  Schema.Struct({ kind: Schema.Literal("ticket_create"), department: Str, title: Str, goal: Schema.optionalKey(Str), why: Schema.optionalKey(Str), criteria: Schema.optionalKey(Schema.Array(Str)), project: Schema.optionalKey(NullStr), action: Schema.optionalKey(NullStr), priority: Schema.optionalKey(Num) }),
-  Schema.Struct({ kind: Schema.Literal("ticket_edit"), id: Str, title: Schema.optionalKey(Str), goal: Schema.optionalKey(Str), why: Schema.optionalKey(Str), criteria: Schema.optionalKey(Schema.Array(Str)), priority: Schema.optionalKey(Num), action: Schema.optionalKey(NullStr), project: Schema.optionalKey(NullStr), department: Schema.optionalKey(Str) }),
+  Schema.Struct({ kind: Schema.Literal("ticket_create"), department: Str, title: Str, goal: Schema.optionalKey(Str), why: Schema.optionalKey(Str), criteria: Schema.optionalKey(Schema.Array(Str)), project: Schema.optionalKey(NullStr), action: Schema.optionalKey(NullStr), priority: Schema.optionalKey(Num), milestone: Schema.optionalKey(NullNum) }),
+  Schema.Struct({ kind: Schema.Literal("ticket_edit"), milestone: Schema.optionalKey(NullNum), id: Str, title: Schema.optionalKey(Str), goal: Schema.optionalKey(Str), why: Schema.optionalKey(Str), criteria: Schema.optionalKey(Schema.Array(Str)), priority: Schema.optionalKey(Num), action: Schema.optionalKey(NullStr), project: Schema.optionalKey(NullStr), department: Schema.optionalKey(Str) }),
   Schema.Struct({ kind: Schema.Literal("comment"), id: Str, body: Str }),
   Schema.Struct({ kind: Schema.Literal("role_set"), role: Str, assignment: Str }),
   Schema.Struct({ kind: Schema.Literal("project_add"), path: Str, id: Schema.optionalKey(Str), class: Schema.optionalKey(ProjectClass), share: Schema.optionalKey(Num), verify: Schema.optionalKey(Str) }),

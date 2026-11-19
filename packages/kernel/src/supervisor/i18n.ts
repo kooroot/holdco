@@ -36,6 +36,9 @@ export const pendingTexts = (store: Store, now: number, lang: string): Array<str
     if (store.translation(hashText(text), lang) === undefined) out.push(text)
   }
   for (const i of store.inboxOpen()) { add(String(i.payload["title"] ?? "")); add(String(i.payload["note"] ?? "")); add(String(i.payload["why_now"] ?? "")) }
+  // D83: the roadmap and the CEO's status lines are what the Operator reads first
+  for (const m of store.milestones()) if (m.status !== "dropped") { add(m.title); add(m.detail) }
+  for (const r of store.db.query<{ value: string }, []>("SELECT value FROM meta WHERE key LIKE 'project_status:%'").all()) { try { add(String((JSON.parse(r.value) as { text?: string }).text ?? "")) } catch { /* not ours */ } }
   const tickets = store.allTickets().filter((t) => t.updated_at >= now - 14 * DAY).sort((a, b) => b.updated_at - a.updated_at)
   for (const t of tickets) {
     add(t.title); add(t.goal); add(t.why); add(t.note)

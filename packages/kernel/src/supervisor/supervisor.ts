@@ -9,11 +9,11 @@
  * The clock and the engines are injected so a simulated week runs in a test without a model.
  */
 import { randomUUID } from "node:crypto"
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs"
 import * as NodePath from "node:path"
 import { spawnSync } from "node:child_process"
 import { Exit, Schema } from "effect"
-import { assignmentFor, authMode, budgetMode, type CompanyConfig, durationMs, type EngineId, type RoleKind } from "../config/company.ts"
+import { assignmentFor, authMode, budgetMode, CompanyConfig, durationMs, type EngineId, type RoleKind } from "../config/company.ts"
 import { HOST_DENY_READ, UNREADABLE } from "../policy/paths.ts"
 import { effectiveTier, tierForChange, UnknownAction } from "../policy/tiers.ts"
 import { demotionDue, graduationCheck } from "../policy/graduation.ts"
@@ -24,6 +24,7 @@ import { appendSessionEvent } from "./journal.ts"
 import { renderVerify } from "../config/projects.ts"
 import { hashText, pendingTexts, tr, TRANSLATION_DAILY_USD, translatorFor } from "./i18n.ts"
 import { startAsk } from "./ask.ts"
+import { progressLines } from "./roadmap.ts"
 import { checkCi, CI_POLL_MS, CI_WATCH_MS, ciWatches, defaultGhRunner, endCiWatch, failingStep, hasWorkflows, startCiWatch } from "./ciwatch.ts"
 import { fmtReset, mergeSessionWindow, quotaPolicy, quotaVerdict, readQuota, renderQuota, WINDOW_LENGTH, writeQuota } from "./quota.ts"
 import { collectSignals, renderSignals } from "./signals.ts"
@@ -151,7 +152,9 @@ export const sessionEnv = (config: CompanyConfig, engine: EngineId, env: Record<
 }
 
 export class Supervisor {
-  readonly config: CompanyConfig
+  /** Re-read from company.yaml when the file changes (D83), so a project paused, re-weighted or added takes effect on the next tick. */
+  config: CompanyConfig
+  private configStamp = 0
   readonly root: string
   readonly store: Store
   readonly now: () => number
@@ -237,7 +240,32 @@ export class Supervisor {
 
   // ── one tick ─────────────────────────────────────────────────────────────
 
+  /**
+   * D83: company.yaml is edited while the company runs — the dashboard, Telegram and `holdco project …` all write it —
+   * and what the Operator changed has to hold from the next tick, not the next restart. An invalid file is reported
+   * once and the last good configuration keeps running.
+   */
+  reloadConfig() {
+    const file = NodePath.join(this.root, "company.yaml")
+    let stamp = 0
+    try { stamp = statSync(file).mtimeMs } catch { return }
+    if (stamp === this.configStamp) return
+    const first = this.configStamp === 0
+    this.configStamp = stamp
+    if (first) return // the configuration we were started with is the one on disk, or the caller's (tests)
+    try {
+      const exit = Schema.decodeUnknownExit(CompanyConfig, { errors: "all", onExcessProperty: "error" })(Bun.YAML.parse(readFileSync(file, "utf8")))
+      if (Exit.isFailure(exit)) throw new Error(String(exit.cause).slice(0, 300))
+      this.config = exit.value
+      this.log("company.yaml changed: configuration reloaded")
+    } catch (e) {
+      this.log(`company.yaml changed but is invalid; still running on the last good configuration: ${e instanceof Error ? e.message : String(e)}`)
+      void this.notifier.send("warning", this.say("company.yaml is invalid; the company keeps running on the last good configuration until it is fixed (holdco doctor)", "company.yaml이 유효하지 않습니다. 고칠 때까지 마지막 정상 설정으로 계속 돌아갑니다 (holdco doctor)"))
+    }
+  }
+
   async tick() {
+    this.reloadConfig()
     const now = this.now()
     await this.notifier.heartbeat()
     const active = this.applyInterrupts(now)
@@ -758,6 +786,7 @@ export class Supervisor {
     void this.notifier.send("info", [
       this.say(`daily: ${done.length} done in 24h · ${items.length} routine item(s) waiting · $${this.store.spentAll(now - DAY).toFixed(2)} spent`, `일일: 24시간 완료 ${done.length}건 · 루틴 대기 ${items.length}건 · 지출 $${this.store.spentAll(now - DAY).toFixed(2)}`),
       ...lines,
+      ...(this.config.projects.length ? [this.say("progress:", "진행 상황:"), ...progressLines(this.store, this.config, { ko: (this.config.company.language ?? "en") === "ko", tr: (x) => this.tx(x) })] : []),
       ...(quota.length ? [this.say("limits:", "구독 한도:"), ...quota] : []),
     ].join("\n"))
   }
@@ -884,6 +913,14 @@ export class Supervisor {
       `## Blocked tickets (${blocked.length}) — use ticket_unblock with a decision, or leave for the Operator${blocked.length > CEO_LIST_CAP ? `; first ${CEO_LIST_CAP}` : ""}`,
       ...blocked.slice(0, CEO_LIST_CAP).map((t) => `- ${t.id} [${t.department}] ${t.title}: ${clip(t.note ?? "", 300)}`),
       "",
+      "## Roadmaps (D83) — the Operator reads these to see how far each project is; keep them true",
+      ...progressLines(this.store, this.config, { detail: true }),
+      ...this.config.projects.flatMap((p) => this.repositoryDigest(p.id, p.path)),
+      "- A project with no roadmap: read its repository (README, docs, the code that exists) and governance/strategy.md, then write the roadmap with milestone_add — four to eight outcomes in order, from what already works (add those as `done`, with evidence) to a product that ships. Outcomes a person could check, not tasks.",
+      "- Every ticket you open for a project names its milestone (`milestone` in ticket_create); attach the open ones that have none with ticket_milestone. Work that serves no milestone is either a missing milestone or work not worth doing.",
+      "- When a milestone's tickets are all done and the outcome is really there, mark it done with milestone_update and the evidence. Never mark one done to make the number move.",
+      "- Each cycle, for every project whose state changed since its status was written, write project_status: what works today, what is being built now, what comes next, what needs the Operator.",
+      "",
       "## Then: keep every objective moving — with evidence, never with busywork",
       `Open tickets: ${this.store.ticketsIn(["new", "triaged", "in_progress", "ready_for_verification", "verified", "awaiting_approval", "rejected", "blocked"]).length}. The company stops when nothing is open, so for every objective in governance/strategy.md that no open ticket serves, open the next concrete ticket with ticket_create (they start triaged): small, one deliverable, testable done criteria, and cite the objective or the product observation it answers. Check existing tickets before creating another. Open nothing for what the strategy does not name — no maintenance or refactoring to keep departments busy; when every objective is served or met, open nothing and say in the report what evidence or decision would change that. Keep the inbox small: escalate only what policy or genuinely new judgment requires.`,
       "End with the structured cycle report.",
@@ -997,6 +1034,32 @@ export class Supervisor {
   }
 
   /** D78: `holdco improve --now` / the dashboard: run the Improvement cycle without waiting for the week. */
+  /**
+   * D83: what a project's repository holds, for the CEO to draft a roadmap from — given only while the project
+   * has none, so the draft rests on what is there even where the session cannot read outside the company.
+   */
+  private repositoryDigest(id: string, path: string): Array<string> {
+    const repo = this.resolveProject(path)
+    if (this.store.milestones(id).some((m) => m.status !== "dropped") || !existsSync(repo)) return [`  (${id} is at ${repo})`]
+    const git = (args: Array<string>) => { const r = spawnSync("git", args, { cwd: repo, encoding: "utf8" }); return r.status === 0 ? r.stdout.trim() : "" }
+    const files = git(["ls-files"]).split("\n").filter(Boolean)
+    const top = [...new Set(files.map((f) => (f.includes("/") ? `${f.split("/")[0]}/` : f)))].slice(0, 40)
+    const readme = files.find((f) => /^readme(\.[a-z]+)?$/i.test(f))
+    const head = readme ? clip(readFileSync(NodePath.join(repo, readme), "utf8"), 2500) : ""
+    const log = git(["log", "-n", "15", "--format=%cr · %s"])
+    return [
+      `  ${id} has no roadmap. Its repository (${repo}): ${files.length} tracked files; top level: ${top.join(" ") || "(empty)"}`,
+      ...(head ? [`  ${readme}: ${head.replace(/\s*\n\s*/g, " ⏎ ")}`] : []),
+      ...(log ? [`  latest commits: ${log.split("\n").map((l) => clip(l, 110)).join(" | ")}`] : ["  no commits beyond the first"]),
+    ]
+  }
+
+  /** D83: run the CEO cycle now (the dashboard's "Draft the roadmap"): false when one is already running or there is no CEO. */
+  runCeoNow(now = this.now()): boolean {
+    if (this.config.modules.executive === "none" || [...this.running.values()].some((r) => r.kind === "ceo")) return false
+    this.lastJob.set("ceo", now); this.store.setMeta("job:ceo", String(now)); this.ceoCycle(now)
+    return true
+  }
   runImprovementNow(now = this.now()) { this.lastJob.set("improvement", now); this.store.setMeta("job:improvement", String(now)); this.improvementCycle(now) }
 
   private improvementCycle(now: number) {
@@ -1199,6 +1262,8 @@ export class Supervisor {
     const verdict = quotaVerdict(readQuota(this.store, engineId), quotaPolicy(this.config), now)
     if (verdict.kind === "pause") return verdict.reason
     if (verdict.kind === "pace" && ticket && kind !== "verification" && this.config.projects.find((p) => p.id === ticket.project)?.class !== "core") return verdict.reason
+    // D83: the Operator paused the ticket's project; what is running finishes, nothing new starts there
+    if (ticket?.project && this.config.projects.find((p) => p.id === ticket.project)?.paused) return `project ${ticket.project} is paused by the Operator`
     const spender = this.spenderOf(kind, department)
     const share = this.config.budget.shares[spender] ?? 0
     const reserved = [...this.running.values()].filter((r) => this.spenderOf(r.kind, r.department) === spender).reduce((a, r) => a + r.cap, 0)
@@ -1580,8 +1645,9 @@ export class Supervisor {
   // ── delegation (D37) ─────────────────────────────────────────────────────
 
   private toolHost(): ToolHost {
+    const self = this
     return {
-      config: this.config,
+      get config() { return self.config }, // always the current one (reloadConfig)
       store: this.store,
       now: this.now,
       writeReport: (kind, name, body) => this.writeReport(kind, name, body),

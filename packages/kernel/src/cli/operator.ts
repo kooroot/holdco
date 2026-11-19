@@ -23,6 +23,7 @@ import { dashboardToken, startDashboard } from "../dashboard/server.ts"
 import { discoverChatId, TelegramBridge, telegramConfig } from "../supervisor/telegram.ts"
 import { envFilePath } from "./env.ts"
 import { quotaPolicy, quotaVerdict, readQuota, renderQuota, writeQuota } from "../supervisor/quota.ts"
+import { progressLines } from "../supervisor/roadmap.ts"
 import { addProject, openTicketsFor, parseVerify, PROJECT_CLASSES, type ProjectClass, ProjectError, removeProject, renderVerify, setProject } from "../config/projects.ts"
 import type { Level } from "../schema/interrupts.ts"
 
@@ -294,6 +295,16 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
       store.close()
       return true
     }
+    case "progress":
+    case "roadmap": {
+      // D83: each project's roadmap and how far along it is
+      const config = loadConfig(dir)
+      const store = Store.open(dir)
+      const lines = progressLines(store, config, { detail: true })
+      console.log(lines.length ? lines.join("\n") : "no projects registered: holdco project add <path>")
+      store.close()
+      return true
+    }
     case "status": {
       const config = loadConfig(dir)
       const store = Store.open(dir)
@@ -516,6 +527,15 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
         return v as ProjectClass
       }
       try {
+        if (sub === "pause" || sub === "resume") {
+          const id = args.positional[2] ?? ""
+          const cur = config.projects.find((x) => x.id === id)
+          if (!cur) throw new OperatorError(`usage: holdco project ${sub} <id> (${config.projects.map((x) => x.id).join(", ")})`)
+          const { paused: _p, ...rest } = cur
+          saveConfig(dir, { ...config, projects: config.projects.map((x) => (x.id === id ? (sub === "pause" ? { ...rest, paused: true } : rest) : x)) }, `project ${sub} ${id}`)
+          console.log(sub === "pause" ? `${id} is paused: what is running finishes, nothing new starts there` : `${id} resumed`)
+          return true
+        }
         if (sub === undefined || sub === "list") {
           if (!config.projects.length) { console.log("no projects registered: holdco project add <path>"); return true }
           const store = Store.open(dir)

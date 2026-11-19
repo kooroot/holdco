@@ -7,6 +7,7 @@ import { useNewTicket, useOpenTicket } from "../nav.ts"
 import { etaText, waitingText } from "../ticket/Waiting.tsx"
 import { cn, Button, Card, Code, Empty, Head, Meter, Pill, Td, ui } from "../ui.tsx"
 import { t, useLang, tx } from "../i18n.ts"
+import { ProjectCards } from "./Projects.tsx"
 
 const st = {
   tiles: style({ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "md", "@media (min-width: 1100px)": { gridTemplateColumns: "repeat(6, 1fr)" } }),
@@ -71,6 +72,7 @@ export const Home = () => {
             </div>
           )
         })()}
+        <ProjectCards S={S} />
         {S.quotas.length ? <Card pad><div {...ui.row()} style={{ alignItems: "stretch", gap: 18 }}>
           <div style={{ minWidth: 120 }}><h3 {...ui.h3()}>{t("Plan limits")}</h3><div {...cn(ui.small(), ui.muted())}>{t("what the company really runs on")}</div></div>
           {S.quotas.map((q) => <div key={q.engine} style={{ flex: "1 1 220px", minWidth: 0 }}>

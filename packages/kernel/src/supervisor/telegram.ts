@@ -12,6 +12,7 @@ import { readControl } from "./control.ts"
 import { quotaPolicy, quotaVerdict, readQuota, fmtReset } from "./quota.ts"
 import { tr as translated } from "./i18n.ts"
 import { describeProposal, type StoredProposal } from "./ask.ts"
+import { progressLines } from "./roadmap.ts"
 
 type Fetch = typeof fetch
 
@@ -256,6 +257,7 @@ export class TelegramBridge {
           "/pause &lt;부서|*&gt; &lt;사유&gt; · /resume &lt;부서|*&gt;",
           "/halt &lt;사유&gt; — 전부 정지 (L5) · /resume * — 해제",
           "/audit — 주간 감사: 샘플을 카드로 받고 버튼으로 채점 (심판 판정은 채점 뒤에 공개)",
+          "/progress — 프로젝트별 로드맵과 진행률",
           "/quota — Claude·Codex 구독 한도(%)와 지금 회사가 그걸로 뭘 하는지",
           "/lang en|ko — 메시지 언어",
           "",
@@ -272,6 +274,7 @@ export class TelegramBridge {
           "/pause &lt;department|*&gt; &lt;reason&gt; · /resume &lt;department|*&gt;",
           "/halt &lt;reason&gt; — stop everything (L5) · /resume * — lift it",
           "/audit — weekly audit: the sample as cards, graded with buttons (the judge's verdict is revealed after yours)",
+          "/progress — each project's roadmap and how far along it is",
           "/quota — Claude/Codex plan limits (%) and what the company does about them now",
           "/lang en|ko — message language",
           "",
@@ -291,6 +294,11 @@ export class TelegramBridge {
         return run({ kind: "ask_reset" }, () => L("Starting over: earlier messages are no longer context.", "새로 시작합니다. 이전 대화는 더 이상 문맥에 넣지 않습니다."))
       case "/status":
         return this.status()
+      case "/progress":
+      case "/roadmap": {
+        const lines = progressLines(store, config, { detail: true, ko: this.lang() === "ko", tr: (x) => this.tx(x) })
+        return lines.length ? `<b>${L("Progress", "진행 상황")}</b>\n<pre>${esc(lines.join("\n"))}</pre>` : L("No project is registered.", "등록된 프로젝트가 없습니다.")
+      }
       case "/quota":
       case "/limits":
         return this.quota()
@@ -347,11 +355,13 @@ export class TelegramBridge {
       }
       case "/pause": {
         const [target, ...why] = rest
-        if (!target) return `${L("Usage", "사용법")}: /pause <department|*> <reason>`
+        if (!target) return `${L("Usage", "사용법")}: /pause <project|department|*> <reason>`
+        if (config.projects.some((p) => p.id === target)) return run({ kind: "project_pause", id: target, paused: true }, () => L(`Project ${esc(target)} is paused: what is running finishes, nothing new starts there. /resume ${esc(target)} to continue.`, `프로젝트 ${esc(target)} 일시정지: 실행 중인 것은 끝내고 새 작업은 시작하지 않습니다. /resume ${esc(target)}로 재개.`))
         return run({ kind: "interrupt", level: "L2", target, reason: why.join(" ") || "paused from Telegram" }, () => L(`L2 raised on ${esc(target)}; sessions there stop on the next tick.`, `${esc(target)}에 L2 올림; 그곳 세션은 다음 틱에 멈춥니다.`))
       }
       case "/resume": {
         const target = rest[0] ?? "*"
+        if (config.projects.find((p) => p.id === target)?.paused) return run({ kind: "project_pause", id: target, paused: false }, () => L(`Project ${esc(target)} resumed.`, `프로젝트 ${esc(target)} 재개됨.`))
         const active = (() => { try { return readControl(this.o.ctx.root) } catch { return [] } })().filter((i) => i.target === target)
         if (active.length === 0) return L(`Nothing to resume on ${esc(target)}.`, `${esc(target)}에 재개할 것이 없습니다.`)
         for (const i of active) await act(this.o.ctx, { kind: "resume", level: i.level, target: i.target })
@@ -436,7 +446,7 @@ export class TelegramBridge {
   /** Long-poll until stop(). */
   async start() {
     this.running = true
-    await this.call("setMyCommands", { commands: [["status", "what is running, spend, interrupts"], ["ask", "ask the company anything (or just send the question)"], ["inbox", "decisions waiting"], ["tickets", "open tickets"], ["new", "open a ticket"], ["note", "instruct the next session on a ticket"], ["unblock", "release a blocked ticket"], ["pause", "pause a department"], ["resume", "lift an interrupt"], ["halt", "stop everything"], ["help", "all commands"]].map(([command, description]) => ({ command, description })) })
+    await this.call("setMyCommands", { commands: [["status", "what is running, spend, interrupts"], ["progress", "each project's roadmap and how far along it is"], ["ask", "ask the company anything (or just send the question)"], ["inbox", "decisions waiting"], ["tickets", "open tickets"], ["new", "open a ticket"], ["note", "instruct the next session on a ticket"], ["unblock", "release a blocked ticket"], ["pause", "pause a department"], ["resume", "lift an interrupt"], ["halt", "stop everything"], ["help", "all commands"]].map(([command, description]) => ({ command, description })) })
     while (this.running) {
       const updates = (await this.call("getUpdates", { offset: this.offset, timeout: this.o.pollSeconds ?? 25, allowed_updates: ["message", "callback_query"] })) as Array<Update> | undefined
       if (!updates) {

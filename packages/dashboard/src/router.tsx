@@ -7,6 +7,7 @@ import { Controls } from "./views/Controls.tsx"
 import { Home } from "./views/Home.tsx"
 import { Inbox } from "./views/Inbox.tsx"
 import { Org } from "./views/Org.tsx"
+import { Progress } from "./views/Projects.tsx"
 import { Quality } from "./views/Quality.tsx"
 import { Releases } from "./views/Releases.tsx"
 import { Settings } from "./views/Settings.tsx"
@@ -18,7 +19,7 @@ const root = createRootRoute({
 })
 const r = <const P extends string>(path: P, component: () => React.JSX.Element) => createRoute({ getParentRoute: () => root, path, component })
 export const router = createRouter({
-  routeTree: root.addChildren([r("/", Home), r("/inbox", Inbox), r("/tickets", Board), r("/audit", Audit), r("/quality", Quality), r("/releases", Releases), r("/spend", Spend), r("/org", Org), r("/controls", Controls), r("/settings", Settings)]),
+  routeTree: root.addChildren([r("/", Home), r("/progress", Progress), r("/inbox", Inbox), r("/tickets", Board), r("/audit", Audit), r("/quality", Quality), r("/releases", Releases), r("/spend", Spend), r("/org", Org), r("/controls", Controls), r("/settings", Settings)]),
   defaultPreload: "intent",
 })
 declare module "@tanstack/react-router" { interface Register { router: typeof router } }

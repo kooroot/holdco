@@ -233,6 +233,8 @@ const Project = Schema.Struct({
   /** Operator-only paths inside the project, as globs relative to `path`. */
   locked: Schema.Array(Text),
   kill_criteria: Schema.optionalKey(Text),
+  /** D83: the Operator paused this project: no new session starts for its tickets until it is resumed. */
+  paused: Schema.optionalKey(Schema.Boolean),
   /**
    * D71: a floor under every action's tier in this project — `T3` makes a payments repository Operator-approved
    * whatever the company-wide autonomy says, while a toy project stays autonomous. Locked paths still force T3.

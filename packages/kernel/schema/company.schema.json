@@ -742,6 +742,9 @@
             "type": "string",
             "minLength": 1
           },
+          "paused": {
+            "type": "boolean"
+          },
           "min_tier": {
             "type": "string",
             "enum": [

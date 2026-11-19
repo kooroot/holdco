@@ -23,6 +23,7 @@ import { defaultBranch } from "../supervisor/worktrees.ts"
 import { aheadOfWeek, quotaPolicy, quotaVerdict, readQuota } from "../supervisor/quota.ts"
 import { translationsFor } from "../supervisor/i18n.ts"
 import { resolveProposal, type StoredProposal } from "../supervisor/ask.ts"
+import { allProgress, type ProjectProgress } from "../supervisor/roadmap.ts"
 
 const DAY = 86_400_000
 
@@ -43,6 +44,14 @@ export interface DashboardContext {
 
 export interface Assistant {
   ask(text: string, channel: string): { id: number; done: Promise<ChatRow> }
+}
+
+/** A milestone id the Operator picked for a ticket: it must be on that ticket's project's roadmap. */
+const milestoneFor = (store: Store, id: number | null | undefined, project: string | null): number | null => {
+  if (id === undefined || id === null) return null
+  const m = store.milestone(id)
+  if (!m || m.project !== project) throw new ActionError(`milestone ${id} is not on ${project ?? "this ticket's project"}'s roadmap`)
+  return m.id
 }
 
 /** D82: the chat thread after message `after`, and whether an answer is still being written. */
@@ -110,6 +119,7 @@ export const snapshot = (ctx: DashboardContext) => {
     const expiresAt = ["issue", "graduation", "manual_action"].includes(i.kind) ? null : i.created_at + timeout
     return { ...i, expires_at: expiresAt, ticket: t ? { id: t.id, title: t.title, department: t.department, project: t.project, action: t.action, branch: t.branch, goal: t.goal, state: t.state } : null, verdict: v ? { verdict: v.verdict, overall: v.overall, confidence: v.confidence, summary: (JSON.parse(v.payload) as { summary?: string }).summary ?? "" } : null, proposal: p?.proposal ?? null, review: p?.review ?? null }
   })
+  const progress = new Map(allProgress(store, config).map((g) => [g.project, g]))
   const tickets = store.allTickets().map((t) => ({ ...t, verdict: store.verdictFor(t.id)?.verdict ?? null, cost: store.sessionsForTicket(t.id).reduce((a, s) => a + s.cost_usd, 0) }))
   const running = store.openSessions().map((s) => ({ id: s.id, ticket_id: s.ticket_id, role: s.role, kind: s.kind, engine: s.engine, model: s.model, started_at: s.started_at }))
   const recentSessions = store.allSessionsSince(now - 7 * DAY).slice(-50).reverse()
@@ -141,6 +151,7 @@ export const snapshot = (ctx: DashboardContext) => {
     const stall = stallRaw ? (JSON.parse(stallRaw) as { since: number; reason: string; owner: "operator" | "kernel" }) : null
     const w = (on: string, eta: number | null = null, detail: string | null = null) => ({ ticket_id: t.id, title: t.title, state: t.state, on, eta, detail, stall: stall && stall.owner === "kernel" ? { since: stall.since, reason: stall.reason } : null })
     if (live) return w("session", null, live.role)
+    if (t.project && ["triaged", "rejected", "ready_for_verification"].includes(t.state) && config.projects.find((p) => p.id === t.project)?.paused) return w("project_paused", null, t.project)
     switch (t.state) {
       case "new": return w("ceo_triage", nextCeo(t.updated_at))
       case "triaged": case "rejected": return w("senior_slot")
@@ -208,6 +219,7 @@ export const snapshot = (ctx: DashboardContext) => {
     now,
     company: { name: config.company.name, mission: config.company.mission, timezone: config.company.timezone, language: config.company.language ?? "en", preset: undefined },
     translations: translationsFor(store, config.company.language ?? "en", [
+      ...[...progress.values()].flatMap((g) => [g.status?.text, ...g.milestones.flatMap((m) => [m.title, m.detail])]),
       ...tickets.flatMap((t) => [t.title, t.goal, t.note]),
       ...inbox.flatMap((i) => [String(i.payload["title"] ?? ""), String(i.payload["note"] ?? ""), String(i.payload["why_now"] ?? "")]),
       ...activity.map((e) => e.note),
@@ -227,7 +239,8 @@ export const snapshot = (ctx: DashboardContext) => {
       return [{ engine: q.engine, plan: q.plan, fetched_at: q.fetched_at, source: q.source, error: q.error ?? null, windows: q.windows.map((w) => ({ id: w.id, label: w.label, used_pct: w.used_pct, resets_at: w.resets_at, ahead: w.id === "7d" ? aheadOfWeek(q, now) : null })), verdict: { kind: v.kind, reason: v.kind === "ok" ? null : v.reason } }]
     }),
     projects: config.projects.map((p) => ({
-      id: p.id, path: p.path, class: p.class, share: p.share, merge: p.merge ?? "local", verify: p.verify ? [...p.verify] : null, verify_text: renderVerify(p.verify), kill_criteria: p.kill_criteria ?? null, min_tier: p.min_tier ?? null,
+      id: p.id, path: p.path, class: p.class, share: p.share, merge: p.merge ?? "local", verify: p.verify ? [...p.verify] : null, verify_text: renderVerify(p.verify), kill_criteria: p.kill_criteria ?? null, min_tier: p.min_tier ?? null, paused: p.paused === true, progress: progress.get(p.id) as ProjectProgress,
+      waiting_operator: inbox.filter((i) => i.ticket?.project === p.id).length,
       spent_month: spentByProject[p.id] ?? 0, cap_month: p.share * config.budget.monthly_usd, capped: budgetMode(config) === "metered" && (config.budget.project_shares ?? "hard") === "hard" && p.share * config.budget.monthly_usd - (spentByProject[p.id] ?? 0) < 0.05, open: openTicketsFor(store, p.id).length, running: running.filter((r) => store.ticket(r.ticket_id)?.project === p.id).length, exists: existsSync(NodePath.join(ctx.root, p.path, ".git")),
     })),
     inbox,
@@ -337,6 +350,11 @@ export type Action =
   | { kind: "grade"; id: string; verdict: "approve" | "reject"; note?: string }
   | { kind: "audit_done" }
   | { kind: "improve_now" }
+  | { kind: "project_pause"; id: string; paused: boolean }
+  | { kind: "milestone_add"; project: string; title: string; detail?: string }
+  | { kind: "milestone_edit"; id: number; title?: string; detail?: string; status?: "open" | "done" | "dropped" }
+  | { kind: "milestone_move"; id: number; dir: -1 | 1 }
+  | { kind: "roadmap_now"; project?: string }
   | { kind: "ask"; text: string; channel?: string }
   | { kind: "ask_resolve"; id: number; index: number; apply: boolean }
   | { kind: "ask_reset" }
@@ -346,8 +364,8 @@ export type Action =
   | { kind: "withdraw"; note?: string }
   | { kind: "rollback"; id: number; note?: string }
   | { kind: "promote"; action: string }
-  | { kind: "ticket_create"; department: string; title: string; goal?: string; why?: string; criteria?: ReadonlyArray<string>; project?: string | null; action?: string | null; priority?: number }
-  | { kind: "ticket_edit"; id: string; title?: string; goal?: string; why?: string; criteria?: ReadonlyArray<string>; priority?: number; action?: string | null; project?: string | null; department?: string }
+  | { kind: "ticket_create"; department: string; title: string; goal?: string; why?: string; criteria?: ReadonlyArray<string>; project?: string | null; action?: string | null; priority?: number; milestone?: number | null }
+  | { kind: "ticket_edit"; milestone?: number | null; id: string; title?: string; goal?: string; why?: string; criteria?: ReadonlyArray<string>; priority?: number; action?: string | null; project?: string | null; department?: string }
   | { kind: "comment"; id: string; body: string }
   | { kind: "role_set"; role: string; assignment: string }
   | { kind: "project_add"; path: string; id?: string; class?: ProjectClass; share?: number; verify?: string }
@@ -420,6 +438,39 @@ export const act = async (ctx: DashboardContext, a: Action): Promise<Record<stri
       ctx.supervisor.runImprovementNow(now)
       return { ok: true }
     }
+    case "project_pause": {
+      // D83: stop (or restart) new work on one project; what is running finishes
+      const config = ctx.config()
+      const cur = config.projects.find((p) => p.id === a.id)
+      if (!cur) throw new ActionError(`no project '${a.id}'`)
+      if ((cur.paused === true) === a.paused) return { ok: true }
+      const { paused: _p, ...rest } = cur
+      ctx.saveConfig({ ...config, projects: config.projects.map((p) => (p.id === a.id ? (a.paused ? { ...rest, paused: true } : rest) : p)) }, `project ${a.paused ? "pause" : "resume"} ${a.id}`)
+      return { ok: true }
+    }
+    case "milestone_add": {
+      if (!ctx.config().projects.some((p) => p.id === a.project)) throw new ActionError(`no project '${a.project}'`)
+      const title = a.title.trim()
+      if (!title) throw new ActionError("a milestone needs a title")
+      return { ok: true, id: store.milestoneAdd({ project: a.project, title, detail: (a.detail ?? "").trim(), by: "operator", now }).id }
+    }
+    case "milestone_edit": {
+      const m = store.milestone(a.id)
+      if (!m) throw new ActionError(`no milestone ${a.id}`)
+      if (a.title !== undefined && !a.title.trim()) throw new ActionError("a milestone needs a title")
+      store.milestoneEdit(a.id, { ...(a.title !== undefined ? { title: a.title.trim() } : {}), ...(a.detail !== undefined ? { detail: a.detail.trim() } : {}), ...(a.status ? { status: a.status, ...(a.status === "done" && m.status !== "done" ? { evidence: "marked done by the Operator" } : {}) } : {}) }, now)
+      return { ok: true }
+    }
+    case "milestone_move": {
+      if (!store.milestone(a.id)) throw new ActionError(`no milestone ${a.id}`)
+      store.milestoneMove(a.id, a.dir, now)
+      return { ok: true }
+    }
+    case "roadmap_now": {
+      // run the CEO now so it drafts or refreshes the roadmaps and statuses instead of waiting for its hour
+      if (!ctx.supervisor) throw new ActionError("the CEO runs in the supervisor: holdco service start (or holdco supervise)")
+      return { ok: true, started: ctx.supervisor.runCeoNow() }
+    }
     case "ask": {
       const who = ctx.assistant ?? ctx.supervisor
       if (!who) throw new ActionError("questions are answered by the running supervisor: holdco service start (or holdco supervise)")
@@ -489,7 +540,7 @@ export const act = async (ctx: DashboardContext, a: Action): Promise<Record<stri
       if (action && !config.actions.some((x) => x.id === action)) throw new ActionError(`unknown action '${action}'`)
       const goal = (a.goal ?? "").trim() || title
       const criteria = (a.criteria ?? []).map((c) => c.trim()).filter(Boolean)
-      const t = store.createTicket({ department: a.department, title, goal, why: (a.why ?? "").trim() || "Operator request", done_criteria: criteria.length ? criteria : [goal], opened_by: "operator", project, action, priority: a.priority ?? 3, state: "triaged", now })
+      const t = store.createTicket({ department: a.department, title, goal, why: (a.why ?? "").trim() || "Operator request", done_criteria: criteria.length ? criteria : [goal], opened_by: "operator", project, action, priority: a.priority ?? 3, state: "triaged", milestone: milestoneFor(store, a.milestone, project), now })
       return { ok: true, id: t.id }
     }
     case "ticket_edit": {
@@ -502,7 +553,7 @@ export const act = async (ctx: DashboardContext, a: Action): Promise<Record<stri
       if (a.department !== undefined && !config.modules.departments.includes(a.department) && a.department !== "improvement") throw new ActionError(`department '${a.department}' is not enabled`)
       const criteria = a.criteria?.map((c) => c.trim()).filter(Boolean)
       if (a.title !== undefined && !a.title.trim()) throw new ActionError("a title is required")
-      store.editTicket(a.id, { ...(a.title !== undefined ? { title: a.title.trim() } : {}), ...(a.goal !== undefined && a.goal.trim() ? { goal: a.goal.trim() } : {}), ...(a.why !== undefined ? { why: a.why.trim() } : {}), ...(criteria && criteria.length ? { done_criteria: criteria } : {}), ...(a.priority !== undefined ? { priority: a.priority } : {}), ...(a.action !== undefined ? { action: a.action } : {}), ...(a.project !== undefined ? { project: a.project } : {}), ...(a.department !== undefined ? { department: a.department } : {}) }, now)
+      store.editTicket(a.id, { ...(a.title !== undefined ? { title: a.title.trim() } : {}), ...(a.goal !== undefined && a.goal.trim() ? { goal: a.goal.trim() } : {}), ...(a.why !== undefined ? { why: a.why.trim() } : {}), ...(criteria && criteria.length ? { done_criteria: criteria } : {}), ...(a.priority !== undefined ? { priority: a.priority } : {}), ...(a.action !== undefined ? { action: a.action } : {}), ...(a.project !== undefined ? { project: a.project } : {}), ...(a.department !== undefined ? { department: a.department } : {}), ...(a.milestone !== undefined ? { milestone: milestoneFor(store, a.milestone, a.project !== undefined ? a.project : t.project) } : {}) }, now)
       if (t.state === "in_progress") store.addComment(a.id, "operator", "The ticket was edited while you were working; re-read goal and done criteria with ticket_get.", now)
       return { ok: true }
     }

@@ -5,7 +5,7 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { spawnSync } from "node:child_process"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, utimesSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as NodePath from "node:path"
 import { Schema } from "effect"
@@ -17,6 +17,7 @@ import { Supervisor } from "../src/supervisor/supervisor.ts"
 import { raise, readControl, clear } from "../src/supervisor/control.ts"
 import { FakeEngine } from "./fake-engine.ts"
 import { hashText } from "../src/supervisor/i18n.ts"
+import { projectProgress } from "../src/supervisor/roadmap.ts"
 import { budgetMode } from "../src/config/company.ts"
 import { ingestObservation, recordDecision } from "../src/supervisor/feedback.ts"
 
@@ -652,6 +653,69 @@ describe("Operator notes (D55)", () => {
     expect(senior.prompt.indexOf("Keep it under 50 lines.")).toBeLessThan(senior.prompt.indexOf("Name the file feature.md."))
     const judge = engine.runs.find((r) => r.role.kind === "verification")!
     expect(judge.prompt).toContain("Name the file feature.md.")
+    await sup.stop()
+  })
+})
+
+describe("pausing a project (D83)", () => {
+  test("company.yaml edited while running is picked up on the next tick: a paused project starts nothing, resumed it starts", async () => {
+    const c = company("pause")
+    const clock = { now: Date.UTC(2026, 10, 19, 9) }
+    const engine = new FakeEngine({ senior: async () => ({}), ceo: async () => ({}) })
+    const { sup, store } = makeSupervisor(c, engine, clock)
+    await sup.boot()
+    await cycle(sup, clock, 1)
+    const write = (paused: boolean) => {
+      const next = { ...c.config, projects: c.config.projects.map((p) => (paused ? { ...p, paused: true } : p)) }
+      const file = NodePath.join(c.dir, "company.yaml")
+      writeFileSync(file, renderCompanyYaml(next, "solo-dev"))
+      utimesSync(file, new Date(), new Date(Date.now() + (paused ? 5_000 : 10_000))) // a later mtime, whatever the filesystem's resolution
+    }
+    write(true)
+    const t = store.createTicket({ department: "engineering", title: "waits", goal: "y", why: "z", done_criteria: ["a"], opened_by: "operator", project: "app", state: "triaged", action: "code.merge.app", now: clock.now })
+    await cycle(sup, clock, 4)
+    expect(sup.config.projects[0]?.paused).toBe(true)
+    expect(engine.runs.filter((r) => r.role.kind === "senior")).toEqual([])
+    expect(store.ticket(t.id)?.state).toBe("triaged")
+    write(false)
+    await cycle(sup, clock, 3)
+    expect(engine.runs.filter((r) => r.role.kind === "senior").map((r) => r.ticketId)).toContain(t.id)
+    // an invalid file is reported and the last good configuration keeps running
+    writeFileSync(NodePath.join(c.dir, "company.yaml"), "company: [")
+    utimesSync(NodePath.join(c.dir, "company.yaml"), new Date(), new Date(Date.now() + 20_000))
+    await cycle(sup, clock, 1)
+    expect(sup.config.projects[0]?.id).toBe("app")
+    await sup.stop()
+  })
+
+  test("the CEO's cycle prompt carries the roadmaps and what to do with them", async () => {
+    const c = company("ceoroad")
+    const clock = { now: Date.UTC(2026, 10, 19, 9) }
+    const prompts: Array<string> = []
+    const engine = new FakeEngine({ ceo: async ({ spec, call }) => {
+      if (!spec.prompt.startsWith("# CEO cycle")) return {}
+      prompts.push(spec.prompt)
+      if (prompts.length > 1) return {}
+      const m = (await call("milestone_add", { project: "app", title: "A user can sign in", detail: "email and passkey" })) as { id: number }
+      await call("milestone_add", { project: "app", title: "README explains the app", detail: "already there", status: "done", evidence: "README.md" })
+      await call("ticket_create", { department: "engineering", project: "app", title: "Passkey sign-in", goal: "g", why: "w", done_criteria: ["d"], milestone: m.id })
+      await call("project_status", { project: "app", summary: "The README is in place. Sign-in is being built next." })
+      return {}
+    } })
+    const { sup, store } = makeSupervisor(c, engine, clock)
+    await sup.boot()
+    await cycle(sup, clock, 2)
+    expect(prompts[0]).toContain("## Roadmaps (D83)")
+    expect(prompts[0]).toContain("app: no roadmap and no tickets yet")
+    expect(prompts[0]).toContain("milestone_add")
+    expect(prompts[0]).toContain("app has no roadmap. Its repository")
+    expect(prompts[0]).toContain("README.md: # app") // drafted from what the repository holds
+    const g = projectProgress(store, "app")
+    expect(g.milestones.map((m) => [m.title, m.status, m.tickets_total])).toEqual([["A user can sign in", "open", 1], ["README explains the app", "done", 0]])
+    expect(g.pct).toBe(0.5)
+    expect(g.status?.text).toContain("Sign-in is being built next")
+    await cycle(sup, clock, 3)
+    expect(prompts.at(-1)).toContain("▶ #1 A user can sign in (0/1 tickets)")
     await sup.stop()
   })
 })

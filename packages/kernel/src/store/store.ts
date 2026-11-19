@@ -44,8 +44,25 @@ export interface Ticket {
   readonly window_closes_at: number | null
   readonly branch: string | null
   readonly note: string | null
+  /** D83: the roadmap milestone this ticket serves, if any. */
+  readonly milestone: number | null
   readonly created_at: number
   readonly updated_at: number
+}
+
+export type MilestoneStatus = "open" | "done" | "dropped"
+export interface Milestone {
+  readonly id: number
+  readonly project: string
+  readonly title: string
+  readonly detail: string
+  readonly status: MilestoneStatus
+  readonly position: number
+  readonly created_by: string
+  readonly created_at: number
+  readonly updated_at: number
+  readonly done_at: number | null
+  readonly evidence: string | null
 }
 
 export interface SessionRow {
@@ -104,6 +121,11 @@ export interface LabelRow {
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS milestones (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, project TEXT NOT NULL, title TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'open', position INTEGER NOT NULL, created_by TEXT NOT NULL, created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL, done_at INTEGER, evidence TEXT
+);
 CREATE TABLE IF NOT EXISTS chat (
   id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, channel TEXT NOT NULL, author TEXT NOT NULL, text TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'done', proposals TEXT NOT NULL DEFAULT '[]', cost_usd REAL NOT NULL DEFAULT 0
@@ -213,6 +235,7 @@ const ADDED_COLUMNS: ReadonlyArray<readonly [table: string, column: string, ddl:
   ["sessions", "release", "TEXT"],
   ["inbox", "urgency", "TEXT NOT NULL DEFAULT 'routine'"],
   ["inbox", "batched_at", "INTEGER"],
+  ["tickets", "milestone", "INTEGER"],
 ]
 
 export class Store {
@@ -272,14 +295,15 @@ export class Store {
     action?: string | null
     priority?: number
     state?: TicketState
+    milestone?: number | null
     now: number
   }): Ticket {
     const id = this.nextTicketId(t.department)
     const state = t.state ?? "new"
     this.db.run(
-      `INSERT INTO tickets(id, project, department, action, state, priority, title, goal, why, done_criteria, opened_by, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, t.project ?? null, t.department, t.action ?? null, state, t.priority ?? 3, t.title, t.goal, t.why, JSON.stringify(t.done_criteria), t.opened_by, t.now, t.now],
+      `INSERT INTO tickets(id, project, department, action, state, priority, title, goal, why, done_criteria, opened_by, milestone, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, t.project ?? null, t.department, t.action ?? null, state, t.priority ?? 3, t.title, t.goal, t.why, JSON.stringify(t.done_criteria), t.opened_by, t.milestone ?? null, t.now, t.now],
     )
     this.db.run("INSERT INTO ticket_events(ticket_id, at, actor, from_state, to_state, note) VALUES (?, ?, ?, NULL, ?, ?)", [id, t.now, t.opened_by, state, "opened"])
     return this.ticket(id) as Ticket
@@ -340,7 +364,46 @@ export class Store {
     return this.db.query<{ id: number; at: number; author: string; body: string }, [string]>("SELECT id, at, author, body FROM ticket_comments WHERE ticket_id = ? ORDER BY at").all(ticketId)
   }
   /** Edit the Operator-owned fields of a ticket that has not reached an end state. */
-  editTicket(id: string, patch: Partial<{ title: string; goal: string; why: string; done_criteria: ReadonlyArray<string>; priority: number; action: string | null; project: string | null; department: string }>, now: number) {
+  // ── roadmap (D83): each project's milestones, in order; tickets point at the one they serve ──
+  milestones(project?: string): Array<Milestone> {
+    return project === undefined
+      ? this.db.query<Milestone, []>("SELECT * FROM milestones ORDER BY project, position, id").all()
+      : this.db.query<Milestone, [string]>("SELECT * FROM milestones WHERE project = ? ORDER BY position, id").all(project)
+  }
+  milestone(id: number): Milestone | undefined {
+    return this.db.query<Milestone, [number]>("SELECT * FROM milestones WHERE id = ?").get(id) ?? undefined
+  }
+  milestoneAdd(m: { project: string; title: string; detail?: string; status?: MilestoneStatus; evidence?: string; by: string; now: number }): Milestone {
+    const position = (this.db.query<{ p: number | null }, [string]>("SELECT MAX(position) AS p FROM milestones WHERE project = ?").get(m.project)?.p ?? 0) + 1
+    this.db.run("INSERT INTO milestones(project, title, detail, status, position, created_by, created_at, updated_at, done_at, evidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      [m.project, m.title, m.detail ?? "", m.status ?? "open", position, m.by, m.now, m.now, m.status === "done" ? m.now : null, m.evidence ?? null])
+    return this.milestone(Number(this.db.query<{ id: number }, []>("SELECT last_insert_rowid() AS id").get()?.id)) as Milestone
+  }
+  milestoneEdit(id: number, patch: { title?: string; detail?: string; status?: MilestoneStatus; evidence?: string }, now: number) {
+    const cur = this.milestone(id)
+    if (!cur) return
+    const status = patch.status ?? cur.status
+    this.db.run("UPDATE milestones SET title = ?, detail = ?, status = ?, evidence = ?, done_at = ?, updated_at = ? WHERE id = ?",
+      [patch.title ?? cur.title, patch.detail ?? cur.detail, status, patch.evidence ?? cur.evidence, status === "done" ? (cur.status === "done" ? cur.done_at : now) : null, now, id])
+  }
+  /** Swap a milestone with its neighbour (dir -1 earlier, +1 later) among the project's milestones. */
+  milestoneMove(id: number, dir: -1 | 1, now: number) {
+    const cur = this.milestone(id)
+    if (!cur) return
+    const list = this.milestones(cur.project)
+    const i = list.findIndex((m) => m.id === id)
+    const other = list[i + dir]
+    if (!other) return
+    this.transaction(() => {
+      this.db.run("UPDATE milestones SET position = ?, updated_at = ? WHERE id = ?", [other.position, now, cur.id])
+      this.db.run("UPDATE milestones SET position = ?, updated_at = ? WHERE id = ?", [cur.position, now, other.id])
+    })
+  }
+  setTicketMilestone(ticketId: string, milestone: number | null, now: number) {
+    this.db.run("UPDATE tickets SET milestone = ?, updated_at = ? WHERE id = ?", [milestone, now, ticketId])
+  }
+
+  editTicket(id: string, patch: Partial<{ title: string; goal: string; why: string; done_criteria: ReadonlyArray<string>; priority: number; action: string | null; project: string | null; department: string; milestone: number | null }>, now: number) {
     const sets: Array<string> = []
     const vals: Array<string | number | null> = []
     for (const [k, v] of Object.entries(patch)) {

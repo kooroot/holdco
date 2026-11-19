@@ -16,5 +16,5 @@ export const useChatPanel = () => {
 }
 export const useSearchState = () => useSearch({ strict: false }) as Search
 
-export const VIEWS = [["/", "Home"], ["/inbox", "Inbox"], ["/tickets", "Tickets"], ["/audit", "Audit"], ["/quality", "Quality"], ["/releases", "Releases"], ["/spend", "Sessions & spend"], ["/org", "Organization"], ["/controls", "Controls"], ["/settings", "Settings"]] as const
+export const VIEWS = [["/", "Home"], ["/progress", "Progress"], ["/inbox", "Inbox"], ["/tickets", "Tickets"], ["/audit", "Audit"], ["/quality", "Quality"], ["/releases", "Releases"], ["/spend", "Sessions & spend"], ["/org", "Organization"], ["/controls", "Controls"], ["/settings", "Settings"]] as const
 export type ViewPath = (typeof VIEWS)[number][0]

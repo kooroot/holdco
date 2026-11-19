@@ -18,6 +18,7 @@ import type { Engine } from "../engine/types.ts"
 import type { ChatRow, Store } from "../store/store.ts"
 import { readControl } from "./control.ts"
 import { readSessionEvents } from "./journal.ts"
+import { progressLines } from "./roadmap.ts"
 import { defaultBranch } from "./worktrees.ts"
 
 export const ASK_TIMEOUT_MS = 180_000
@@ -25,7 +26,7 @@ const HISTORY = 10
 const FOCUS = 8
 const END = new Set(["done", "declined", "rolled_back"])
 
-export const PROPOSAL_KINDS = ["open_ticket", "set_priority", "add_note", "unblock", "decline", "decide_inbox", "pause", "resume"] as const
+export const PROPOSAL_KINDS = ["open_ticket", "set_priority", "add_note", "unblock", "decline", "decide_inbox", "pause", "resume", "add_milestone", "set_milestone"] as const
 export type ProposalKind = (typeof PROPOSAL_KINDS)[number]
 
 /** What the model returns for one instruction: flat, every field present (empty when it does not apply). */
@@ -96,8 +97,10 @@ export const systemPrompt = (config: CompanyConfig): string => {
     "- unblock: ticket (must be blocked), note — the Operator's decision that releases it",
     "- decline: ticket, note — close it without doing it",
     "- decide_inbox: inbox_id, decision (\"approved\" or \"rejected\"), note",
-    "- pause: department (or \"*\" for the whole company), note — the reason",
-    "- resume: department (or \"*\")",
+    "- pause: project (stops new work on that one project) OR department (or \"*\" for the whole company), note — the reason",
+    "- resume: project OR department (or \"*\")",
+    "- add_milestone: project, title (an outcome someone could check), goal (what is in it)",
+    "- set_milestone: inbox_id = the milestone's #id, decision (\"done\", \"open\" or \"dropped\")",
   ].join("\n")
 }
 
@@ -191,6 +194,8 @@ export const askContext = (src: AskSource, question: string, history: ReadonlyAr
   const strategy = NodePath.join(src.root, "docs", "holdco", "strategy.md")
   if (existsSync(strategy)) out.push(`STRATEGY (docs/holdco/strategy.md):\n${readFileSync(strategy, "utf8").trim().slice(0, 1500)}`)
 
+  out.push("", "ROADMAPS — how far each project is (a done milestone counts 1, an open one the share of its tickets done; ✓ done, ▶ in progress, · not started):")
+  out.push(...progressLines(src.store, config, { detail: true }))
   out.push("", "PROJECTS:")
   for (const p of S.projects) {
     const mine = all.filter((t) => t.project === p.id)
@@ -303,12 +308,31 @@ export const toActions = (p: Proposal, src: AskSource): Array<Action> => {
       if (store.inboxItem(p.inbox_id)?.status !== "open") throw new ActionError(`inbox #${p.inbox_id} is not open`)
       return [{ kind: "inbox", id: p.inbox_id, decision: p.decision, ...(note ? { note } : {}) }]
     }
+    case "add_milestone": {
+      const project = p.project.trim() || (config.projects.length === 1 ? (config.projects[0]?.id ?? "") : "")
+      if (!config.projects.some((x) => x.id === project)) throw new ActionError(`which project? (${config.projects.map((x) => x.id).join(", ")})`)
+      if (!p.title.trim()) throw new ActionError("a milestone needs a title")
+      return [{ kind: "milestone_add", project, title: p.title.trim(), ...(p.goal.trim() ? { detail: p.goal.trim() } : {}) }]
+    }
+    case "set_milestone": {
+      if (!store.milestone(p.inbox_id)) throw new ActionError(`no milestone #${p.inbox_id}`)
+      if (p.decision !== "done" && p.decision !== "open" && p.decision !== "dropped") throw new ActionError("a milestone is done, open or dropped")
+      return [{ kind: "milestone_edit", id: p.inbox_id, status: p.decision }]
+    }
     case "pause": {
+      if (p.project.trim()) {
+        if (!config.projects.some((x) => x.id === p.project.trim())) throw new ActionError(`no project '${p.project}'`)
+        return [{ kind: "project_pause", id: p.project.trim(), paused: true }]
+      }
       const target = p.department.trim() || "*"
       if (target !== "*" && !config.modules.departments.includes(target) && !["executive", "verification", "improvement"].includes(target)) throw new ActionError(`no department '${target}'`)
       return [{ kind: "interrupt", level: "L2", target, reason: note || "paused from chat" }]
     }
     case "resume": {
+      if (p.project.trim()) {
+        if (!config.projects.find((x) => x.id === p.project.trim())?.paused) throw new ActionError(`project '${p.project}' is not paused`)
+        return [{ kind: "project_pause", id: p.project.trim(), paused: false }]
+      }
       const target = p.department.trim() || "*"
       const active = (() => { try { return readControl(src.root) } catch { return [] } })().filter((i) => i.target === target)
       if (active.length === 0) throw new ActionError(`nothing is paused on ${target}`)
@@ -321,7 +345,8 @@ export const toActions = (p: Proposal, src: AskSource): Array<Action> => {
 export const describeProposal = (p: Proposal): string =>
   p.summary.trim() || ({
     open_ticket: `Open a ticket: ${p.title}`, set_priority: `${p.ticket}: priority ${p.priority}`, add_note: `${p.ticket}: note — ${p.note}`, unblock: `Unblock ${p.ticket}: ${p.note}`,
-    decline: `Decline ${p.ticket}`, decide_inbox: `Inbox #${p.inbox_id}: ${p.decision}`, pause: `Pause ${p.department || "*"}`, resume: `Resume ${p.department || "*"}`,
+    decline: `Decline ${p.ticket}`, decide_inbox: `Inbox #${p.inbox_id}: ${p.decision}`, pause: `Pause ${p.project || p.department || "*"}`, resume: `Resume ${p.project || p.department || "*"}`,
+    add_milestone: `Add a milestone to ${p.project}: ${p.title}`, set_milestone: `Milestone #${p.inbox_id}: ${p.decision}`,
   } satisfies Record<ProposalKind, string>)[p.kind]
 
 const asProposal = (raw: unknown): Proposal | undefined => {

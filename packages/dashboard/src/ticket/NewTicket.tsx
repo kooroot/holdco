@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react"
 import { useAct, useSnapshot, useTicket, toast } from "../hooks.ts"
 import { useOpenTicket } from "../nav.ts"
 import { cn, Button, ui } from "../ui.tsx"
-import { t, useLang } from "../i18n.ts"
+import { t, useLang, tx } from "../i18n.ts"
 
 const TEMPLATES: Array<[string, { department: string; action: string; why: string; criteria: string }]> = [
   ["Feature", { department: "engineering", action: "code.merge.app", why: "product objective", criteria: "the feature works end to end\ntests cover it\ndocs mention it" }],
@@ -22,14 +22,17 @@ export const NewTicket = ({ onClose }: { onClose: () => void }) => {
   const editId = useMemo(() => { const id = sessionStorage.getItem("holdco.edit"); sessionStorage.removeItem("holdco.edit"); return id }, [])
   const existing = useTicket(editId)
   const depts = useMemo(() => [...(S?.departments ?? []), ...(S?.org.improvement ? ["improvement"] : [])], [S])
-  const [f, setF] = useState({ department: "", project: "", action: "", priority: "3", title: "", goal: "", why: "", criteria: "" })
-  useEffect(() => { if (S && !f.department) setF((x) => ({ ...x, department: depts[0] ?? "", project: S.projects.length === 1 ? S.projects[0]!.id : "" })) }, [S, depts, f.department])
-  useEffect(() => { const t = existing.data?.ticket; if (t) setF({ department: t.department, project: t.project ?? "", action: t.action ?? "", priority: String(t.priority), title: t.title, goal: t.goal, why: t.why, criteria: t.done_criteria.join("\n") }) }, [existing.data])
+  const [f, setF] = useState({ department: "", project: "", action: "", priority: "3", title: "", goal: "", why: "", criteria: "", milestone: "" })
+  // a project card's "New ticket" names the project (D83)
+  const preset = useMemo(() => { try { const id = sessionStorage.getItem("holdco.new.project"); sessionStorage.removeItem("holdco.new.project"); return id } catch { return null } }, [])
+  useEffect(() => { if (S && !f.department) setF((x) => ({ ...x, department: depts[0] ?? "", project: preset && S.projects.some((p) => p.id === preset) ? preset : S.projects.length === 1 ? S.projects[0]!.id : "" })) }, [S, depts, f.department, preset])
+  useEffect(() => { const t = existing.data?.ticket; if (t) setF({ department: t.department, project: t.project ?? "", action: t.action ?? "", priority: String(t.priority), title: t.title, goal: t.goal, why: t.why, criteria: t.done_criteria.join("\n"), milestone: t.milestone === null ? "" : String(t.milestone) }) }, [existing.data])
+  const milestones = S?.projects.find((p) => p.id === f.project)?.progress.milestones.filter((m) => m.status === "open" || String(m.id) === f.milestone) ?? []
   const actions = S?.settings.actions.filter((a) => a.department === f.department) ?? []
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF((x) => ({ ...x, [k]: e.target.value }))
   const save = async () => {
     if (!f.title.trim()) return toast(t("A title is needed"), true)
-    const body = { department: f.department, title: f.title, goal: f.goal, why: f.why, criteria: f.criteria.split("\n"), project: f.project || null, action: f.action || null, priority: Number(f.priority) }
+    const body = { department: f.department, title: f.title, goal: f.goal, why: f.why, criteria: f.criteria.split("\n"), project: f.project || null, action: f.action || null, priority: Number(f.priority), milestone: f.milestone && milestones.some((m) => String(m.id) === f.milestone) ? Number(f.milestone) : null }
     const r = await act(editId ? { kind: "ticket_edit", id: editId, ...body } : { kind: "ticket_create", ...body }, (r) => (editId ? t("Saved") : t("{id} opened — the senior picks it up on the next tick", { id: String(r["id"]) })))
     if (r) { onClose(); if (editId) openTicket(editId) }
   }
@@ -41,10 +44,11 @@ export const NewTicket = ({ onClose }: { onClose: () => void }) => {
         <div {...ui.field()}><label {...ui.label()}>{t("Title")}</label><input autoFocus {...ui.input()} value={f.title} onChange={set("title")} placeholder={t("What should be true when this is done, in one line")} /></div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
           <div {...ui.field()}><label {...ui.label()}>{t("Department")}</label><select {...ui.input()} value={f.department} onChange={(e) => setF((x) => ({ ...x, department: e.target.value, action: "" }))}>{depts.map((d) => <option key={d}>{d}</option>)}</select></div>
-          <div {...ui.field()}><label {...ui.label()}>{t("Project")}</label><select {...ui.input()} value={f.project} onChange={set("project")}><option value="">{t("(none)")}</option>{S?.projects.map((p) => <option key={p.id} value={p.id}>{p.id} · {p.class}</option>)}</select></div>
+          <div {...ui.field()}><label {...ui.label()}>{t("Project")}</label><select {...ui.input()} value={f.project} onChange={(e) => setF((x) => ({ ...x, project: e.target.value, milestone: "" }))}><option value="">{t("(none)")}</option>{S?.projects.map((p) => <option key={p.id} value={p.id}>{p.id} · {p.class}</option>)}</select></div>
           <div {...ui.field()}><label {...ui.label()}>{t("Action (what the result is)")}</label><select {...ui.input()} value={f.action} onChange={set("action")}><option value="">{t("let the senior choose")}</option>{actions.map((a) => <option key={a.id} value={a.id}>{a.id} · {a.tier}</option>)}</select></div>
           <div {...ui.field()}><label {...ui.label()}>{t("Priority")}</label><select {...ui.input()} value={f.priority} onChange={set("priority")}><option value="1">{t("1 — first")}</option><option value="2">2</option><option value="3">{t("3 — normal")}</option><option value="4">4</option><option value="5">{t("5 — whenever")}</option></select></div>
         </div>
+        {milestones.length ? <div {...ui.field()}><label {...ui.label()}>{t("Milestone (what it moves on the roadmap)")}</label><select {...ui.input()} value={f.milestone} onChange={set("milestone")}><option value="">{t("(none)")}</option>{milestones.map((m) => <option key={m.id} value={m.id}>{tx(m.title)}</option>)}</select></div> : null}
         <div {...ui.field()}><label {...ui.label()}>{t("Goal")}</label><textarea {...cn(ui.input(), ui.textarea())} value={f.goal} onChange={set("goal")} placeholder={t("The outcome, not the steps. The senior plans the steps.")} /></div>
         <div {...ui.field()}><label {...ui.label()}>{t("Why")}</label><input {...ui.input()} value={f.why} onChange={set("why")} placeholder={t("Which objective this serves (the CEO and the judge read it)")} /></div>
         <div {...ui.field()}><label {...ui.label()}>{t("Done criteria, one per line")}</label><textarea {...cn(ui.input(), ui.textarea())} value={f.criteria} onChange={set("criteria")} placeholder={"feature.md exists on the branch\ntests pass\nREADME mentions it"} /></div>

@@ -68,6 +68,7 @@ export const diagnose = (ctx: StallContext, t: Ticket): StallDiagnosis | undefin
     }
     case "triaged": case "rejected": case "ready_for_verification": {
       if (t.interrupt_flag) return d(L(`paused by interrupt ${t.interrupt_flag}; resume it in Controls`, `인터럽트 ${t.interrupt_flag}로 중지; 제어 화면에서 재개`), "operator")
+      if (t.project && ctx.config.projects.find((p) => p.id === t.project)?.paused) return d(L(`project ${t.project} is paused; resume it on Home`, `프로젝트 ${t.project}가 일시정지됨; 홈에서 재개`), "operator")
       const why = ctx.admitReason(t)
       if (why) return d(L(`a ${kind} session cannot start: ${why}`, `${kind} 세션을 시작할 수 없음: ${why}`))
       return d(L(`a ${kind} session should have started; the dispatcher skipped it`, `${kind} 세션이 시작됐어야 함; 디스패처가 건너뜀`))

@@ -27,7 +27,7 @@ git(app, "add", "-A"); git(app, "commit", "-qm", "settlement fee + currency"); g
 const dir = NodePath.join(base, "co")
 scaffold({ dir, preset: "full", github: "operator", kernelVersion: "0.0.0", companyName: "acme", mission: "Ship acme: the product this seed pretends to run" })
 const raw = Bun.YAML.parse(readFileSync(NodePath.join(dir, "company.yaml"), "utf8")) as any
-raw.projects = [{ id: "acme", path: "../acme", class: "core", share: 1, locked: [] }]
+raw.projects = [{ id: "acme", path: "../acme", class: "core", share: 0.7, locked: [] }, { id: "arcade", path: "../arcade", class: "experiment", share: 0.3, locked: [], kill_criteria: "no players by March", paused: true }]
 raw.budget.enforce = process.env["ENFORCE"] ?? "advisory" // the seed shows the subscription-login look by default (D81)
 raw.budget.shares = { engineering: 0.3, research: 0.05, gtm: 0.05, operations: 0.05, verification: 0.2, executive: 0.25, improvement: 0.1 }
 const config = Schema.decodeUnknownSync(CompanyConfig)(raw)
@@ -52,6 +52,20 @@ mk({ department: "engineering", title: "Seller dashboard: payout history", goal:
 mk({ department: "gtm", title: "Launch post: settlement in one click", goal: "Draft for the company account", project: "acme", state: "ready_for_verification", action: "content.publish.company", now: now - 4 * H })
 mk({ department: "operations", title: "Staging deploy of fee change", goal: "staging runs t/ENG-3", project: "acme", state: "triaged", action: "deploy.staging", now: now - 1 * H })
 for (let i = 0; i < 4; i++) { const d = mk({ department: "engineering", title: ["Webhook retry with backoff", "Rate limit on quote endpoint", "Fix rounding in fee()", "Typed errors for settle()"][i], goal: "done", project: "acme", state: "done", action: "code.merge.app", now: now - (40 + i * 9) * H }); store.addVerdict({ ticket_id: d.id, session_id: `v${i}`, at: now - (39 + i * 9) * H, verdict: i === 2 ? "reject" : "approve", overall: 3.2, confidence: i === 3 ? "low" : "high", payload: { summary: "ok", failures: [], gates: [] } }); store.db.run("UPDATE tickets SET branch=? WHERE id=?", ["t/ENG-3", d.id]) }
+// D83: a roadmap for acme (the CEO's), tickets under its milestones, and a status line
+{
+  const ms = (title: string, detail: string, status: "open" | "done" = "open") => store.milestoneAdd({ project: "acme", title, detail, status, ...(status === "done" ? { evidence: "main: src/checkout" } : {}), by: "ceo", now: now - 40 * H }).id
+  const m1 = ms("A buyer can pay a seller", "Checkout with card and wallet; the seller sees the payment", "done")
+  const m2 = ms("Sellers see what they net", "Settlement fee shown and applied; payout history", "open")
+  const m3 = ms("Payments can be refunded", "Full and partial refunds from the seller dashboard")
+  ms("Delegated payments for agents", "An agent pays within a spending limit the buyer set")
+  ms("Public launch", "Pricing page, launch post, production deploy")
+  const all = store.allTickets()
+  const put = (re: RegExp, m: number) => { for (const t of all) if (re.test(t.title)) store.setTicketMilestone(t.id, m, t.updated_at) }
+  put(/Settlement fee|payout history|Staging deploy/, m2); put(/Webhook|Rate limit|rounding/i, m1); put(/Launch post/, m3)
+  store.setMeta("project_status:acme", JSON.stringify({ text: "Checkout works end to end and sellers are paid. The settlement fee is built and verified and waits for your approval to merge; payout history is in progress. Refunds are next. One research question is blocked on which chain launches first.", at: now - 50 * 60_000, by: "ceo" }))
+  mk({ department: "engineering", title: "Arcade: leaderboard prototype", goal: "Top ten per game", project: "arcade", state: "triaged", action: "code.merge.app" })
+}
 for (let i = 0; i < 12; i++) store.addLabel({ ticket_id: `OLD-${i}`, action: "code.merge.app", at: now - (i + 1) * 24 * H, agreement: i % 5 !== 0, operator_verdict: "approve" })
 for (let i = 0; i < 6; i++) store.addLabel({ ticket_id: `GTM-${i}`, action: "content.draft", at: now - (i + 1) * 24 * H, agreement: true, operator_verdict: "approve" })
 const roles = [["engineering-senior","senior","claude","opus",0.62,6],["verification-senior","verification","codex","gpt-6-astra",0.58,1],["ceo","ceo","claude","opus",0.31,3],["junior-worker","junior_worker","claude","sonnet",0.09,4],["coo","coo","codex","gpt-6.1-sol",0.12,1]] as const

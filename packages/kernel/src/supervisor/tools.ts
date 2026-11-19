@@ -17,6 +17,7 @@ import { Proposal, Review, Triage } from "../protocol/approval.ts"
 import { crossCheck } from "../validate.ts"
 import type { Store, Ticket } from "../store/store.ts"
 import { effectiveTier, UnknownAction } from "../policy/tiers.ts"
+import { projectProgress, setProjectStatus } from "./roadmap.ts"
 import { RESERVED_T3_NAMESPACES } from "../config/company.ts"
 
 export interface SessionBinding {
@@ -59,6 +60,8 @@ const decode = <S extends Schema.Codec<any, any, never, never>>(schema: S, value
 }
 
 export class ToolError extends Error {}
+/** A roadmap is the few outcomes that matter, not a backlog. */
+export const MAX_MILESTONES = 12
 
 const SENIORS: ReadonlyArray<RoleKind> = ["senior", "improvement"]
 const ownTicket = (b: SessionBinding, host: ToolHost): Ticket => {
@@ -66,7 +69,7 @@ const ownTicket = (b: SessionBinding, host: ToolHost): Ticket => {
   if (t === undefined) throw new ToolError(`ticket ${b.ticketId} not found`)
   return t
 }
-const view = (t: Ticket) => ({ id: t.id, project: t.project, department: t.department, action: t.action, state: t.state, approval_stage: t.approval_stage, priority: t.priority, title: t.title, goal: t.goal, why: t.why, done_criteria: t.done_criteria, opened_by: t.opened_by, attempts: t.attempts, branch: t.branch, note: t.note })
+const view = (t: Ticket) => ({ id: t.id, project: t.project, milestone: t.milestone, department: t.department, action: t.action, state: t.state, approval_stage: t.approval_stage, priority: t.priority, title: t.title, goal: t.goal, why: t.why, done_criteria: t.done_criteria, opened_by: t.opened_by, attempts: t.attempts, branch: t.branch, note: t.note })
 
 export const TOOLS: ReadonlyArray<Tool> = [
   {
@@ -96,7 +99,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
   {
     name: "ticket_create",
     description: "Open a ticket for any enabled department. It starts as `new` (the CEO triages it; without a CEO, the Operator's inbox). Improvement's tickets for itself are auto-triaged.",
-    input: obj({ department: str("owning department"), title: str("one line"), goal: str("what done looks like"), why: str("why it matters"), done_criteria: { type: "array", items: { type: "string" }, minItems: 1 }, project: str("project id, if any"), action: str("registry action id the result will need, e.g. code.merge.app"), priority: { type: "integer", minimum: 1, maximum: 5 } }, ["department", "title", "goal", "why", "done_criteria"]),
+    input: obj({ department: str("owning department"), title: str("one line"), goal: str("what done looks like"), why: str("why it matters"), done_criteria: { type: "array", items: { type: "string" }, minItems: 1 }, project: str("project id, if any"), action: str("registry action id the result will need, e.g. code.merge.app"), priority: { type: "integer", minimum: 1, maximum: 5 }, milestone: { type: "integer", description: "id of the roadmap milestone this ticket serves (roadmap_get lists them)" } }, ["department", "title", "goal", "why", "done_criteria"]),
     kinds: ["senior", "improvement", "ceo"],
     run: (a, b, host) => {
       const dept = String(a["department"])
@@ -109,7 +112,14 @@ export const TOOLS: ReadonlyArray<Tool> = [
       if (project !== null && !host.config.projects.some((p) => p.id === project)) throw new ToolError(`unknown project '${project}' (registered: ${host.config.projects.map((p) => p.id).join(", ") || "none"})`)
       if (project === null && dept !== "improvement") throw new ToolError("department work needs a project and none is registered; the Operator adds one in Settings → Projects")
       const selfImprovement = b.kind === "improvement" && dept === "improvement"
+      const milestone = a["milestone"] === undefined || a["milestone"] === null ? null : Number(a["milestone"])
+      if (milestone !== null) {
+        const m = host.store.milestone(milestone)
+        if (!m || m.project !== project) throw new ToolError(`milestone ${milestone} is not on ${project ?? "this ticket's project"}'s roadmap (roadmap_get lists them)`)
+        if (m.status !== "open") throw new ToolError(`milestone ${milestone} is ${m.status}; pick an open one or add the next`)
+      }
       const t = host.store.createTicket({
+        milestone,
         department: dept, title: String(a["title"]), goal: String(a["goal"]), why: String(a["why"]),
         done_criteria: (a["done_criteria"] as Array<string>).map(String), opened_by: b.role, project,
         action: a["action"] === undefined ? null : String(a["action"]), priority: a["priority"] === undefined ? 3 : Number(a["priority"]),
@@ -117,6 +127,86 @@ export const TOOLS: ReadonlyArray<Tool> = [
       })
       host.onTicketChanged?.(t.id)
       return view(t)
+    },
+  },
+  {
+    name: "roadmap_get",
+    description: "Read the roadmaps: per project, its milestones in order (id, title, detail, status, tickets done/total), the progress they add up to, and the last status you wrote.",
+    input: obj({ project: str("project id; omit for all") }, []),
+    kinds: ["ceo", "coo", "senior", "improvement"],
+    run: (a, _b, host) => {
+      const ids = a["project"] === undefined ? host.config.projects.map((p) => p.id) : [String(a["project"])]
+      return ids.map((id) => {
+        if (!host.config.projects.some((p) => p.id === id)) throw new ToolError(`unknown project '${id}'`)
+        const g = projectProgress(host.store, id)
+        return { project: id, percent: g.pct === null ? null : Math.round(g.pct * 100), basis: g.basis, milestones: g.milestones.map((m) => ({ id: m.id, title: m.title, detail: m.detail, status: m.status, tickets_done: m.tickets_done, tickets_total: m.tickets_total })), open_tickets_without_milestone: g.tickets.unassigned, status: g.status?.text ?? null }
+      })
+    },
+  },
+  {
+    name: "milestone_add",
+    description: "CEO: add a milestone to the end of a project's roadmap — an outcome a user or the Operator could check (\"a seller can refund a payment\"), not a task. Pass status `done` with evidence for what the repository already has. The Operator sees the roadmap and can edit, reorder or drop any of it.",
+    input: obj({ project: str("project id"), title: str("the outcome, one line"), detail: str("what is in it and how to tell it is done"), status: { type: "string", enum: ["open", "done"] }, evidence: str("for done: where it can be seen (path, commit, ticket)") }, ["project", "title", "detail"]),
+    kinds: ["ceo"],
+    run: (a, b, host) => {
+      const project = String(a["project"])
+      if (!host.config.projects.some((p) => p.id === project)) throw new ToolError(`unknown project '${project}'`)
+      const title = String(a["title"]).trim()
+      if (!title) throw new ToolError("a milestone needs a title")
+      const existing = host.store.milestones(project).filter((m) => m.status !== "dropped")
+      if (existing.some((m) => m.title.trim().toLowerCase() === title.toLowerCase())) throw new ToolError(`'${title}' is already on the roadmap`)
+      if (existing.length >= MAX_MILESTONES) throw new ToolError(`${project} already has ${existing.length} milestones; a roadmap is the few outcomes that matter — merge or finish some first`)
+      const status = a["status"] === "done" ? "done" : "open"
+      if (status === "done" && !String(a["evidence"] ?? "").trim()) throw new ToolError("a milestone that is already done needs evidence")
+      const m = host.store.milestoneAdd({ project, title, detail: String(a["detail"] ?? ""), status, ...(a["evidence"] ? { evidence: String(a["evidence"]) } : {}), by: b.role, now: host.now() })
+      return { id: m.id, position: m.position }
+    },
+  },
+  {
+    name: "milestone_update",
+    description: "CEO: reword a milestone, or mark it done — only when its tickets are done and you can cite the evidence. Dropping a milestone is the Operator's call (file it with issue_file or say so in the status).",
+    input: obj({ id: { type: "integer" }, title: str("new title"), detail: str("new detail"), status: { type: "string", enum: ["open", "done"] }, evidence: str("for done: where it can be seen") }, ["id"]),
+    kinds: ["ceo"],
+    run: (a, _b, host) => {
+      const m = host.store.milestone(Number(a["id"]))
+      if (!m) throw new ToolError(`no milestone ${String(a["id"])}`)
+      if (m.status === "dropped") throw new ToolError("the Operator dropped this milestone")
+      if (a["status"] === "done") {
+        if (!String(a["evidence"] ?? "").trim()) throw new ToolError("marking a milestone done needs evidence")
+        const open = host.store.allTickets().filter((t) => t.milestone === m.id && !["done", "declined", "rolled_back"].includes(t.state))
+        if (open.length) throw new ToolError(`${open.map((t) => t.id).join(", ")} still open under this milestone`)
+      }
+      host.store.milestoneEdit(m.id, { ...(a["title"] !== undefined ? { title: String(a["title"]).trim() || m.title } : {}), ...(a["detail"] !== undefined ? { detail: String(a["detail"]) } : {}), ...(a["status"] === "done" || a["status"] === "open" ? { status: a["status"] } : {}), ...(a["evidence"] !== undefined ? { evidence: String(a["evidence"]) } : {}) }, host.now())
+      return { ok: true }
+    },
+  },
+  {
+    name: "ticket_milestone",
+    description: "CEO: attach an existing ticket to a milestone of its project (or detach with milestone 0).",
+    input: obj({ id: str("ticket id"), milestone: { type: "integer" } }),
+    kinds: ["ceo"],
+    run: (a, _b, host) => {
+      const t = host.store.ticket(String(a["id"]))
+      if (!t) throw new ToolError(`ticket ${String(a["id"])} not found`)
+      const n = Number(a["milestone"])
+      if (n === 0) { host.store.setTicketMilestone(t.id, null, host.now()); return { ok: true } }
+      const m = host.store.milestone(n)
+      if (!m || m.project !== t.project) throw new ToolError(`milestone ${n} is not on ${t.project ?? "the ticket's project"}'s roadmap`)
+      host.store.setTicketMilestone(t.id, m.id, host.now())
+      return { ok: true }
+    },
+  },
+  {
+    name: "project_status",
+    description: "CEO: write the status of one project for the Operator, replacing the last one: two to four plain sentences — what works today, what is being built now, what comes next, and anything that needs the Operator. Facts from tickets and the repository only.",
+    input: obj({ project: str("project id"), summary: str("the status") }),
+    kinds: ["ceo"],
+    run: (a, b, host) => {
+      const project = String(a["project"])
+      if (!host.config.projects.some((p) => p.id === project)) throw new ToolError(`unknown project '${project}'`)
+      if (!String(a["summary"]).trim()) throw new ToolError("the status is empty")
+      setProjectStatus(host.store, project, String(a["summary"]), b.role, host.now())
+      return { ok: true }
     },
   },
   {
