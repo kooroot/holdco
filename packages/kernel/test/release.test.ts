@@ -1073,14 +1073,20 @@ describe("review follow-ups (D85/D86)", () => {
   test("a postcheck killed at the shutdown deadline is an unknown outcome, not a failed postcheck", async () => {
     const dir = NodePath.join(base, "pc-abort")
     mkdirSync(dir)
-    writeFileSync(NodePath.join(dir, "d.sh"), "#!/bin/sh\necho applied\n")
+    writeFileSync(NodePath.join(dir, "d.sh"), "#!/bin/sh\necho '{\"previous\":\"v1\"}'\n")
     const ac = new AbortController()
-    const run = runExecutor({ executor: { command: ["sh", "./d.sh"], postcheck: ["sh", "-c", "sleep 20"] }, action: "deploy.staging", cwd: dir, placeholders: { ticket: "ENG-9" }, env: { PATH: process.env["PATH"] }, signal: ac.signal })
+    const run = runExecutor({ executor: { command: ["sh", "./d.sh"], postcheck: ["sh", "-c", "sleep 20"], undo: ["sh", "./undo.sh"] }, action: "deploy.staging", cwd: dir, placeholders: { ticket: "ENG-9" }, env: { PATH: process.env["PATH"] }, signal: ac.signal })
     setTimeout(() => ac.abort(), 500)
     const r = await run
     expect(r.ok).toBe(false)
     expect(r.unknown).toBe(true)
     expect(r.applied).toBeUndefined()
+    expect(r.undo["kind"]).toBe("executor-undo")
+    const store = new Store(":memory:")
+    const begun = store.beginAction({ at: 1, actor: "kernel", ticket_id: "ENG-9", action: "deploy.staging", effective_tier: "T1", forced_by: [], inputs: {} })
+    if (!("id" in begun)) throw new Error("claim refused")
+    store.markActionUnknown(begun.id, 2, r.error ?? "killed", r.outputs, r.undo)
+    expect(JSON.parse(store.actionLog(begun.id)!.undo)["kind"]).toBe("executor-undo")
   })
 
   test("a postcheck that never returned a verdict is reported as inconclusive, not as missing effect", async () => {
@@ -1095,5 +1101,17 @@ describe("review follow-ups (D85/D86)", () => {
     expect(String(item.payload["postcheck"])).toContain("inconclusive")
     expect(String(item.payload["postcheck"])).not.toContain("missing")
     await sup.stop()
+  })
+
+  test("canarySampleStats counts a watch by when it was extended, not when the candidate was created", () => {
+    const store = new Store(":memory:")
+    const oldAt = Date.UTC(2026, 8, 1)
+    const recent = Date.UTC(2026, 9, 26)
+    store.addRelease("rc-old", oldAt, oldAt + 86_400_000, "c", "candidate")
+    store.setMeta("canary_extended:rc-old", String(recent))
+    store.addRelease("rc-stale", oldAt, oldAt + 86_400_000, "c", "candidate")
+    store.setMeta("canary_extended:rc-stale", String(oldAt))
+    const since = Date.UTC(2026, 9, 1)
+    expect(store.canarySampleStats(since).extended).toBe(1) // rc-old extended inside the window, even though it was created earlier
   })
 })

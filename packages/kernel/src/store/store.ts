@@ -766,14 +766,19 @@ export class Store {
     return this.db.run("UPDATE action_log SET outputs = ? WHERE id = ? AND status = 'started'", [JSON.stringify(outputs), id]).changes === 1
   }
   /** The command may or may not have taken effect (crash, kill, timeout). The row is never re-run. */
-  markActionUnknown(id: number, at: number, reason: string, collected: Record<string, unknown> = {}): boolean {
+  markActionUnknown(id: number, at: number, reason: string, collected: Record<string, unknown> = {}, undo?: Record<string, unknown>): boolean {
     // keep what the command printed before it was lost (and the postcheck's answer, if one ran): it is the Operator's
     // evidence for "did it take effect?". Bounded: the tail of each stream, never more.
     const cap = (v: unknown, n: number) => (typeof v === "string" ? v.slice(-n) : v)
     const kept: Record<string, unknown> = { ...collected, stdout: cap(collected["stdout"], 4000), stderr: cap(collected["stderr"], 4000) }
     const probe = collected["postcheck"]
     if (probe && typeof probe === "object") kept["postcheck"] = { ...(probe as Record<string, unknown>), stdout: cap((probe as Record<string, unknown>)["stdout"], 2000), stderr: cap((probe as Record<string, unknown>)["stderr"], 2000) }
-    return this.db.run("UPDATE action_log SET status = 'unknown', finished_at = ?, outputs = ? WHERE id = ? AND status = 'started'", [at, JSON.stringify({ ...kept, unknown: reason.slice(0, 1000) }), id]).changes === 1
+    const outputs = JSON.stringify({ ...kept, unknown: reason.slice(0, 1000) })
+    // keep a rendered undo when the command itself succeeded (e.g. shutdown killed only the postcheck)
+    if (undo !== undefined) {
+      return this.db.run("UPDATE action_log SET status = 'unknown', finished_at = ?, outputs = ?, undo = ? WHERE id = ? AND status = 'started'", [at, outputs, JSON.stringify(undo), id]).changes === 1
+    }
+    return this.db.run("UPDATE action_log SET status = 'unknown', finished_at = ?, outputs = ? WHERE id = ? AND status = 'started'", [at, outputs, id]).changes === 1
   }
   /**
    * D86: how often the canary sample floor bit since `since`, so the defaults can be tuned: how many candidates had their
@@ -784,7 +789,7 @@ export class Store {
     const by = (st: string) => rows.find((r) => r.status === st)?.n ?? 0
     // "expired" means nobody answered; a question closed because its candidate was promoted or withdrawn meanwhile is not that
     const unanswered = this.db.query<{ n: number }, [number]>("SELECT COUNT(*) AS n FROM inbox WHERE kind = 'canary_sample' AND status = 'expired' AND created_at >= ? AND note LIKE 'no answer%'").get(since)?.n ?? 0
-    const extended = this.db.query<{ n: number }, [number]>("SELECT COUNT(*) AS n FROM releases WHERE at >= ? AND EXISTS (SELECT 1 FROM meta WHERE key = 'canary_extended:' || releases.tag)").get(since)?.n ?? 0
+    const extended = this.db.query<{ n: number }, [number]>("SELECT COUNT(*) AS n FROM meta WHERE key LIKE 'canary_extended:%' AND CAST(value AS INTEGER) >= ?").get(since)?.n ?? 0
     return { extended, asked: rows.reduce((a, r) => a + r.n, 0), approved: by("approved"), rejected: by("rejected"), expired: unanswered, open: by("open") }
   }
   /** The recorded outputs of an action_log row (for the recovery item and the dashboard). */

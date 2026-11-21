@@ -238,11 +238,11 @@ export class Supervisor {
     return rows.length
   }
 
-  private raiseUnknownOutcome(logId: number, ticketId: string | null, action: string, reason: string, now: number, collected: Record<string, unknown> = {}) {
+  private raiseUnknownOutcome(logId: number, ticketId: string | null, action: string, reason: string, now: number, collected: Record<string, unknown> = {}, undo?: Record<string, unknown>) {
     const note = `${OUTCOME_UNKNOWN} ${action} (action-log ${logId}): ${reason}. It was not re-run; check whether it took effect before deciding`
     // the row, the ticket and the inbox item change together: a crash in between leaves either all or none
     const raised = this.store.transaction(() => {
-      if (!this.store.markActionUnknown(logId, now, reason, collected)) return false
+      if (!this.store.markActionUnknown(logId, now, reason, collected, undo)) return false
       const probe = collected["postcheck"] as { exit?: number | null; stdout?: string; stderr?: string } | undefined
       const t = ticketId ? this.store.ticket(ticketId) : undefined
       if (t && (t.state === "verified" || t.state === "awaiting_approval")) this.store.transition(t.id, "blocked", "kernel", note, now)
@@ -318,13 +318,16 @@ export class Supervisor {
 
   async tick() {
     this.reloadConfig()
+    if (this.stopping) return
     const now = this.now()
     await this.notifier.heartbeat()
+    if (this.stopping) return // a tick already in heartbeat must not start jobs or sessions after stop()
     const active = this.applyInterrupts(now)
     this.store.reap(this.config.runtime.max_attempts, now)
     if (this.halted) return
     this.kernelSteps(now)
     await this.jobs(now, active)
+    if (this.stopping) return
     if (active.some((i) => i.level === "L4" || i.level === "L5")) return
     this.dispatch(now, active)
   }
@@ -565,7 +568,7 @@ export class Supervisor {
       const run = runExecutor({ executor: declared, action, cwd, placeholders: { branch: t.branch, ticket: t.id, deliverable }, env: this.env, idempotencyKey: begun.idem_key, attempt: begun.attempt, signal: this.executorAbort.signal, onUnknown: (o) => void this.store.checkpointAction(begun.id, o) }).then((r) => {
         const end = this.now()
         if (r.unknown) {
-          this.raiseUnknownOutcome(begun.id, t.id, action, r.error ?? "the command was killed before it reported", end, r.outputs)
+          this.raiseUnknownOutcome(begun.id, t.id, action, r.error ?? "the command was killed before it reported", end, r.outputs, r.undo)
           return
         }
         // the row is settled exactly once: if it is no longer `started` (a later boot already raised it as unknown),
@@ -730,10 +733,10 @@ export class Supervisor {
     // the floor is on the candidate side: with canary_traffic 1 the baseline has no production sessions in the window,
     // and its rate then counts as 0 (the strictest comparison), as before D86
     if (floorMissed) {
-      if (this.store.getMeta(`canary_extended:${rc.tag}`) !== "1") {
+      if (this.store.getMeta(`canary_extended:${rc.tag}`) === undefined) {
         this.store.transaction(() => {
           this.store.setReleaseWatch(rc.tag, now + durationMs(this.config.policy.release.watch))
-          this.store.setMeta(`canary_extended:${rc.tag}`, "1")
+          this.store.setMeta(`canary_extended:${rc.tag}`, String(now)) // timestamp: the digest counts by when the watch was extended, not when the candidate was created
         })
         void this.notifier.send("info", this.say(`candidate ${rc.tag}: too little evidence to judge (${sample}; need ${floor.min_sessions} sessions and ${floor.min_verdicts} verdicts on the candidate); watch extended once by ${this.config.policy.release.watch}`, `후보 ${rc.tag}: 판정할 표본 부족 (${sample}; 후보 세션 ${floor.min_sessions}개, 판정 ${floor.min_verdicts}개 필요); 감시를 ${this.config.policy.release.watch} 한 번 연장`))
         return
