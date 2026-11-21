@@ -270,7 +270,9 @@ export class Store {
       const cols = this.db.query<{ name: string }, []>(`PRAGMA table_info(${table})`).all().map((c) => c.name)
       if (!cols.includes(column)) this.db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`)
     }
-    this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS action_log_idem ON action_log(idem_key) WHERE idem_key IS NOT NULL")
+    // the key is stable per (ticket, action): every retry of the same action on a ticket carries the same key
+    this.db.exec("DROP INDEX IF EXISTS action_log_idem")
+    this.db.exec("CREATE INDEX IF NOT EXISTS action_log_idem ON action_log(idem_key) WHERE idem_key IS NOT NULL")
     this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS action_log_one_running ON action_log(ticket_id, action) WHERE status = 'started'")
   }
 
@@ -356,6 +358,11 @@ export class Store {
     vals.push(id)
     this.db.run(`UPDATE tickets SET ${sets.join(", ")} WHERE id = ?`, vals as Array<string | number | null>)
     this.db.run("INSERT INTO ticket_events(ticket_id, at, actor, from_state, to_state, note) VALUES (?, ?, ?, ?, ?, ?)", [id, now, actor, t.state, to, note])
+    // whoever moved a blocked ticket on made the decision a `blocked` inbox item was asking for: it is superseded, not
+    // left to expire later against a ticket that may have been blocked again for another reason (D85)
+    if (t.state === "blocked" && to !== "blocked") {
+      this.db.run("UPDATE inbox SET status = 'expired', decided_at = ?, note = ? WHERE ticket_id = ? AND kind = 'blocked' AND status = 'open'", [now, `superseded: ${id} moved to ${to} by ${actor}`, id])
+    }
   }
   setStage(id: string, stage: ApprovalStage, now: number) {
     this.db.run("UPDATE tickets SET approval_stage = ?, updated_at = ? WHERE id = ?", [stage, now, id])
@@ -728,7 +735,7 @@ export class Store {
    * D85: claim a run of a declared executor. Refused (`held`) while a run of the same action on the same ticket is
    * `started` (still running) or `unknown` (may have taken effect: never run again on this ticket).
    */
-  beginAction(a: { at: number; actor: string; ticket_id: string; action: string; effective_tier: string; forced_by: ReadonlyArray<string>; inputs: unknown; expect_state?: string }): { id: number; idem_key: string } | { held: { id: number; status: string } } | { stale: string } {
+  beginAction(a: { at: number; actor: string; ticket_id: string; action: string; effective_tier: string; forced_by: ReadonlyArray<string>; inputs: unknown; expect_state?: string }): { id: number; idem_key: string; attempt: number } | { held: { id: number; status: string } } | { stale: string } {
     // IMMEDIATE: the checks and the insert hold the write lock together, so two openers cannot both pass them, and a
     // caller holding a stale copy of the ticket (another process already finished it) cannot claim it again
     return this.db.transaction(() => {
@@ -739,11 +746,11 @@ export class Store {
       const held = this.heldAction(a.ticket_id, a.action)
       if (held) return { held }
       const n = (this.db.query<{ n: number }, [string, string]>("SELECT COUNT(*) AS n FROM action_log WHERE ticket_id = ? AND action = ?").get(a.ticket_id, a.action)?.n ?? 0) + 1
-      const idem_key = `${a.ticket_id}:${a.action}:${n}`
+      const idem_key = `${a.ticket_id}:${a.action}` // stable across retries, so a script can recognise a repeat of work it already half did
       const r = this.db.run("INSERT INTO action_log(at, actor, ticket_id, action, effective_tier, forced_by, inputs, outputs, undo, status, idem_key) VALUES (?, ?, ?, ?, ?, ?, ?, '{}', '{}', 'started', ?)", [
         a.at, a.actor, a.ticket_id, a.action, a.effective_tier, JSON.stringify(a.forced_by), JSON.stringify(a.inputs), idem_key,
       ])
-      return { id: Number(r.lastInsertRowid), idem_key }
+      return { id: Number(r.lastInsertRowid), idem_key, attempt: n }
     }).immediate()
   }
   /** The command ended and its result is known (success or failure). Only a `started` row can finish. */
@@ -751,8 +758,19 @@ export class Store {
     return this.db.run("UPDATE action_log SET status = 'done', finished_at = ?, outputs = ?, undo = ? WHERE id = ? AND status = 'started'", [r.at, JSON.stringify(r.outputs), JSON.stringify(r.undo), id]).changes === 1
   }
   /** The command may or may not have taken effect (crash, kill, timeout). The row is never re-run. */
-  markActionUnknown(id: number, at: number, reason: string): boolean {
-    return this.db.run("UPDATE action_log SET status = 'unknown', finished_at = ?, outputs = ? WHERE id = ? AND status = 'started'", [at, JSON.stringify({ unknown: reason }), id]).changes === 1
+  markActionUnknown(id: number, at: number, reason: string, collected: Record<string, unknown> = {}): boolean {
+    // keep what the command printed before it was lost (and the postcheck's answer, if one ran): it is the Operator's
+    // evidence for "did it take effect?". Bounded: the tail of each stream, never more.
+    const cap = (v: unknown, n: number) => (typeof v === "string" ? v.slice(-n) : v)
+    const kept: Record<string, unknown> = { ...collected, stdout: cap(collected["stdout"], 4000), stderr: cap(collected["stderr"], 4000) }
+    const probe = collected["postcheck"]
+    if (probe && typeof probe === "object") kept["postcheck"] = { ...(probe as Record<string, unknown>), stdout: cap((probe as Record<string, unknown>)["stdout"], 2000), stderr: cap((probe as Record<string, unknown>)["stderr"], 2000) }
+    return this.db.run("UPDATE action_log SET status = 'unknown', finished_at = ?, outputs = ? WHERE id = ? AND status = 'started'", [at, JSON.stringify({ ...kept, unknown: reason }), id]).changes === 1
+  }
+  /** The recorded outputs of an action_log row (for the recovery item and the dashboard). */
+  actionOutputs(id: number): Record<string, unknown> {
+    const r = this.db.query<{ outputs: string }, [number]>("SELECT outputs FROM action_log WHERE id = ?").get(id)
+    try { return r ? (JSON.parse(r.outputs) as Record<string, unknown>) : {} } catch { return {} }
   }
   startedActions(): Array<{ id: number; at: number; ticket_id: string | null; action: string; idem_key: string | null }> {
     return this.db.query<{ id: number; at: number; ticket_id: string | null; action: string; idem_key: string | null }, []>("SELECT id, at, ticket_id, action, idem_key FROM action_log WHERE status = 'started' ORDER BY id").all()

@@ -170,6 +170,10 @@
           "type": "string",
           "pattern": "^[1-9][0-9]*(s|m|h|d)$"
         },
+        "executor_stop_grace": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*(s|m|h|d)$"
+        },
         "max_attempts": {
           "type": "integer",
           "minimum": 1,

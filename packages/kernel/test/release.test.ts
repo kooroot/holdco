@@ -523,7 +523,7 @@ describe("crash-safe executors (D85)", () => {
 
   test("a supervisor that dies while the command runs: the next boot never re-runs it; the outcome is unknown and goes to the urgent inbox", async () => {
     const count = NodePath.join(base, "crash-runs.txt")
-    const c = deployCompany("crash", `#!/bin/sh\necho "run $HOLDCO_IDEMPOTENCY_KEY" >> ${count}\nsleep 2\necho '{"previous":"v1"}'\n`)
+    const c = deployCompany("crash", `#!/bin/sh\necho "run $HOLDCO_IDEMPOTENCY_KEY $HOLDCO_ATTEMPT" >> ${count}\nsleep 2\necho '{"previous":"v1"}'\n`)
     const clock = { now: Date.UTC(2026, 9, 26, 9) }
     const { sup, store } = makeSupervisor(c, deployEngine(), clock)
     await sup.boot()
@@ -538,7 +538,7 @@ describe("crash-safe executors (D85)", () => {
     // the write-ahead record exists before the command could have had any effect
     const started = store.actionsSince(0).filter((a) => a.action === "deploy.staging")
     expect(started.length).toBe(1)
-    expect(store.actionLog(started[0]!.id)).toMatchObject({ status: "started", idem_key: `${id}:deploy.staging:1` })
+    expect(store.actionLog(started[0]!.id)).toMatchObject({ status: "started", idem_key: `${id}:deploy.staging` })
 
     // supervisor 2 boots on the same store; supervisor 1's in-memory state is gone
     const sent2: Array<string> = []
@@ -547,7 +547,7 @@ describe("crash-safe executors (D85)", () => {
     await cycle(sup2, clock, 3)
     await sup.drain() // supervisor 1's orphaned command finishes late; its result must not override the boot's decision
 
-    expect(readFileSync(count, "utf8").trim().split("\n")).toEqual([`run ${id}:deploy.staging:1`]) // ran once, with its key
+    expect(readFileSync(count, "utf8").trim().split("\n")).toEqual([`run ${id}:deploy.staging 1`]) // ran once, with its key
     const row = store.actionLog(started[0]!.id)!
     expect(row.status).toBe("unknown")
     expect(store.actionsSince(0).filter((a) => a.action === "deploy.staging").length).toBe(1)
@@ -591,12 +591,13 @@ describe("crash-safe executors (D85)", () => {
     await sup.stop()
   })
 
-  test("a run is claimed once: a second claim is refused while it runs or after an unknown outcome; keys are unique; a row settles once", () => {
+  test("a run is claimed once: a second claim is refused while it runs or after an unknown outcome; the key is stable across retries (the attempt number is separate); a row settles once", () => {
     const store = new Store(":memory:")
     const begin = (ticket: string, at: number) => store.beginAction({ at, actor: "kernel", ticket_id: ticket, action: "deploy", effective_tier: "T1", forced_by: [], inputs: {} })
     const a = begin("ENG-1", 1)
     if (!("id" in a)) throw new Error("first claim refused")
-    expect(a.idem_key).toBe("ENG-1:deploy:1")
+    expect(a.idem_key).toBe("ENG-1:deploy")
+    expect(a.attempt).toBe(1)
     expect(begin("ENG-1", 2)).toEqual({ held: { id: a.id, status: "started" } }) // still running: no second launch
     expect(store.ticketRunning("ENG-1")).toBe(true)
     expect(store.finishAction(a.id, { at: 3, outputs: { ok: true }, undo: {} })).toBe(true)
@@ -604,13 +605,14 @@ describe("crash-safe executors (D85)", () => {
     expect(store.ticketRunning("ENG-1")).toBe(false)
     const b = begin("ENG-1", 5) // a known result frees the action for a deliberate retry
     if (!("id" in b)) throw new Error("second claim refused")
-    expect(b.idem_key).toBe("ENG-1:deploy:2")
+    expect(b.idem_key).toBe("ENG-1:deploy") // the same key on a retry: a script can recognise work it already half did
+    expect(b.attempt).toBe(2)
     expect(store.markActionUnknown(b.id, 6, "lost")).toBe(true)
     expect(store.finishAction(b.id, { at: 7, outputs: {}, undo: {} })).toBe(false) // unknown stays unknown
     expect(begin("ENG-1", 8)).toEqual({ held: { id: b.id, status: "unknown" } }) // never again on this ticket
     expect("id" in begin("ENG-2", 9)).toBe(true) // a new ticket may run it
     expect(store.startedActions().map((r) => r.ticket_id)).toEqual(["ENG-2"])
-    expect(() => store.db.run("UPDATE action_log SET idem_key = ? WHERE id = ?", [a.idem_key, b.id])).toThrow()
+    expect(store.actionLog(b.id)?.idem_key).toBe(store.actionLog(a.id)?.idem_key)
     // rows written before D85 read as done and carry no key
     const legacy = store.logAction({ at: 10, actor: "kernel", ticket_id: "ENG-3", action: "x", effective_tier: "T1", forced_by: [], inputs: {}, outputs: {}, undo: {} })
     expect(store.actionLog(legacy)).toMatchObject({ status: "done", idem_key: null })
@@ -828,3 +830,141 @@ describe("canary noise floor (D86)", () => {
   })
 })
 
+
+describe("review follow-ups (D85/D86)", () => {
+  const mk = (store: Store, title: string, at: number) =>
+    store.createTicket({ department: "engineering", title, goal: "g", why: "w", done_criteria: ["d"], opened_by: "operator", project: "app", state: "triaged", action: "deploy.staging", now: at }).id
+
+  test("an unblock closes the ticket's open blocked item; a stale blocked item that expires later does not abort the tick", async () => {
+    const c = company("stale-blocked")
+    const clock = { now: Date.UTC(2026, 9, 26, 9) }
+    const { sup, store } = makeSupervisor(c, new FakeEngine({ ceo: async () => ({}) }), clock)
+    await sup.boot()
+    const a = mk(store, "A", clock.now)
+    store.transition(a, "blocked", "kernel", "stuck", clock.now)
+    const stale = store.inboxAdd("blocked", a, { title: `${a} is blocked` }, clock.now)
+    // the CEO (or anyone) releases it: its open blocked item is superseded, not left to expire later
+    store.transition(a, "triaged", "ceo", "go on", clock.now)
+    expect(store.inboxItem(stale)?.status).toBe("expired")
+
+    // the old item left open anyway (written by an older build) and the ticket later blocked as an unknown outcome:
+    // its expiry must not throw HeldForRecovery and skip the rest of the tick
+    store.db.run("UPDATE inbox SET status = 'open', decided_at = NULL WHERE id = ?", [stale])
+    const run = store.beginAction({ at: clock.now, actor: "kernel", ticket_id: a, action: "deploy.staging", effective_tier: "T1", forced_by: [], inputs: {} })
+    if (!("id" in run)) throw new Error("claim refused")
+    store.markActionUnknown(run.id, clock.now, "lost")
+    store.db.run("UPDATE tickets SET state = 'blocked' WHERE id = ?", [a])
+    store.inboxAdd("recovery", a, { title: "Outcome unknown", action: "deploy.staging", action_log: run.id }, clock.now, "urgent")
+    const b = mk(store, "B", clock.now)
+    store.transition(b, "blocked", "kernel", "stuck", clock.now)
+    const second = store.inboxAdd("blocked", b, { title: `${b} is blocked` }, clock.now)
+    clock.now += 49 * 3_600_000
+    await sup.tick() // must not throw, and must still reach item `second`
+    expect(store.inboxItem(stale)?.status).toBe("expired")
+    expect(store.ticket(a)?.state).toBe("blocked") // held for its recovery item
+    expect(store.inboxItem(second)?.status).toBe("expired")
+    expect(store.ticket(b)?.state).toBe("declined")
+    await sup.stop()
+  })
+
+  const execCompany = (name: string, script: string, opts: { timeout?: string; postcheck?: Array<string> } = {}) => {
+    const c = company(name, (raw) => {
+      ;(raw["actions"] as Array<Record<string, unknown>>).push({ id: "deploy.staging", department: "engineering", tier: "T1", evaluator: "engineering.md#app", gates: ["verification-approved", "rollback-tested"], graduation: "auto" })
+      raw["executors"] = { "deploy.staging": { command: ["sh", "./deploy.sh"], cwd: "project", undo: ["sh", "./undo.sh"], timeout: opts.timeout ?? "1m", ...(opts.postcheck ? { postcheck: opts.postcheck } : {}) } }
+    })
+    writeFileSync(NodePath.join(c.app, "deploy.sh"), script)
+    git(c.app, "add", "-A")
+    git(c.app, "commit", "-qm", "deploy script")
+    return c
+  }
+  const engine = () => new FakeEngine({ ceo: async () => ({}), senior: seniorScript("deploy.staging"), verification: async ({ spec, call }) => {
+    const verdict = { ticket: spec.ticketId, rubric: "engineering.md#app", verdict: "approve", scores: { correctness: 4 }, overall: 4, confidence: "high", failures: [], gates: [{ gate: "rollback-tested", passed: true, evidence: "fixture" }], summary: "verified" }
+    await call("verdict_submit", { verdict })
+    return { report: verdict }
+  } })
+
+  test("the idempotency key is the same on every retry of an action on a ticket; the attempt number is a separate variable", async () => {
+    const dir = NodePath.join(base, "idem-env")
+    mkdirSync(dir)
+    writeFileSync(NodePath.join(dir, "d.sh"), '#!/bin/sh\necho "$HOLDCO_IDEMPOTENCY_KEY $HOLDCO_ATTEMPT" >> seen.txt\n[ "$HOLDCO_ATTEMPT" = 1 ] && exit 3\nexit 0\n')
+    const store = new Store(":memory:")
+    const seen: Array<string> = []
+    for (let i = 0; i < 2; i++) {
+      const begun = store.beginAction({ at: i, actor: "kernel", ticket_id: "ENG-9", action: "deploy.staging", effective_tier: "T1", forced_by: [], inputs: {} })
+      if (!("id" in begun)) throw new Error("claim refused")
+      const r = await runExecutor({ executor: { command: ["sh", "./d.sh"] }, action: "deploy.staging", cwd: dir, placeholders: { ticket: "ENG-9" }, env: { PATH: process.env["PATH"] }, idempotencyKey: begun.idem_key, attempt: begun.attempt })
+      expect(r.ok).toBe(i === 1) // the first run applied part of its work and failed; the retry succeeds
+      store.finishAction(begun.id, { at: i, outputs: r.outputs, undo: {} })
+    }
+    expect(readFileSync(NodePath.join(dir, "seen.txt"), "utf8").trim().split("\n")).toEqual(["ENG-9:deploy.staging 1", "ENG-9:deploy.staging 2"])
+  })
+
+  test("an unknown outcome keeps what the command printed, and a declared postcheck is run once and attached to the recovery item", async () => {
+    const c = execCompany("unknown-evidence", "#!/bin/sh\necho applied > applied.txt\necho partial-output\necho half-error >&2\nexec sleep 30\n", { timeout: "1s", postcheck: ["sh", "-c", "test -f applied.txt && echo present"] })
+    const clock = { now: Date.UTC(2026, 9, 26, 9) }
+    const { sup, store } = makeSupervisor(c, engine(), clock)
+    await sup.boot()
+    const id = mk(store, "Deploy", clock.now)
+    store.db.run("UPDATE tickets SET state = 'triaged' WHERE id = ?", [id])
+    await cycle(sup, clock, 8)
+    const row = store.actionsSince(0).find((a) => a.action === "deploy.staging")!
+    expect(store.actionLog(row.id)?.status).toBe("unknown") // a probe is evidence, not proof: the status stays unknown
+    const out = store.actionOutputs(row.id) as { stdout: string; stderr: string; unknown: string; postcheck: { exit: number; stdout: string } }
+    expect(out.stdout).toContain("partial-output")
+    expect(out.stderr).toContain("half-error")
+    expect(out.unknown).toContain("killed")
+    expect(out.postcheck.exit).toBe(0)
+    expect(out.postcheck.stdout).toContain("present")
+    const item = store.inboxOpen().find((i) => i.kind === "recovery" && i.ticket_id === id)!
+    expect(String(item.payload["postcheck"])).toContain("passed")
+    expect(String(item.payload["stdout_tail"])).toContain("partial-output")
+    expect(store.ticket(id)?.state).toBe("blocked")
+    await sup.stop()
+  })
+
+  test("a graceful stop waits for a running executor: one that finishes within the grace is not unknown", async () => {
+    const c = execCompany("stop-waits", "#!/bin/sh\nsleep 1\necho '{\"previous\":\"v1\"}'\n")
+    const clock = { now: Date.UTC(2026, 9, 26, 9) }
+    const { sup, store } = makeSupervisor(c, engine(), clock)
+    await sup.boot()
+    const id = mk(store, "Deploy", clock.now)
+    for (let i = 0; i < 40 && store.actionsSince(0).length === 0; i++) {
+      clock.now += 60_000
+      await sup.tick()
+      await Bun.sleep(100)
+    }
+    expect(store.startedActions().length).toBe(1) // running right now
+    await sup.stop() // waits (default grace 30s) for the 1 s command
+    const row = store.actionsSince(0).find((a) => a.action === "deploy.staging")!
+    expect(store.actionLog(row.id)?.status).toBe("done")
+    expect(store.ticket(id)?.state).toBe("done")
+    expect(store.inboxOpen().some((i) => i.kind === "recovery")).toBe(false)
+  })
+
+  test("when the grace expires, stop kills the executor's process group and only then is the outcome unknown", async () => {
+    const marker = NodePath.join(base, "stop-kill-marker.txt")
+    const c = execCompany("stop-kills", `#!/bin/sh\necho started > ${marker}\nsleep 20\necho late >> ${marker}\n`, {})
+    const raw = Bun.YAML.parse(readFileSync(NodePath.join(c.dir, "company.yaml"), "utf8")) as Record<string, unknown>
+    ;(raw["runtime"] as Record<string, unknown>)["executor_stop_grace"] = "1s"
+    const config = Schema.decodeUnknownSync(CompanyConfig)(raw)
+    const clock = { now: Date.UTC(2026, 9, 26, 9) }
+    const { sup, store } = makeSupervisor({ ...c, config }, engine(), clock)
+    await sup.boot()
+    const id = mk(store, "Deploy", clock.now)
+    for (let i = 0; i < 40 && !existsSync(marker); i++) {
+      clock.now += 60_000
+      await sup.tick()
+      await Bun.sleep(100)
+    }
+    const started = Date.now()
+    await sup.stop()
+    expect(Date.now() - started).toBeLessThan(10_000) // 1 s grace, not the command's 20 s
+    const row = store.actionsSince(0).find((a) => a.action === "deploy.staging")!
+    expect(store.actionLog(row.id)?.status).toBe("unknown")
+    expect(store.actionOutputs(row.id)["unknown"]).toContain("supervisor stopped")
+    expect(store.ticket(id)?.state).toBe("blocked")
+    expect(store.inboxOpen().some((i) => i.kind === "recovery" && i.ticket_id === id)).toBe(true)
+    await Bun.sleep(300)
+    expect(readFileSync(marker, "utf8")).not.toContain("late") // the group was killed, not left running
+  })
+})

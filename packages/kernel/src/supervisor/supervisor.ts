@@ -13,7 +13,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import * as NodePath from "node:path"
 import { spawnSync } from "node:child_process"
 import { Exit, Schema } from "effect"
-import { assignmentFor, authMode, budgetMode, CANARY_SAMPLE_DEFAULTS, CompanyConfig, durationMs, type EngineId, type RoleKind } from "../config/company.ts"
+import { assignmentFor, authMode, budgetMode, CANARY_SAMPLE_DEFAULTS, CompanyConfig, durationMs, EXECUTOR_STOP_GRACE_DEFAULT, type EngineId, type RoleKind } from "../config/company.ts"
 import { HOST_DENY_READ, UNREADABLE } from "../policy/paths.ts"
 import { effectiveTier, tierForChange, UnknownAction } from "../policy/tiers.ts"
 import { demotionDue, graduationCheck } from "../policy/graduation.ts"
@@ -171,6 +171,9 @@ export class Supervisor {
   /** Tickets whose declared executor is running right now (execute() is re-entered every tick). */
   private readonly executing = new Set<string>()
   private readonly pending = new Set<Promise<void>>()
+  /** D85: aborted after the stop grace period to kill running executors' process groups. */
+  private readonly executorAbort = new AbortController()
+  private stopping = false
   private halted = false
   private readonly delegations = new Map<string, Promise<{ brief_id: string; status: string; result: unknown }>>()
   private lastJob = new Map<string, number>()
@@ -235,11 +238,12 @@ export class Supervisor {
     return rows.length
   }
 
-  private raiseUnknownOutcome(logId: number, ticketId: string | null, action: string, reason: string, now: number) {
+  private raiseUnknownOutcome(logId: number, ticketId: string | null, action: string, reason: string, now: number, collected: Record<string, unknown> = {}) {
     const note = `${OUTCOME_UNKNOWN} ${action} (action-log ${logId}): ${reason}. It was not re-run; check whether it took effect before deciding`
     // the row, the ticket and the inbox item change together: a crash in between leaves either all or none
     const raised = this.store.transaction(() => {
-      if (!this.store.markActionUnknown(logId, now, reason)) return false
+      if (!this.store.markActionUnknown(logId, now, reason, collected)) return false
+      const probe = collected["postcheck"] as { exit?: number | null; stdout?: string; stderr?: string } | undefined
       const t = ticketId ? this.store.ticket(ticketId) : undefined
       if (t && (t.state === "verified" || t.state === "awaiting_approval")) this.store.transition(t.id, "blocked", "kernel", note, now)
       this.store.inboxAdd("recovery", ticketId, {
@@ -247,6 +251,9 @@ export class Supervisor {
         note,
         action,
         action_log: logId,
+        ...(typeof collected["stdout"] === "string" && collected["stdout"] !== "" ? { stdout_tail: String(collected["stdout"]).slice(-1000) } : {}),
+        ...(typeof collected["stderr"] === "string" && collected["stderr"] !== "" ? { stderr_tail: String(collected["stderr"]).slice(-1000) } : {}),
+        ...(probe ? { postcheck: probe.exit === 0 ? "the postcheck passed after the kill: the effect is probably there (not proof)" : `the postcheck did not pass after the kill (exit ${probe.exit ?? "none"}): the effect is probably missing or partial (not proof)` } : {}),
         approve: "you checked that it took effect and is correct: the ticket is done",
         reject: "the ticket is declined; nothing is run again (open a new ticket to run it again)",
       }, now, "urgent")
@@ -263,8 +270,25 @@ export class Supervisor {
 
   async stop() {
     if (this.timer) clearInterval(this.timer)
+    this.stopping = true // no new executor starts from here on
     for (const r of this.running.values()) r.abort.abort()
     await Promise.allSettled([...this.running.values()].map((r) => r.promise))
+    // D85: a running executor is not abandoned: wait for it up to runtime.executor_stop_grace, then kill its process
+    // group (the killed run becomes an unknown outcome through its own settle path). Only then is it unknown.
+    if (this.pending.size > 0) {
+      const grace = durationMs(this.config.runtime.executor_stop_grace ?? EXECUTOR_STOP_GRACE_DEFAULT)
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const expired = new Promise<"grace">((resolve) => { timer = setTimeout(() => resolve("grace"), grace) })
+      const settled = Promise.allSettled([...this.pending]).then(() => "settled" as const)
+      this.log(`stopping: waiting up to ${this.config.runtime.executor_stop_grace ?? EXECUTOR_STOP_GRACE_DEFAULT} for ${this.pending.size} running executor(s)`)
+      const first = await Promise.race([settled, expired])
+      if (timer) clearTimeout(timer)
+      if (first === "grace") {
+        this.log("stopping: grace expired; killing the running executors (their outcome becomes unknown)")
+        this.executorAbort.abort()
+        await Promise.allSettled([...this.pending])
+      }
+    }
     for (const t of this.store.allTickets()) if (t.lease_holder) this.store.releaseLease(t.id, t.lease_holder)
     await this.tools.close()
   }
@@ -525,7 +549,7 @@ export class Supervisor {
       void this.notifier.send("info", this.say(`${t.id} done: ${this.tx(t.title)} (${t.action}, ${tier})`, `${t.id} 완료: ${this.tx(t.title)} (${t.action}, ${tier})`))
     } else if (declared !== undefined) {
       // Operator-declared executor (D50): the kernel runs it with the declared env names only, off the tick
-      if (this.executing.has(t.id)) return
+      if (this.executing.has(t.id) || this.stopping) return
       const action = t.action as string
       const cwd = declared.cwd === "company" ? this.root : repo
       const deliverable = this.deliverableOf(t)
@@ -546,10 +570,10 @@ export class Supervisor {
       }
       const begun = claim
       this.executing.add(t.id)
-      const run = runExecutor({ executor: declared, action, cwd, placeholders: { branch: t.branch, ticket: t.id, deliverable }, env: this.env, idempotencyKey: begun.idem_key }).then((r) => {
+      const run = runExecutor({ executor: declared, action, cwd, placeholders: { branch: t.branch, ticket: t.id, deliverable }, env: this.env, idempotencyKey: begun.idem_key, attempt: begun.attempt, signal: this.executorAbort.signal }).then((r) => {
         const end = this.now()
         if (r.unknown) {
-          this.raiseUnknownOutcome(begun.id, t.id, action, r.error ?? "the command was killed before it reported", end)
+          this.raiseUnknownOutcome(begun.id, t.id, action, r.error ?? "the command was killed before it reported", end, r.outputs)
           return
         }
         // the row is settled exactly once: if it is no longer `started` (a later boot already raised it as unknown),
@@ -853,10 +877,17 @@ export class Supervisor {
     for (const i of this.store.inboxOpen()) {
       if (i.kind === "issue" || i.kind === "graduation" || i.kind === "manual_action" || i.kind === "recovery") continue
       if (now - i.created_at > timeout) {
-        this.store.inboxDecide(i.id, "expired", "no answer within the timeout: rejected by default", now)
-        if ((i.kind === "blocked" || i.kind === "triage") && i.ticket_id) {
-          const t = this.store.ticket(i.ticket_id)
-          if (t && (t.state === "blocked" || t.state === "new")) this.store.transition(t.id, "declined", "operator", `inbox #${i.id} expired: rejected by default`, now)
+        // one item's failure never stops the others (or the rest of the tick): it is logged and the item stays closed
+        try {
+          this.store.inboxDecide(i.id, "expired", "no answer within the timeout: rejected by default", now)
+          if ((i.kind === "blocked" || i.kind === "triage") && i.ticket_id) {
+            const t = this.store.ticket(i.ticket_id)
+            // a ticket held for an unknown outcome moves only through its recovery item: a stale item never declines it
+            if (t && (t.state === "blocked" || t.state === "new")) this.store.transition(t.id, "declined", "operator", `inbox #${i.id} expired: rejected by default`, now)
+          }
+        } catch (e) {
+          this.log(`inbox #${i.id} expiry: ${String(e)}`)
+          continue
         }
         void this.notifier.send("warning", this.say(`inbox #${i.id} expired: ${this.tx(String(i.payload["title"] ?? i.kind))}`, `인박스 #${i.id} 만료: ${this.tx(String(i.payload["title"] ?? i.kind))}`))
       }

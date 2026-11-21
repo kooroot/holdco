@@ -53,6 +53,9 @@ export type Tier = typeof Tier.Type
 /** D86: minimum canary sample before its rejection rate decides anything (overridable in policy.release). */
 export const CANARY_SAMPLE_DEFAULTS = { min_sessions: 5, min_verdicts: 3 } as const
 
+/** D85: how long a graceful stop waits for running executors before killing them. */
+export const EXECUTOR_STOP_GRACE_DEFAULT = "30s"
+
 export const KERNEL_FLOORS = {
   auditWeeklySample: 3,
   graduationSamples: 5,
@@ -119,6 +122,12 @@ const Runtime = Schema.Struct({
   lease_grace: Duration,
   /** A ticket that has not moved for this long with no session is diagnosed and reported (D63); default 15m. */
   stall_after: Schema.optionalKey(Duration),
+  /**
+   * D85: on a graceful stop the supervisor waits this long for running executors to finish before it kills them (each
+   * killed one becomes an unknown outcome). Default `EXECUTOR_STOP_GRACE_DEFAULT`; the service manager's own stop timeout
+   * (systemd: 90s unless set) must be longer.
+   */
+  executor_stop_grace: Schema.optionalKey(Duration),
   max_attempts: IntIn(1, 10),
   /** D71: the dashboard's port (default 7117); two companies on one machine need two. */
   dashboard_port: Schema.optionalKey(IntIn(1024, 65535)),

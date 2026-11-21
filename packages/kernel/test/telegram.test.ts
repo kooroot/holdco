@@ -155,6 +155,7 @@ describe("telegram bridge", () => {
     expect(await b.command("/lang ko")).toContain("한국어")
     expect(config.company.language).toBe("ko")
     expect(await b.command("/counts")).toContain("인박스")
+    store.inboxAdd("issue", null, { title: "something needs a decision" }, now) // (the released RES-1's own blocked item is superseded since D85)
     await b.command("/status")
     expect(sent().at(-1)?.text).toContain("결정 대기")
     expect(sent().at(-1)?.reply_markup.inline_keyboard.flat().map((k: any) => k.text)).toContain("🔄 새로고침")
