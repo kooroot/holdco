@@ -1082,4 +1082,18 @@ describe("review follow-ups (D85/D86)", () => {
     expect(r.unknown).toBe(true)
     expect(r.applied).toBeUndefined()
   })
+
+  test("a postcheck that never returned a verdict is reported as inconclusive, not as missing effect", async () => {
+    const c = execCompany("unknown-inconclusive", "#!/bin/sh\necho started\nexec sleep 30\n", { timeout: "1s", postcheck: ["definitely-not-a-binary-d85"] })
+    const clock = { now: Date.UTC(2026, 9, 26, 9) }
+    const { sup, store } = makeSupervisor(c, engine(), clock)
+    await sup.boot()
+    const id = mk(store, "Deploy", clock.now)
+    store.db.run("UPDATE tickets SET state = 'triaged' WHERE id = ?", [id])
+    await cycle(sup, clock, 8)
+    const item = store.inboxOpen().find((i) => i.kind === "recovery" && i.ticket_id === id)!
+    expect(String(item.payload["postcheck"])).toContain("inconclusive")
+    expect(String(item.payload["postcheck"])).not.toContain("missing")
+    await sup.stop()
+  })
 })

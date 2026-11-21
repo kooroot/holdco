@@ -253,7 +253,7 @@ export class Supervisor {
         action_log: logId,
         ...(typeof collected["stdout"] === "string" && collected["stdout"] !== "" ? { stdout_tail: String(collected["stdout"]).slice(-1000) } : {}),
         ...(typeof collected["stderr"] === "string" && collected["stderr"] !== "" ? { stderr_tail: String(collected["stderr"]).slice(-1000) } : {}),
-        ...(probe ? { postcheck: probe.exit === 0 ? "the postcheck passed after the kill: the effect is probably there (not proof)" : `the postcheck did not pass after the kill (exit ${probe.exit ?? "none"}): the effect is probably missing or partial (not proof)` } : {}),
+        ...(probe ? { postcheck: probe.exit === null || probe.exit === undefined ? "the postcheck gave no verdict (it could not run, timed out or was killed): inconclusive" : probe.exit === 0 ? "the postcheck passed after the kill: the effect is probably there (not proof)" : `the postcheck did not pass after the kill (exit ${probe.exit ?? "none"}): the effect is probably missing or partial (not proof)` } : {}),
         approve: "you checked that it took effect and is correct: the ticket is done",
         reject: "the ticket is declined; nothing is run again (open a new ticket to run it again)",
       }, now, "urgent")
