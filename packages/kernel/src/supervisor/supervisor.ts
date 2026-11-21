@@ -13,7 +13,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import * as NodePath from "node:path"
 import { spawnSync } from "node:child_process"
 import { Exit, Schema } from "effect"
-import { assignmentFor, authMode, budgetMode, CANARY_SAMPLE_DEFAULTS, CompanyConfig, durationMs, EXECUTOR_STOP_GRACE_DEFAULT, type EngineId, type RoleKind } from "../config/company.ts"
+import { assignmentFor, authMode, budgetMode, CANARY_SAMPLE_DEFAULTS, CompanyConfig, durationMs, EXECUTOR_STOP_GRACE_DEFAULT, timerMs, type EngineId, type RoleKind } from "../config/company.ts"
 import { HOST_DENY_READ, UNREADABLE } from "../policy/paths.ts"
 import { effectiveTier, tierForChange, UnknownAction } from "../policy/tiers.ts"
 import { demotionDue, graduationCheck } from "../policy/graduation.ts"
@@ -275,7 +275,7 @@ export class Supervisor {
     // winding down do not extend it), then its process group is killed and the run becomes an unknown outcome through its
     // own settle path. Nothing new starts meanwhile.
     const graceText = this.config.runtime.executor_stop_grace ?? EXECUTOR_STOP_GRACE_DEFAULT
-    const killTimer = setTimeout(() => { if (this.pending.size > 0) this.log("stopping: grace expired; killing the running executors (their outcome becomes unknown)"); this.executorAbort.abort() }, durationMs(graceText))
+    const killTimer = setTimeout(() => { if (this.pending.size > 0) this.log("stopping: grace expired; killing the running executors (their outcome becomes unknown)"); this.executorAbort.abort() }, timerMs(graceText))
     if (this.pending.size > 0) this.log(`stopping: waiting up to ${graceText} for ${this.pending.size} running executor(s)`)
     for (const r of this.running.values()) r.abort.abort()
     await Promise.allSettled([...this.running.values()].map((r) => r.promise))
@@ -1627,6 +1627,7 @@ export class Supervisor {
   }
 
   private launchJudge(t: Ticket, sessionId: string, cap: number, cwd: string, repo: string, base: string, paths: ReadonlyArray<string>, rubricRef: string, deps: string | undefined, gates: ReadonlyArray<string>, project: CompanyConfig["projects"][number] | undefined, verified: string) {
+    if (this.stopping) return // verify may finish during the executor grace; do not start a judge after stop()
     const role = this.org.role("verification")
     const prompt = [
       `# Verify ticket ${t.id}: ${t.title}`,

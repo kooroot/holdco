@@ -567,3 +567,8 @@ export const durationMs = (d: string): number => {
   const unit = d.slice(-1) as keyof typeof UNIT_MS
   return Number(d.slice(0, -1)) * UNIT_MS[unit]
 }
+
+/** setTimeout/setInterval delay: Bun and Node reset a delay above signed 32-bit (2^31-1 ms, ~24.8d) to 1 ms. */
+export const MAX_TIMER_MS = 2_147_483_647
+export const timerMs = (d: string): number => Math.min(durationMs(d), MAX_TIMER_MS)
+

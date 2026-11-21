@@ -1,7 +1,7 @@
 /** company.yaml: every preset assembles; every composition rule and kernel floor rejects what it should. */
 import { describe, expect, test } from "bun:test"
 import { Exit, Schema } from "effect"
-import { assignmentFor, CompanyConfig, durationMs } from "../src/config/company.ts"
+import { assignmentFor, CompanyConfig, durationMs, MAX_TIMER_MS, timerMs } from "../src/config/company.ts"
 import { effectiveTier, UnknownAction } from "../src/policy/tiers.ts"
 import { assemble } from "../src/scaffold/assemble.ts"
 import { loadPreset, presetNames } from "../src/scaffold/templates.ts"
@@ -103,6 +103,9 @@ describe("durationMs", () => {
     expect(durationMs("15m")).toBe(900_000)
     expect(durationMs("24h")).toBe(86_400_000)
     expect(durationMs("3d")).toBe(259_200_000)
+    expect(durationMs("25d")).toBeGreaterThan(MAX_TIMER_MS) // would overflow setTimeout
+    expect(timerMs("25d")).toBe(MAX_TIMER_MS)
+    expect(timerMs("30s")).toBe(30_000)
   })
 })
 
