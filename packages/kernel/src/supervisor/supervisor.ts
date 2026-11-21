@@ -195,7 +195,10 @@ export class Supervisor {
         this.candidate = new Org(opts.companyRoot, rc.tag)
         this.candidate.roles()
       } catch {
-        this.store.setReleaseStatus(rc.tag, "withdrawn")
+        this.store.transaction(() => {
+          this.store.setReleaseStatus(rc.tag, "withdrawn")
+          this.closeCanaryQuestion(rc.tag, "superseded: the candidate could not be loaded at startup", this.now())
+        })
         this.candidate = undefined
       }
     }
@@ -713,15 +716,19 @@ export class Supervisor {
         return
       }
       // another process (a manual release) may have settled this candidate since it was read: ask nothing then
-      if (this.store.candidate()?.tag !== rc.tag) return
-      this.store.inboxAdd("canary_sample", null, {
-        title: `Candidate ${rc.tag}: canary sample too small to judge`,
-        tag: rc.tag,
-        changes: rc.changes,
-        note: `${sample} after an extended watch; the floor is ${floor.min_sessions} candidate sessions and ${floor.min_verdicts} candidate verdicts (policy.release.min_sessions / min_verdicts)`,
-        approve: "promote the candidate as it is",
-        reject: "withdraw it: main returns to the current release (also what happens if this item expires)",
-      }, now)
+      const asked = this.store.transaction(() => {
+        if (this.store.candidate()?.tag !== rc.tag) return false
+        this.store.inboxAdd("canary_sample", null, {
+          title: `Candidate ${rc.tag}: canary sample too small to judge`,
+          tag: rc.tag,
+          changes: rc.changes,
+          note: `${sample} after an extended watch; the floor is ${floor.min_sessions} candidate sessions and ${floor.min_verdicts} candidate verdicts (policy.release.min_sessions / min_verdicts)`,
+          approve: "promote the candidate as it is",
+          reject: "withdraw it: main returns to the current release (also what happens if this item expires)",
+        }, now)
+        return true
+      })
+      if (!asked) return
       void this.notifier.send("warning", this.say(`candidate ${rc.tag}: still too little evidence after the extended watch (${sample}); not promoted — decide in the inbox`, `후보 ${rc.tag}: 연장 감시 후에도 표본 부족 (${sample}); 승격하지 않음 — 인박스에서 결정`))
       return
     }
