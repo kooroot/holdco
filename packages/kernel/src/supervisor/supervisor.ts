@@ -727,10 +727,17 @@ export class Supervisor {
     const asked = this.store.inboxLatestFor("canary_sample", rc.tag)
     if (asked?.status === "open") return
     if (asked?.status === "approved") return this.promoteCandidate(now, `promoted by the Operator below the canary floor (${sample})`)
-    if (asked) return this.withdrawCandidate(`canary sample below the floor and the Operator did not promote it (${asked.status}; ${sample})`, now)
+    if (asked?.status === "rejected") return this.withdrawCandidate(`canary sample below the floor and the Operator rejected promoting it (${sample})`, now)
+    const floorMissed = onCandidate.length < floor.min_sessions || candidateVerdicts.length < floor.min_verdicts
+    // an unanswered question follows policy.release.on_sample_timeout (default: withdraw, the safe side)
+    const onTimeout = this.config.policy.release.on_sample_timeout ?? "withdraw"
+    if (asked?.status === "expired" && !(onTimeout === "hold" && !floorMissed)) {
+      if (onTimeout === "withdraw") return this.withdrawCandidate(`canary sample below the floor and the question went unanswered (${sample})`, now)
+      if (onTimeout === "promote") return this.promoteCandidate(now, `promoted: the canary sample question went unanswered and policy.release.on_sample_timeout is promote (${sample})`)
+    }
     // the floor is on the candidate side: with canary_traffic 1 the baseline has no production sessions in the window,
     // and its rate then counts as 0 (the strictest comparison), as before D86
-    if (onCandidate.length < floor.min_sessions || candidateVerdicts.length < floor.min_verdicts) {
+    if (floorMissed) {
       if (this.store.getMeta(`canary_extended:${rc.tag}`) !== "1") {
         this.store.transaction(() => {
           this.store.setReleaseWatch(rc.tag, now + durationMs(this.config.policy.release.watch))
@@ -740,19 +747,20 @@ export class Supervisor {
         return
       }
       // another process (a manual release) may have settled this candidate since it was read: ask nothing then
-      const asked = this.store.transaction(() => {
+      const raised = this.store.transaction(() => {
         if (this.store.candidate()?.tag !== rc.tag) return false
         this.store.inboxAdd("canary_sample", null, {
           title: `Candidate ${rc.tag}: canary sample too small to judge`,
           tag: rc.tag,
           changes: rc.changes,
-          note: `${sample} after an extended watch; the floor is ${floor.min_sessions} candidate sessions and ${floor.min_verdicts} candidate verdicts (policy.release.min_sessions / min_verdicts)`,
+          note: `${sample} after an extended watch${asked ? " (asked again: on_sample_timeout is hold)" : ""}; asked ${this.store.canarySampleStats(now - 30 * 86_400_000).asked + 1}× in 30 days; the floor is ${floor.min_sessions} candidate sessions and ${floor.min_verdicts} candidate verdicts (policy.release.min_sessions / min_verdicts)`,
           approve: "promote the candidate as it is",
-          reject: "withdraw it: main returns to the current release (also what happens if this item expires)",
+          reject: "withdraw it: main returns to the current release",
+          if_unanswered: `at the inbox timeout: ${this.config.policy.release.on_sample_timeout ?? "withdraw"} (policy.release.on_sample_timeout)`,
         }, now)
         return true
       })
-      if (!asked) return
+      if (!raised) return
       void this.notifier.send("warning", this.say(`candidate ${rc.tag}: still too little evidence after the extended watch (${sample}); not promoted — decide in the inbox`, `후보 ${rc.tag}: 연장 감시 후에도 표본 부족 (${sample}); 승격하지 않음 — 인박스에서 결정`))
       return
     }

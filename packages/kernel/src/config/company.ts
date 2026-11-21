@@ -51,7 +51,7 @@ export type Tier = typeof Tier.Type
 // ── kernel floors (required-adjustable minimums; not configurable) ─────────
 
 /** D86: minimum canary sample before its rejection rate decides anything (overridable in policy.release). */
-export const CANARY_SAMPLE_DEFAULTS = { min_sessions: 5, min_verdicts: 3 } as const
+export const CANARY_SAMPLE_DEFAULTS = { min_sessions: 3, min_verdicts: 2 } as const
 
 /** D85: how long a graceful stop waits for running executors before killing them. */
 export const EXECUTOR_STOP_GRACE_DEFAULT = "30s"
@@ -301,6 +301,13 @@ const Policy = Schema.Struct({
      */
     min_sessions: Schema.optionalKey(IntIn(1, 1000)),
     min_verdicts: Schema.optionalKey(IntIn(1, 1000)),
+    /**
+     * D86: what an unanswered "sample too small" question (it expires at `policy.inbox.timeout`) does to the candidate.
+     * `withdraw` (default, the safe side), `promote` (a low-traffic company that would rather ship than lose the change
+     * to an unanswered question), or `hold` (keep it on canary traffic and ask again; if the sample reaches the floor
+     * meanwhile, the rates decide). An explicit Operator rejection always withdraws.
+     */
+    on_sample_timeout: Schema.optionalKey(Schema.Literals(["withdraw", "promote", "hold"])),
   }),
   audit: Schema.Struct({
     weekly_sample: Schema.Int.check(Schema.isGreaterThanOrEqualTo(KERNEL_FLOORS.auditWeeklySample)),

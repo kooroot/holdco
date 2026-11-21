@@ -42,7 +42,7 @@ Each box is an Effect service (a `Context` tag with a live `Layer` and a test `L
 1. **Config.** Decode `company.yaml`. Invalid → log, try to alert, exit non-zero (the service manager restarts with backoff; the heartbeat stops, so the external switch fires).
 2. **Preflight.** Hook binary; sandbox dependencies (`bwrap` on Linux); model API key; alert channel (cached daily); release tag `r0` or later exists; `provider_cap_set: false` → warning.
 3. **Store.** Open `.holdco/state.db` (WAL), migrate.
-4. **Recover.** Leases held by a previous boot expire immediately: tickets go back to the queue with `attempts + 1` (or to `blocked` past `max_attempts`, §6). Sessions without an end record are marked `crashed`. Stale worktrees of closed tickets are pruned. An executor `action_log` row still `started` becomes an unknown outcome: its ticket is blocked and the Operator gets an urgent recovery item; it is never re-run (D85).
+4. **Recover.** Leases held by a previous boot expire immediately: tickets go back to the queue with `attempts + 1` (or to `blocked` past `max_attempts`, §6). Sessions without an end record are marked `crashed`. Stale worktrees of closed tickets are pruned. An executor `action_log` row still `started` becomes an unknown outcome: its ticket is blocked and the Operator gets an urgent recovery item; it is never re-run (D85). The row keeps the captured output tails and an optional `postcheck` result. The idempotency key is stable per (ticket, action); the run number is `HOLDCO_ATTEMPT`. On a clean stop the supervisor waits up to `runtime.executor_stop_grace` (default 30s) for running executors before killing their process groups and marking them unknown.
 5. **Interrupts.** L5 active → halted mode (heartbeat and inbox only). A pending L4 is executed (§10).
 6. **Jobs.** Fork all jobs in the program scope. Notify "supervisor started" with boot id, kernel version, release tag.
 
@@ -315,7 +315,7 @@ The supervisor pings `heartbeat_url_env` every tick; an external cron-monitoring
 1. **설정** 디코딩. 실패하면 기록·경보 시도·비정상 종료(서비스 관리자가 재시작, 하트비트가 끊겨 외부 스위치 발동)
 2. **사전 점검**: 훅 바이너리, 샌드박스 의존성, 모델 API 키, 알림 채널, 릴리스 태그 `r0` 이상 존재, 제공사 한도 미설정 경고
 3. **저장소** 열기와 마이그레이션
-4. **복구**: 이전 부팅의 임대를 즉시 만료시켜 `attempts + 1`로 재대기(`max_attempts` 초과 시 `blocked`), 종료 기록 없는 세션은 `crashed`, 닫힌 티켓의 워크트리 정리, 아직 `started`인 실행기 행동 로그 행은 결과 불명으로 티켓을 blocked하고 긴급 복구 항목을 올림(다시 실행 안 함, D85)
+4. **복구**: 이전 부팅의 임대를 즉시 만료시켜 `attempts + 1`로 재대기(`max_attempts` 초과 시 `blocked`), 종료 기록 없는 세션은 `crashed`, 닫힌 티켓의 워크트리 정리, 아직 `started`인 실행기 행동 로그 행은 결과 불명으로 티켓을 blocked하고 긴급 복구 항목을 올림(다시 실행 안 함, D85). 행에는 캡처한 출력 끝부분과 선택적 `postcheck` 결과가 남고, 멱등 키는 (티켓, 행동)마다 고정이며 실행 회차는 `HOLDCO_ATTEMPT`입니다. 정상 종료 시에는 `runtime.executor_stop_grace`(기본 30초)까지 실행 중인 실행기를 기다린 뒤에야 프로세스 그룹을 종료해 결과 불명으로 표시합니다
 5. **인터럽트**: L5면 정지 모드, 대기 중인 L4는 실행(§10)
 6. **작업 시작**과 알림(부팅 ID, 커널 버전, 릴리스 태그)
 

@@ -668,12 +668,12 @@ describe("crash-safe executors (D85): recovery and process groups", () => {
 })
 
 describe("canary noise floor (D86)", () => {
-  const canary = async (name: string) => {
+  const canary = async (name: string, release: Record<string, unknown> = {}) => {
     const c = company(name, (raw) => {
       ;(raw["projects"] as Array<Record<string, unknown>>).splice(1)
       ;(raw["budget"] as Record<string, unknown>)["shares"] = { engineering: 0.3, research: 0.05, gtm: 0.05, operations: 0.05, verification: 0.2, executive: 0.25, improvement: 0.1 }
       ;((raw["policy"] as Record<string, Record<string, unknown>>)["executive"] as Record<string, unknown>)["canary_rate"] = 0.01
-      ;(raw["policy"] as Record<string, Record<string, unknown>>)["release"] = { day: "sat", at: "12:00", min_gain: 0.02, max_regression: 0.01, watch: "1h", canary_traffic: 0.5 } // default floor
+      ;(raw["policy"] as Record<string, Record<string, unknown>>)["release"] = { day: "sat", at: "12:00", min_gain: 0.02, max_regression: 0.01, watch: "1h", canary_traffic: 0.5, ...release } // default floor
     }, "full")
     const roleFile = "org/roles/engineering-senior.md"
     git(c.dir, "checkout", "-q", "-b", "imp/IMP-X", "r0")
@@ -702,8 +702,8 @@ describe("canary noise floor (D86)", () => {
     return { c, clock, sup, store, sent, work }
   }
 
-  test("the defaults are a floor of 5 candidate sessions and 3 verdicts", () => {
-    expect(CANARY_SAMPLE_DEFAULTS).toEqual({ min_sessions: 5, min_verdicts: 3 })
+  test("the defaults are a floor of 3 candidate sessions and 2 verdicts", () => {
+    expect(CANARY_SAMPLE_DEFAULTS).toEqual({ min_sessions: 3, min_verdicts: 2 })
   })
 
   test("too little evidence at the end of the watch: not promoted; the watch is extended once, then the Operator decides (approve promotes)", async () => {
@@ -747,6 +747,68 @@ describe("canary noise floor (D86)", () => {
     await sup.stop()
   })
 
+  const askAndLetExpire = async (ctx: Awaited<ReturnType<typeof canary>>) => {
+    const { clock, sup, store } = ctx
+    clock.now = store.candidate()!.watch_until
+    await cycle(sup, clock, 1) // extended
+    clock.now = store.candidate()!.watch_until
+    await cycle(sup, clock, 1) // asked
+    expect(store.inboxOpen().some((i) => i.kind === "canary_sample")).toBe(true)
+    clock.now += 49 * 3_600_000 // unanswered past policy.inbox.timeout (48h)
+    await cycle(sup, clock, 1) // expired
+  }
+
+  test("on_sample_timeout: promote ships the candidate when the question goes unanswered", async () => {
+    const ctx = await canary("floor-timeout-promote", { on_sample_timeout: "promote" })
+    await askAndLetExpire(ctx)
+    await cycle(ctx.sup, ctx.clock, 1)
+    expect(ctx.store.candidate()).toBeUndefined()
+    expect(ctx.store.latestRelease()?.tag).toBe("r1")
+    await ctx.sup.stop()
+  })
+
+  test("on_sample_timeout: hold keeps the candidate and asks again; once the floor is met the rates decide", async () => {
+    const ctx = await canary("floor-timeout-hold", { on_sample_timeout: "hold" })
+    await askAndLetExpire(ctx)
+    await cycle(ctx.sup, ctx.clock, 1)
+    expect(ctx.store.candidate()?.tag).toBe("rc-1") // still a candidate
+    const again = ctx.store.inboxOpen().filter((i) => i.kind === "canary_sample")
+    expect(again.length).toBe(1) // asked again, once
+    expect(String(again[0]!.payload["note"])).toContain("asked again")
+    ctx.store.inboxDecide(again[0]!.id, "expired", "unanswered", ctx.clock.now)
+    ctx.work("rc-1", 3, "approve") // the evidence arrived meanwhile
+    ctx.work("r0", 2, "approve")
+    await cycle(ctx.sup, ctx.clock, 1)
+    expect(ctx.store.latestRelease()?.tag).toBe("r1") // the floor is met: decided on the rates, not asked again
+    await ctx.sup.stop()
+  })
+
+  test("the default on_sample_timeout is withdraw, and an explicit rejection withdraws under every setting", async () => {
+    const cfg = company("floor-timeout-default").config
+    expect(cfg.policy.release.on_sample_timeout).toBeUndefined()
+    const ctx = await canary("floor-reject-promote-policy", { on_sample_timeout: "promote" })
+    ctx.clock.now = ctx.store.candidate()!.watch_until
+    await cycle(ctx.sup, ctx.clock, 1)
+    ctx.clock.now = ctx.store.candidate()!.watch_until
+    await cycle(ctx.sup, ctx.clock, 1)
+    ctx.store.inboxDecide(ctx.store.inboxOpen().find((i) => i.kind === "canary_sample")!.id, "rejected", "no", ctx.clock.now)
+    await cycle(ctx.sup, ctx.clock, 1)
+    expect(ctx.store.candidate()).toBeUndefined()
+    expect(git(ctx.c.dir, "tag", "--list", "r*").split("\n")).not.toContain("r1")
+    await ctx.sup.stop()
+  })
+
+  test("canarySampleStats counts extensions and how the questions ended, and the weekly digest says so", async () => {
+    const ctx = await canary("floor-stats")
+    await askAndLetExpire(ctx)
+    await cycle(ctx.sup, ctx.clock, 1) // default withdraw
+    const stats = ctx.store.canarySampleStats(0)
+    expect(stats).toEqual({ extended: 1, asked: 1, approved: 0, rejected: 0, expired: 1, open: 0 })
+    const { renderDigest } = await import("../src/supervisor/digest.ts")
+    expect(renderDigest(ctx.c.config, ctx.store, ctx.clock.now, "r0", [])).toContain("Canary sample floor (30 days): watch extended 1×; asked the Operator 1× (approved 0, rejected 0, expired unanswered 1, open 0)")
+    await ctx.sup.stop()
+  })
+
   test("an unanswered question expires into a withdrawal; once asked, a sample that later reaches the floor does not override it", async () => {
     const { c, clock, sup, store, work } = await canary("floor-expire")
     clock.now = store.candidate()!.watch_until
@@ -769,7 +831,7 @@ describe("canary noise floor (D86)", () => {
 
   test("replay-gate sessions on the candidate's tag are not canary traffic and do not fill the floor", async () => {
     const { clock, sup, store, sent, work } = await canary("floor-replays")
-    work("rc-1", 3, "approve")
+    work("rc-1", 2, "approve")
     for (const n of [1, 2]) {
       const sid = `rp-ENG-${n}-x`
       store.startSession({ id: sid, ticket_id: `ENG-${n}`, parent_session: null, role: "verification-senior", kind: "verification", department: "improvement", engine: "codex", model: "m", worktree: null, started_at: clock.now, boot_id: "b", release: "rc-1" })
@@ -778,7 +840,7 @@ describe("canary noise floor (D86)", () => {
     clock.now = store.candidate()!.watch_until
     await cycle(sup, clock, 1)
     expect(store.candidate()?.tag).toBe("rc-1")
-    expect(sent.some((s) => s.includes("watch extended once") && s.includes("3 candidate session(s)"))).toBe(true)
+    expect(sent.some((s) => s.includes("watch extended once") && s.includes("2 candidate session(s)"))).toBe(true)
     await sup.stop()
   })
 
@@ -799,7 +861,7 @@ describe("canary noise floor (D86)", () => {
 
   test("a sample at the floor is judged on the rates at the first watch end: no extension, no question", async () => {
     const { clock, sup, store, sent, work } = await canary("floor-met")
-    work("rc-1", 5, "approve")
+    work("rc-1", 3, "approve")
     work("r0", 3, "approve")
     clock.now = store.candidate()!.watch_until
     await cycle(sup, clock, 1)

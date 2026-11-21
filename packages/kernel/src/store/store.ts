@@ -767,6 +767,16 @@ export class Store {
     if (probe && typeof probe === "object") kept["postcheck"] = { ...(probe as Record<string, unknown>), stdout: cap((probe as Record<string, unknown>)["stdout"], 2000), stderr: cap((probe as Record<string, unknown>)["stderr"], 2000) }
     return this.db.run("UPDATE action_log SET status = 'unknown', finished_at = ?, outputs = ? WHERE id = ? AND status = 'started'", [at, JSON.stringify({ ...kept, unknown: reason }), id]).changes === 1
   }
+  /**
+   * D86: how often the canary sample floor bit since `since`, so the defaults can be tuned: how many candidates had their
+   * watch extended, and how the "sample too small" questions ended.
+   */
+  canarySampleStats(since: number): { extended: number; asked: number; approved: number; rejected: number; expired: number; open: number } {
+    const rows = this.db.query<{ status: string; n: number }, [number]>("SELECT status, COUNT(*) AS n FROM inbox WHERE kind = 'canary_sample' AND created_at >= ? GROUP BY status").all(since)
+    const by = (st: string) => rows.find((r) => r.status === st)?.n ?? 0
+    const extended = this.db.query<{ n: number }, [number]>("SELECT COUNT(*) AS n FROM releases WHERE at >= ? AND EXISTS (SELECT 1 FROM meta WHERE key = 'canary_extended:' || releases.tag)").get(since)?.n ?? 0
+    return { extended, asked: rows.reduce((a, r) => a + r.n, 0), approved: by("approved"), rejected: by("rejected"), expired: by("expired"), open: by("open") }
+  }
   /** The recorded outputs of an action_log row (for the recovery item and the dashboard). */
   actionOutputs(id: number): Record<string, unknown> {
     const r = this.db.query<{ outputs: string }, [number]>("SELECT outputs FROM action_log WHERE id = ?").get(id)

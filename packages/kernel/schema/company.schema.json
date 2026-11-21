@@ -930,6 +930,14 @@
               "type": "integer",
               "minimum": 1,
               "maximum": 1000
+            },
+            "on_sample_timeout": {
+              "type": "string",
+              "enum": [
+                "withdraw",
+                "promote",
+                "hold"
+              ]
             }
           },
           "required": [
