@@ -19,6 +19,7 @@ import type { Store, Ticket } from "../store/store.ts"
 import { effectiveTier, UnknownAction } from "../policy/tiers.ts"
 import { projectProgress, setProjectStatus } from "./roadmap.ts"
 import { RESERVED_T3_NAMESPACES } from "../config/company.ts"
+import { OUTCOME_UNKNOWN } from "./executors.ts"
 
 export interface SessionBinding {
   readonly sessionId: string
@@ -248,6 +249,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
     run: (a, b, host) => {
       const t = host.store.ticket(String(a["id"]))
       if (t?.note?.startsWith("postcheck failed after action applied:")) throw new ToolError("postcheck recovery requires the Operator; do not automatically retry an applied action")
+      if (t?.note?.startsWith(OUTCOME_UNKNOWN)) throw new ToolError("an action whose outcome is unknown is decided by the Operator; it is never re-run automatically (D85)")
       host.store.transition(String(a["id"]), a["decision"] as "triaged" | "declined", b.role, String(a["note"]), host.now())
       host.onTicketChanged?.(String(a["id"]))
       return view(host.store.ticket(String(a["id"])) as Ticket)

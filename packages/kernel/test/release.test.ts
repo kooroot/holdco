@@ -9,9 +9,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os"
 import * as NodePath from "node:path"
 import { Schema } from "effect"
-import { CompanyConfig } from "../src/config/company.ts"
+import { CANARY_SAMPLE_DEFAULTS, CompanyConfig } from "../src/config/company.ts"
 import { renderCompanyYaml, scaffold } from "../src/scaffold/scaffold.ts"
-import { Store } from "../src/store/store.ts"
+import { HeldForRecovery, Store } from "../src/store/store.ts"
 import { Supervisor } from "../src/supervisor/supervisor.ts"
 import { executorEnv, mergeViaGithub, renderArgv, runExecutor, undoAction } from "../src/supervisor/executors.ts"
 import { FakeEngine } from "./fake-engine.ts"
@@ -270,7 +270,7 @@ describe("candidate releases, canary and promotion (D53)", () => {
       ;(raw["projects"] as Array<Record<string, unknown>>).splice(1)
       ;(raw["budget"] as Record<string, unknown>)["shares"] = { engineering: 0.3, research: 0.05, gtm: 0.05, operations: 0.05, verification: 0.2, executive: 0.25, improvement: 0.1 }
       ;((raw["policy"] as Record<string, Record<string, unknown>>)["executive"] as Record<string, unknown>)["canary_rate"] = 0.01
-      ;(raw["policy"] as Record<string, Record<string, unknown>>)["release"] = { day: "sat", at: "12:00", min_gain: 0.02, max_regression: 0.01, watch: "1h", canary_traffic: 1 }
+      ;(raw["policy"] as Record<string, Record<string, unknown>>)["release"] = { day: "sat", at: "12:00", min_gain: 0.02, max_regression: 0.01, watch: "1h", canary_traffic: 1, min_sessions: 1, min_verdicts: 1 }
     }, "full")
     const roleFile = "org/roles/engineering-senior.md"
     const original = readFileSync(NodePath.join(c.dir, roleFile), "utf8")
@@ -316,7 +316,7 @@ describe("candidate releases, canary and promotion (D53)", () => {
       ;(raw["projects"] as Array<Record<string, unknown>>).splice(1)
       ;(raw["budget"] as Record<string, unknown>)["shares"] = { engineering: 0.3, research: 0.05, gtm: 0.05, operations: 0.05, verification: 0.2, executive: 0.25, improvement: 0.1 }
       ;((raw["policy"] as Record<string, Record<string, unknown>>)["executive"] as Record<string, unknown>)["canary_rate"] = 0.01
-      ;(raw["policy"] as Record<string, Record<string, unknown>>)["release"] = { day: "sat", at: "12:00", min_gain: 0.02, max_regression: 0.01, watch: "3d", canary_traffic: 0.5 }
+      ;(raw["policy"] as Record<string, Record<string, unknown>>)["release"] = { day: "sat", at: "12:00", min_gain: 0.02, max_regression: 0.01, watch: "3d", canary_traffic: 0.5, min_sessions: 1, min_verdicts: 1 }
     }, "full")
     const roleFile = "org/roles/engineering-senior.md"
     const original = readFileSync(NodePath.join(c.dir, roleFile), "utf8")
@@ -363,7 +363,7 @@ describe("replay gate (D54)", () => {
         ;(raw["projects"] as Array<Record<string, unknown>>).splice(1)
         ;(raw["budget"] as Record<string, unknown>)["shares"] = { engineering: 0.3, research: 0.05, gtm: 0.05, operations: 0.05, verification: 0.2, executive: 0.25, improvement: 0.1 }
         ;((raw["policy"] as Record<string, Record<string, unknown>>)["executive"] as Record<string, unknown>)["canary_rate"] = 0.01
-        ;(raw["policy"] as Record<string, Record<string, unknown>>)["release"] = { day: "sat", at: "12:00", min_gain: 0.02, max_regression: 0.01, watch: "1h", canary_traffic: 1 }
+        ;(raw["policy"] as Record<string, Record<string, unknown>>)["release"] = { day: "sat", at: "12:00", min_gain: 0.02, max_regression: 0.01, watch: "1h", canary_traffic: 1, min_sessions: 1, min_verdicts: 1 }
       }, "full")
       git(c.dir, "checkout", "-q", "-b", "imp/IMP-X", "r0")
       const rubric = NodePath.join(c.dir, "evals", "rubrics", "engineering.md")
@@ -419,7 +419,17 @@ describe("replay gate (D54)", () => {
       } else {
         expect(store.candidate()?.tag).toBe("rc-1")
         expect(sent.some((s) => s.includes("replay gate passed") && s.includes("0.00 → 1.00"))).toBe(true)
+        // no production session ran on the candidate during the watch: below the canary floor (D86), so the watch is
+        // extended once, then the Operator decides; approving promotes it
         clock.now += 3_600_000
+        await cycle(sup, clock, 1)
+        expect(store.candidate()?.tag).toBe("rc-1")
+        expect(sent.some((s) => s.includes("watch extended once"))).toBe(true)
+        clock.now += 3_600_000
+        await cycle(sup, clock, 1)
+        const ask = store.inboxOpen().find((i) => i.kind === "canary_sample")!
+        expect(ask.payload["tag"]).toBe("rc-1")
+        store.inboxDecide(ask.id, "approved", "ok", clock.now)
         await cycle(sup, clock, 1)
         expect(store.latestRelease()?.tag).toBe("r1")
       }
@@ -493,3 +503,328 @@ describe("evidence-backed execution", () => {
     expect(existsSync(NodePath.join(dir, "should-not-exist"))).toBe(false)
   })
 })
+
+describe("crash-safe executors (D85)", () => {
+  const deployCompany = (name: string, script: string, timeout = "1m") => {
+    const c = company(name, (raw) => {
+      ;(raw["actions"] as Array<Record<string, unknown>>).push({ id: "deploy.staging", department: "engineering", tier: "T1", evaluator: "engineering.md#app", gates: ["verification-approved", "rollback-tested"], graduation: "auto" })
+      raw["executors"] = { "deploy.staging": { command: ["sh", "./deploy.sh"], cwd: "project", undo: ["sh", "./undo.sh"], timeout } }
+    })
+    writeFileSync(NodePath.join(c.app, "deploy.sh"), script)
+    git(c.app, "add", "-A")
+    git(c.app, "commit", "-qm", "deploy script")
+    return c
+  }
+  const deployEngine = () => new FakeEngine({ ceo: async () => ({}), senior: seniorScript("deploy.staging"), verification: async ({ spec, call }) => {
+    const verdict = { ticket: spec.ticketId, rubric: "engineering.md#app", verdict: "approve", scores: { correctness: 4 }, overall: 4, confidence: "high", failures: [], gates: [{ gate: "rollback-tested", passed: true, evidence: "fixture" }], summary: "verified" }
+    await call("verdict_submit", { verdict })
+    return { report: verdict }
+  } })
+
+  test("a supervisor that dies while the command runs: the next boot never re-runs it; the outcome is unknown and goes to the urgent inbox", async () => {
+    const count = NodePath.join(base, "crash-runs.txt")
+    const c = deployCompany("crash", `#!/bin/sh\necho "run $HOLDCO_IDEMPOTENCY_KEY" >> ${count}\nsleep 2\necho '{"previous":"v1"}'\n`)
+    const clock = { now: Date.UTC(2026, 9, 26, 9) }
+    const { sup, store } = makeSupervisor(c, deployEngine(), clock)
+    await sup.boot()
+    const id = store.createTicket({ department: "engineering", title: "Deploy", goal: "g", why: "w", done_criteria: ["d"], opened_by: "operator", project: "app", state: "triaged", action: "deploy.staging", now: clock.now }).id
+    // run until the command has started, without draining: it is still in flight when supervisor 1 "dies"
+    for (let i = 0; i < 40 && !existsSync(count); i++) {
+      clock.now += 60_000
+      await sup.tick()
+      await Bun.sleep(300)
+    }
+    expect(existsSync(count)).toBe(true)
+    // the write-ahead record exists before the command could have had any effect
+    const started = store.actionsSince(0).filter((a) => a.action === "deploy.staging")
+    expect(started.length).toBe(1)
+    expect(store.actionLog(started[0]!.id)).toMatchObject({ status: "started", idem_key: `${id}:deploy.staging:1` })
+
+    // supervisor 2 boots on the same store; supervisor 1's in-memory state is gone
+    const sent2: Array<string> = []
+    const sup2 = new Supervisor({ companyRoot: c.dir, config: c.config, engines: new Map([["claude", deployEngine()]]), store, now: () => clock.now, notifier: { send: async (s, t) => void sent2.push(`${s}: ${t}`), heartbeat: async () => {} }, env: { PATH: process.env["PATH"], HOME: base }, log: () => {} })
+    await sup2.boot()
+    await cycle(sup2, clock, 3)
+    await sup.drain() // supervisor 1's orphaned command finishes late; its result must not override the boot's decision
+
+    expect(readFileSync(count, "utf8").trim().split("\n")).toEqual([`run ${id}:deploy.staging:1`]) // ran once, with its key
+    const row = store.actionLog(started[0]!.id)!
+    expect(row.status).toBe("unknown")
+    expect(store.actionsSince(0).filter((a) => a.action === "deploy.staging").length).toBe(1)
+    const t = store.ticket(id)!
+    expect(t.state).toBe("blocked")
+    expect(t.note).toStartWith("outcome unknown:")
+    const item = store.inboxOpen().find((i) => i.kind === "recovery" && i.ticket_id === id)!
+    expect(item.urgency).toBe("urgent")
+    expect(item.payload["action_log"]).toBe(started[0]!.id)
+    expect(store.inboxOpen().some((i) => i.kind === "blocked" && i.ticket_id === id)).toBe(false) // one decision, not two
+    expect(sent2.some((s) => s.startsWith("critical:") && s.includes("will not be re-run"))).toBe(true)
+    expect(sent2.some((s) => s.includes("1 action(s) with an unknown outcome"))).toBe(true)
+
+    // the ticket moves only through that decision: an unblock or a triage by anyone is refused while it is open
+    expect(() => store.transition(id, "triaged", "operator", "unblocked by hand", clock.now)).toThrow(HeldForRecovery)
+    expect(() => store.transition(id, "declined", "ceo", "drop it", clock.now)).toThrow(HeldForRecovery)
+    await cycle(sup2, clock, 3)
+    expect(readFileSync(count, "utf8").trim().split("\n").length).toBe(1)
+    expect(store.ticket(id)?.state).toBe("blocked")
+    expect(store.decideUnknownOutcome(item.id, "approved", "checked: staging has it", clock.now)).toBe("done")
+    expect(store.ticket(id)?.state).toBe("done")
+    expect(store.actionsSince(0).filter((a) => a.action === "deploy.staging").length).toBe(1)
+    await sup2.stop()
+    await sup.stop()
+  })
+
+  test("a command killed by its timeout is an unknown outcome, not a failure to retry", async () => {
+    const count = NodePath.join(base, "timeout-runs.txt")
+    const c = deployCompany("timeout", `#!/bin/sh\necho run >> ${count}\nexec sleep 30\n`, "1s")
+    const clock = { now: Date.UTC(2026, 9, 26, 9) }
+    const { sup, store } = makeSupervisor(c, deployEngine(), clock)
+    await sup.boot()
+    const id = store.createTicket({ department: "engineering", title: "Deploy", goal: "g", why: "w", done_criteria: ["d"], opened_by: "operator", project: "app", state: "triaged", action: "deploy.staging", now: clock.now }).id
+    await cycle(sup, clock, 8)
+    expect(readFileSync(count, "utf8").trim().split("\n").length).toBe(1)
+    const rows = store.actionsSince(0).filter((a) => a.action === "deploy.staging")
+    expect(rows.length).toBe(1)
+    expect(store.actionLog(rows[0]!.id)?.status).toBe("unknown")
+    expect(store.ticket(id)?.state).toBe("blocked")
+    expect(store.inboxOpen().find((i) => i.kind === "recovery" && i.ticket_id === id)?.urgency).toBe("urgent")
+    await sup.stop()
+  })
+
+  test("a run is claimed once: a second claim is refused while it runs or after an unknown outcome; keys are unique; a row settles once", () => {
+    const store = new Store(":memory:")
+    const begin = (ticket: string, at: number) => store.beginAction({ at, actor: "kernel", ticket_id: ticket, action: "deploy", effective_tier: "T1", forced_by: [], inputs: {} })
+    const a = begin("ENG-1", 1)
+    if (!("id" in a)) throw new Error("first claim refused")
+    expect(a.idem_key).toBe("ENG-1:deploy:1")
+    expect(begin("ENG-1", 2)).toEqual({ held: { id: a.id, status: "started" } }) // still running: no second launch
+    expect(store.ticketRunning("ENG-1")).toBe(true)
+    expect(store.finishAction(a.id, { at: 3, outputs: { ok: true }, undo: {} })).toBe(true)
+    expect(store.finishAction(a.id, { at: 4, outputs: { ok: false }, undo: {} })).toBe(false) // settled once
+    expect(store.ticketRunning("ENG-1")).toBe(false)
+    const b = begin("ENG-1", 5) // a known result frees the action for a deliberate retry
+    if (!("id" in b)) throw new Error("second claim refused")
+    expect(b.idem_key).toBe("ENG-1:deploy:2")
+    expect(store.markActionUnknown(b.id, 6, "lost")).toBe(true)
+    expect(store.finishAction(b.id, { at: 7, outputs: {}, undo: {} })).toBe(false) // unknown stays unknown
+    expect(begin("ENG-1", 8)).toEqual({ held: { id: b.id, status: "unknown" } }) // never again on this ticket
+    expect("id" in begin("ENG-2", 9)).toBe(true) // a new ticket may run it
+    expect(store.startedActions().map((r) => r.ticket_id)).toEqual(["ENG-2"])
+    expect(() => store.db.run("UPDATE action_log SET idem_key = ? WHERE id = ?", [a.idem_key, b.id])).toThrow()
+    // rows written before D85 read as done and carry no key
+    const legacy = store.logAction({ at: 10, actor: "kernel", ticket_id: "ENG-3", action: "x", effective_tier: "T1", forced_by: [], inputs: {}, outputs: {}, undo: {} })
+    expect(store.actionLog(legacy)).toMatchObject({ status: "done", idem_key: null })
+  })
+})
+
+describe("crash-safe executors (D85): recovery and process groups", () => {
+  test("the CLI settles an unknown-outcome recovery item: reject declines the ticket and runs nothing", async () => {
+    const c = company("cli-recovery")
+    let store = Store.open(c.dir)
+    const now = Date.UTC(2026, 9, 26, 9)
+    const id = store.createTicket({ department: "engineering", title: "Deploy", goal: "g", why: "w", done_criteria: ["d"], opened_by: "operator", project: "app", state: "triaged", action: "deploy.staging", now }).id
+    const run = store.beginAction({ at: now, actor: "kernel", ticket_id: id, action: "deploy.staging", effective_tier: "T1", forced_by: [], inputs: {} })
+    if (!("id" in run)) throw new Error("claim refused")
+    store.markActionUnknown(run.id, now, "lost")
+    const item = store.inboxAdd("recovery", id, { title: `Outcome unknown: deploy.staging for ${id}`, action: "deploy.staging", action_log: run.id }, now, "urgent")
+    store.close()
+    const { runOperator, OperatorError } = await import("../src/cli/operator.ts")
+    const cli = (verb: string) => runOperator("inbox", { positional: ["inbox", verb, String(item)], flag: () => undefined, has: () => false }, c.dir)
+    const log = console.log
+    console.log = () => {}
+    try {
+      // the ticket is not blocked (say it was put back in the queue by hand): refused, and the item stays open
+      await expect(cli("reject")).rejects.toBeInstanceOf(OperatorError)
+      store = Store.open(c.dir)
+      expect(store.inboxItem(item)?.status).toBe("open")
+      store.transition(id, "blocked", "kernel", "outcome unknown: deploy.staging: lost", now)
+      store.close()
+      await cli("reject")
+    } finally {
+      console.log = log
+    }
+    store = Store.open(c.dir)
+    expect(store.inboxItem(item)?.status).toBe("rejected")
+    expect(store.ticket(id)?.state).toBe("declined")
+    expect(store.ticket(id)?.note).toContain("nothing is re-run")
+    store.close()
+  })
+
+  test("a timeout kills the command's whole process group and settles even if a child kept the pipes", async () => {
+    const dir = NodePath.join(base, "pgroup")
+    mkdirSync(dir)
+    const started = Date.now()
+    const r = await runExecutor({ executor: { command: ["sh", "-c", "sleep 30 & sleep 30 & wait"], timeout: "1s" }, action: "x", cwd: dir, placeholders: { ticket: "T" }, env: { PATH: process.env["PATH"] } })
+    expect(Date.now() - started).toBeLessThan(5_000)
+    expect(r.ok).toBe(false)
+    expect(r.unknown).toBe(true)
+    // the command itself exits 0 at once but leaves work running past the deadline: still unknown, never success
+    const early = await runExecutor({ executor: { command: ["sh", "-c", "sleep 3 & exit 0"], timeout: "1s" }, action: "x", cwd: dir, placeholders: { ticket: "T" }, env: { PATH: process.env["PATH"] } })
+    expect(early.ok).toBe(false)
+    expect(early.unknown).toBe(true)
+  })
+})
+
+describe("canary noise floor (D86)", () => {
+  const canary = async (name: string) => {
+    const c = company(name, (raw) => {
+      ;(raw["projects"] as Array<Record<string, unknown>>).splice(1)
+      ;(raw["budget"] as Record<string, unknown>)["shares"] = { engineering: 0.3, research: 0.05, gtm: 0.05, operations: 0.05, verification: 0.2, executive: 0.25, improvement: 0.1 }
+      ;((raw["policy"] as Record<string, Record<string, unknown>>)["executive"] as Record<string, unknown>)["canary_rate"] = 0.01
+      ;(raw["policy"] as Record<string, Record<string, unknown>>)["release"] = { day: "sat", at: "12:00", min_gain: 0.02, max_regression: 0.01, watch: "1h", canary_traffic: 0.5 } // default floor
+    }, "full")
+    const roleFile = "org/roles/engineering-senior.md"
+    git(c.dir, "checkout", "-q", "-b", "imp/IMP-X", "r0")
+    writeFileSync(NodePath.join(c.dir, roleFile), `${readFileSync(NodePath.join(c.dir, roleFile), "utf8")}\nA CHANGE\n`)
+    git(c.dir, "add", "-A")
+    git(c.dir, "commit", "-qm", "role change")
+    git(c.dir, "checkout", "-q", "main")
+    const clock = { now: Date.UTC(2026, 9, 26, 9) }
+    const { sup, store, sent } = makeSupervisor(c, new FakeEngine({ ceo: async () => ({}) }), clock, new FakeEngine({}, 0.1, "codex"))
+    await sup.boot()
+    const imp = store.createTicket({ department: "improvement", title: "Role change", goal: "g", why: "w", done_criteria: ["d"], opened_by: "operator", project: null, state: "verified", action: "improvement.merge", now: clock.now }).id
+    store.db.run("UPDATE tickets SET branch = ? WHERE id = ?", ["imp/IMP-X", imp])
+    store.addVerdict({ ticket_id: imp, session_id: "v", at: clock.now, verdict: "approve", overall: 4, confidence: "high", payload: {} })
+    await cycle(sup, clock, 1)
+    expect(store.candidate()?.tag).toBe("rc-1")
+    /** `n` finished production sessions on `release`, each with a verdict. */
+    const work = (release: string, n: number, verdict: "approve" | "reject") => {
+      for (let i = 0; i < n; i++) {
+        const t = store.createTicket({ department: "engineering", title: `w ${release} ${i}`, goal: "g", why: "w", done_criteria: ["d"], opened_by: "operator", project: "app", state: "done", action: "code.merge.app", now: clock.now })
+        const sid = `s-${release}-${t.id}`
+        store.startSession({ id: sid, ticket_id: t.id, parent_session: null, role: "engineering-senior", kind: "department", department: "engineering", engine: "claude", model: "m", worktree: null, started_at: clock.now, boot_id: "b", release })
+        store.endSession(sid, { ended_at: clock.now + 1, status: "ok", turns: 1, cost_usd: 0, cost_source: "sdk", report: null })
+        store.addVerdict({ ticket_id: t.id, session_id: `v-${sid}`, at: clock.now + 1, verdict, overall: verdict === "approve" ? 4 : 1, confidence: "high", payload: {} })
+      }
+    }
+    return { c, clock, sup, store, sent, work }
+  }
+
+  test("the defaults are a floor of 5 candidate sessions and 3 verdicts", () => {
+    expect(CANARY_SAMPLE_DEFAULTS).toEqual({ min_sessions: 5, min_verdicts: 3 })
+  })
+
+  test("too little evidence at the end of the watch: not promoted; the watch is extended once, then the Operator decides (approve promotes)", async () => {
+    const { clock, sup, store, sent, work } = await canary("floor-approve")
+    work("rc-1", 2, "approve")
+    const rc = store.candidate()!
+    clock.now = rc.watch_until
+    await cycle(sup, clock, 1)
+    expect(store.candidate()?.tag).toBe("rc-1") // not promoted on two sessions
+    expect(store.candidate()!.watch_until).toBeGreaterThan(rc.watch_until)
+    expect(sent.some((s) => s.includes("watch extended once"))).toBe(true)
+    expect(store.inboxOpen().some((i) => i.kind === "canary_sample")).toBe(false)
+    clock.now = store.candidate()!.watch_until
+    await cycle(sup, clock, 1)
+    const ask = store.inboxOpen().filter((i) => i.kind === "canary_sample")
+    expect(ask.length).toBe(1)
+    expect(ask[0]!.payload["tag"]).toBe("rc-1")
+    expect(store.candidate()?.tag).toBe("rc-1") // still not promoted, and not extended again
+    await cycle(sup, clock, 2)
+    expect(store.inboxOpen().filter((i) => i.kind === "canary_sample").length).toBe(1) // one question, not one per tick
+    store.inboxDecide(ask[0]!.id, "approved", "looks fine", clock.now)
+    await cycle(sup, clock, 1)
+    expect(store.candidate()).toBeUndefined()
+    expect(store.latestRelease()?.tag).toBe("r1")
+    await sup.stop()
+  })
+
+  test("rejected (or expired) below the floor: the candidate is withdrawn, never promoted", async () => {
+    const { c, clock, sup, store, work } = await canary("floor-reject")
+    work("rc-1", 1, "approve")
+    clock.now = store.candidate()!.watch_until
+    await cycle(sup, clock, 1)
+    clock.now = store.candidate()!.watch_until
+    await cycle(sup, clock, 1)
+    const ask = store.inboxOpen().find((i) => i.kind === "canary_sample")!
+    store.inboxDecide(ask.id, "rejected", "not enough", clock.now)
+    await cycle(sup, clock, 1)
+    expect(store.candidate()).toBeUndefined()
+    expect(store.db.query<{ status: string }, []>("SELECT status FROM releases WHERE tag = 'rc-1'").get()?.status).toBe("withdrawn")
+    expect(git(c.dir, "tag", "--list", "r*").split("\n")).not.toContain("r1")
+    await sup.stop()
+  })
+
+  test("an unanswered question expires into a withdrawal; once asked, a sample that later reaches the floor does not override it", async () => {
+    const { c, clock, sup, store, work } = await canary("floor-expire")
+    clock.now = store.candidate()!.watch_until
+    await cycle(sup, clock, 1)
+    clock.now = store.candidate()!.watch_until
+    await cycle(sup, clock, 1)
+    expect(store.inboxOpen().some((i) => i.kind === "canary_sample")).toBe(true)
+    work("rc-1", 5, "approve") // the evidence arrives after the question: the Operator's answer still governs
+    await cycle(sup, clock, 1)
+    expect(store.candidate()?.tag).toBe("rc-1")
+    clock.now += 49 * 3_600_000 // past policy.inbox.timeout (48h)
+    await cycle(sup, clock, 1)
+    expect(store.inboxLatestFor("canary_sample", "rc-1")?.status).toBe("expired")
+    await cycle(sup, clock, 1)
+    expect(store.candidate()).toBeUndefined()
+    expect(store.db.query<{ status: string }, []>("SELECT status FROM releases WHERE tag = 'rc-1'").get()?.status).toBe("withdrawn")
+    expect(git(c.dir, "tag", "--list", "r*").split("\n")).not.toContain("r1")
+    await sup.stop()
+  })
+
+  test("replay-gate sessions on the candidate's tag are not canary traffic and do not fill the floor", async () => {
+    const { clock, sup, store, sent, work } = await canary("floor-replays")
+    work("rc-1", 3, "approve")
+    for (const n of [1, 2]) {
+      const sid = `rp-ENG-${n}-x`
+      store.startSession({ id: sid, ticket_id: `ENG-${n}`, parent_session: null, role: "verification-senior", kind: "verification", department: "improvement", engine: "codex", model: "m", worktree: null, started_at: clock.now, boot_id: "b", release: "rc-1" })
+      store.endSession(sid, { ended_at: clock.now + 1, status: "ok", turns: 1, cost_usd: 0, cost_source: "sdk", report: null })
+    }
+    clock.now = store.candidate()!.watch_until
+    await cycle(sup, clock, 1)
+    expect(store.candidate()?.tag).toBe("rc-1")
+    expect(sent.some((s) => s.includes("watch extended once") && s.includes("3 candidate session(s)"))).toBe(true)
+    await sup.stop()
+  })
+
+  test("a candidate settled another way (a demotion) closes its open question", async () => {
+    const { clock, sup, store } = await canary("floor-superseded")
+    clock.now = store.candidate()!.watch_until
+    await cycle(sup, clock, 1)
+    clock.now = store.candidate()!.watch_until
+    await cycle(sup, clock, 1)
+    const ask = store.inboxOpen().find((i) => i.kind === "canary_sample")!
+    store.demote("code.merge.app", "agreement fell", clock.now)
+    await cycle(sup, clock, 1)
+    expect(store.candidate()).toBeUndefined()
+    expect(store.inboxItem(ask.id)?.status).toBe("expired")
+    expect(store.inboxOpen().some((i) => i.kind === "canary_sample")).toBe(false)
+    await sup.stop()
+  })
+
+  test("a sample at the floor is judged on the rates at the first watch end: no extension, no question", async () => {
+    const { clock, sup, store, sent, work } = await canary("floor-met")
+    work("rc-1", 5, "approve")
+    work("r0", 3, "approve")
+    clock.now = store.candidate()!.watch_until
+    await cycle(sup, clock, 1)
+    expect(store.latestRelease()?.tag).toBe("r1")
+    expect(sent.some((s) => s.includes("watch extended once"))).toBe(false)
+    expect(store.inboxOpen().some((i) => i.kind === "canary_sample")).toBe(false)
+    await sup.stop()
+  })
+
+  test("a sample at the floor that regresses is withdrawn", async () => {
+    const { clock, sup, store, work } = await canary("floor-regress")
+    work("rc-1", 5, "reject")
+    work("r0", 3, "approve")
+    clock.now = store.candidate()!.watch_until
+    await cycle(sup, clock, 1)
+    expect(store.candidate()).toBeUndefined()
+    expect(store.db.query<{ status: string }, []>("SELECT status FROM releases WHERE tag = 'rc-1'").get()?.status).toBe("withdrawn")
+    await sup.stop()
+  })
+
+  test("the floor is configurable per company", async () => {
+    const raw = Bun.YAML.parse(readFileSync(NodePath.join(company("floor-config").dir, "company.yaml"), "utf8")) as Record<string, unknown>
+    ;(raw["policy"] as Record<string, Record<string, unknown>>)["release"] = { day: "sat", at: "12:00", min_gain: 0.02, max_regression: 0.01, watch: "3d", canary_traffic: 0.2, min_sessions: 20, min_verdicts: 10 }
+    const config = Schema.decodeUnknownSync(CompanyConfig)(raw)
+    expect(config.policy.release).toMatchObject({ min_sessions: 20, min_verdicts: 10 })
+    ;(raw["policy"] as Record<string, Record<string, unknown>>)["release"] = { day: "sat", at: "12:00", min_gain: 0.02, max_regression: 0.01, watch: "3d", canary_traffic: 0.2, min_sessions: 0 }
+    expect(() => Schema.decodeUnknownSync(CompanyConfig)(raw)).toThrow()
+  })
+})
+

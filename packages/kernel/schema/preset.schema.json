@@ -916,6 +916,16 @@
               "type": "number",
               "minimum": 0,
               "maximum": 1
+            },
+            "min_sessions": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            },
+            "min_verdicts": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
             }
           },
           "required": [

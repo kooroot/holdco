@@ -13,7 +13,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import * as NodePath from "node:path"
 import { spawnSync } from "node:child_process"
 import { Exit, Schema } from "effect"
-import { assignmentFor, authMode, budgetMode, CompanyConfig, durationMs, type EngineId, type RoleKind } from "../config/company.ts"
+import { assignmentFor, authMode, budgetMode, CANARY_SAMPLE_DEFAULTS, CompanyConfig, durationMs, type EngineId, type RoleKind } from "../config/company.ts"
 import { HOST_DENY_READ, UNREADABLE } from "../policy/paths.ts"
 import { effectiveTier, tierForChange, UnknownAction } from "../policy/tiers.ts"
 import { demotionDue, graduationCheck } from "../policy/graduation.ts"
@@ -38,7 +38,7 @@ import { CeoCycleReport, Proposal } from "../protocol/approval.ts"
 import { Verdict } from "../protocol/verdict.ts"
 import { END_STATES, Store, type Ticket, TRANSITIONS } from "../store/store.ts"
 import { clear as clearInterrupt, raise as raiseInterrupt, readControl } from "./control.ts"
-import { type ExecResult, executorEnv, executorKind, mergeBranch, mergeViaGithub, runAsync, runExecutor } from "./executors.ts"
+import { type ExecResult, executorEnv, executorKind, mergeBranch, mergeViaGithub, OUTCOME_UNKNOWN, runAsync, runExecutor } from "./executors.ts"
 import { consoleNotifier, type Notifier } from "./notify.ts"
 import { Org, projectInstructions } from "./org.ts"
 import { renderDigest } from "./digest.ts"
@@ -214,10 +214,43 @@ export class Supervisor {
     const crashed = this.store.markCrashed(this.bootId, now)
     const reaped = this.store.db.run("UPDATE tickets SET lease_expires = ? WHERE lease_holder IS NOT NULL", [now - 1]).changes
     this.store.reap(this.config.runtime.max_attempts, now)
+    const unknown = this.recoverUnknownActions(now)
     this.store.chatAbandon(this.say("The supervisor restarted before this was answered; ask again.", "답하기 전에 슈퍼바이저가 재시작됐습니다. 다시 물어봐 주세요."))
     this.store.setMeta("boot_id", this.bootId)
     this.store.setMeta("boot_at", String(now))
-    await this.notifier.send("info", this.say(`supervisor started: release ${this.org.tag}, ${crashed} crashed session(s) closed, ${reaped} lease(s) recovered, tools on :${this.tools.port}`, `슈퍼바이저 시작: 릴리스 ${this.org.tag}, 크래시된 세션 ${crashed}개 정리, 리스 ${reaped}개 회수, 도구 포트 :${this.tools.port}`))
+    await this.notifier.send("info", this.say(`supervisor started: release ${this.org.tag}, ${crashed} crashed session(s) closed, ${reaped} lease(s) recovered${unknown ? `, ${unknown} action(s) with an unknown outcome sent to the inbox` : ""}, tools on :${this.tools.port}`, `슈퍼바이저 시작: 릴리스 ${this.org.tag}, 크래시된 세션 ${crashed}개 정리, 리스 ${reaped}개 회수${unknown ? `, 결과를 모르는 행동 ${unknown}건 인박스로` : ""}, 도구 포트 :${this.tools.port}`))
+  }
+
+  /**
+   * D85: an action_log row still `started` at boot belongs to an external command the previous process launched and
+   * never heard back from. It may have taken effect, partly or fully. The kernel never runs it again by itself: the
+   * row becomes `unknown`, the ticket is blocked, and the Operator gets an urgent recovery item.
+   */
+  private recoverUnknownActions(now: number): number {
+    const rows = this.store.startedActions()
+    for (const r of rows) this.raiseUnknownOutcome(r.id, r.ticket_id, r.action, "the supervisor stopped while the command was running", now)
+    return rows.length
+  }
+
+  private raiseUnknownOutcome(logId: number, ticketId: string | null, action: string, reason: string, now: number) {
+    const note = `${OUTCOME_UNKNOWN} ${action} (action-log ${logId}): ${reason}. It was not re-run; check whether it took effect before deciding`
+    // the row, the ticket and the inbox item change together: a crash in between leaves either all or none
+    const raised = this.store.transaction(() => {
+      if (!this.store.markActionUnknown(logId, now, reason)) return false
+      const t = ticketId ? this.store.ticket(ticketId) : undefined
+      if (t && (t.state === "verified" || t.state === "awaiting_approval")) this.store.transition(t.id, "blocked", "kernel", note, now)
+      this.store.inboxAdd("recovery", ticketId, {
+        title: `Outcome unknown: ${action}${ticketId ? ` for ${ticketId}` : ""}`,
+        note,
+        action,
+        action_log: logId,
+        approve: "you checked that it took effect and is correct: the ticket is done",
+        reject: "the ticket is declined; nothing is run again (open a new ticket to run it again)",
+      }, now, "urgent")
+      return true
+    })
+    if (!raised) return
+    void this.notifier.send("critical", this.say(`${ticketId ?? action}: ${action} may or may not have run (${reason}); it will not be re-run — decide in the inbox`, `${ticketId ?? action}: ${action}의 실행 여부를 알 수 없음 (${reason}); 다시 실행하지 않음 — 인박스에서 결정`))
   }
 
   start() {
@@ -335,8 +368,10 @@ export class Supervisor {
         if (cur && TRANSITIONS[cur.state].includes("blocked")) this.store.transition(t.id, "blocked", "kernel", `kernel step failed: ${String(e).slice(0, 300)}`, now)
       }
     }
-    for (const t of this.store.ticketsIn(["verified"])) guarded(t, () => this.classify(t, now))
-    for (const t of this.store.ticketsIn(["awaiting_approval"])) guarded(t, () => this.routeApproval(t, now))
+    // D85: a ticket whose external command is running is not classified or routed again until the run settles
+    const running = (t: Ticket) => this.executing.has(t.id) || this.store.ticketRunning(t.id)
+    for (const t of this.store.ticketsIn(["verified"])) if (!running(t)) guarded(t, () => this.classify(t, now))
+    for (const t of this.store.ticketsIn(["awaiting_approval"])) if (!running(t)) guarded(t, () => this.routeApproval(t, now))
     this.inboxTimeouts(now)
     this.escalateBlocked(now)
     this.inboxAlerts(now)
@@ -488,33 +523,66 @@ export class Supervisor {
     } else if (declared !== undefined) {
       // Operator-declared executor (D50): the kernel runs it with the declared env names only, off the tick
       if (this.executing.has(t.id)) return
-      this.executing.add(t.id)
+      const action = t.action as string
       const cwd = declared.cwd === "company" ? this.root : repo
       const deliverable = this.deliverableOf(t)
-      const action = t.action as string
-      const run = runExecutor({ executor: declared, action, cwd, placeholders: { branch: t.branch, ticket: t.id, deliverable }, env: this.env }).then((r) => {
+      // D85: the record exists (and is committed) before the external command can have any effect. The claim is
+      // refused while an earlier run of this action on this ticket is still running or has an unknown outcome:
+      // however the ticket got here again (unblock, triage), an unknown outcome is never run a second time.
+      const claim = this.store.beginAction({ at: now, actor: "kernel", ticket_id: t.id, action, effective_tier: tier, forced_by: forcedBy, inputs: { branch: t.branch, deliverable }, expect_state: t.state })
+      if ("stale" in claim) {
+        this.log(`${t.id}: ${action} not started: the ticket is now ${claim.stale}`)
+        return
+      }
+      if ("held" in claim) {
+        this.log(`${t.id}: ${action} not started: action-log ${claim.held.id} is ${claim.held.status}`)
+        if (claim.held.status === "unknown" && (t.state === "verified" || t.state === "awaiting_approval")) {
+          this.store.transition(t.id, "blocked", "kernel", `${OUTCOME_UNKNOWN} ${action} (action-log ${claim.held.id}) already ran with an unknown outcome on this ticket; it is never run again here — open a new ticket to run it again`, now)
+        }
+        return
+      }
+      const begun = claim
+      this.executing.add(t.id)
+      const run = runExecutor({ executor: declared, action, cwd, placeholders: { branch: t.branch, ticket: t.id, deliverable }, env: this.env, idempotencyKey: begun.idem_key }).then((r) => {
         const end = this.now()
+        if (r.unknown) {
+          this.raiseUnknownOutcome(begun.id, t.id, action, r.error ?? "the command was killed before it reported", end)
+          return
+        }
+        // the row is settled exactly once: if it is no longer `started` (a later boot already raised it as unknown),
+        // that decision stands and this late result changes nothing but the log
+        const settle = (then: () => void) => this.store.transaction(() => {
+          if (!this.store.finishAction(begun.id, { at: end, outputs: r.outputs, undo: r.undo })) return false
+          then()
+          return true
+        })
+        const late = () => this.log(`${t.id}: ${action} finished after action-log ${begun.id} was settled; ignored`)
         const cur = this.store.ticket(t.id)
-        if (cur === undefined || END_STATES.has(cur.state)) return
+        if (cur === undefined || END_STATES.has(cur.state)) {
+          this.store.finishAction(begun.id, { at: end, outputs: r.outputs, undo: r.undo })
+          return
+        }
         if (!r.ok) {
-          this.store.logAction({ at: end, actor: "kernel", ticket_id: t.id, action, effective_tier: tier, forced_by: forcedBy, inputs: { branch: t.branch }, outputs: r.outputs, undo: r.undo })
           if (r.applied) {
             // The external action ran; blindly retrying could duplicate an irreversible effect.
-            this.store.transition(t.id, "blocked", "kernel", `postcheck failed after action applied: ${r.error}; inspect the action log before recovery`, end)
-            this.store.inboxAdd("recovery", t.id, { title: `Verify recovery for ${t.id}`, note: r.error, action }, end, "urgent")
+            if (!settle(() => {
+              this.store.transition(t.id, "blocked", "kernel", `postcheck failed after action applied: ${r.error}; inspect the action log before recovery`, end)
+              this.store.inboxAdd("recovery", t.id, { title: `Verify recovery for ${t.id}`, note: r.error, action, action_log: begun.id }, end, "urgent")
+            })) return late()
             void this.notifier.send("critical", this.say(`${t.id}: action applied but postcheck failed; recovery required`, `${t.id}: 행동은 적용됐지만 postcheck 실패; 복구 결정 필요`))
             return
           }
-          this.store.transition(t.id, cur.state === "awaiting_approval" ? "blocked" : "rejected", "kernel", `executor failed: ${r.error}`, end)
+          if (!settle(() => this.store.transition(t.id, cur.state === "awaiting_approval" ? "blocked" : "rejected", "kernel", `executor failed: ${r.error}`, end))) return late()
           this.store.bumpAttempts(t.id, this.config.runtime.max_attempts, "kernel", "executor failed", end)
           return
         }
-        const id = this.store.logAction({ at: end, actor: "kernel", ticket_id: t.id, action, effective_tier: tier, forced_by: forcedBy, inputs: { branch: t.branch, deliverable }, outputs: r.outputs, undo: r.undo })
         const window = tier === "T2" ? end + durationMs(this.config.policy.windows.t2_internal) : null
-        this.store.transition(t.id, "done", "kernel", `executed ${action} (${tier}); action-log ${id}`, end, { window_closes_at: window })
+        if (!settle(() => this.store.transition(t.id, "done", "kernel", `executed ${action} (${tier}); action-log ${begun.id}`, end, { window_closes_at: window }))) return late()
         if (project) removeTicketWorktrees(repo, t.id)
         void this.notifier.send("info", this.say(`${t.id} done: ${this.tx(t.title)} (${action}, ${tier})`, `${t.id} 완료: ${this.tx(t.title)} (${action}, ${tier})`))
       }).catch((e) => {
+        // the kernel lost track of the command (a bug, not a result): its effect is unknown, so it is never re-run
+        try { this.raiseUnknownOutcome(begun.id, t.id, action, `the kernel failed while the command ran: ${String(e)}`, this.now()) } catch (e2) { this.log(`${t.id}: could not record the unknown outcome: ${String(e2)}`) }
         void this.notifier.send("warning", this.say(`${t.id}: executor crashed: ${String(e)}`, `${t.id}: 실행기 크래시: ${String(e)}`))
       }).finally(() => this.executing.delete(t.id))
       this.pending.add(run)
@@ -609,25 +677,59 @@ export class Supervisor {
     const rc = this.store.candidate()
     if (rc === undefined || this.candidate === undefined) return
     if (this.store.getMeta(`replay:${rc.tag}`) === "pending") return
-    const onCandidate = this.store.sessionsOnRelease(rc.tag, rc.at)
+    // production canary traffic only: replay-gate sessions (D54, ids `rp-…`) also run on the candidate's tag
+    const onCandidate = this.store.sessionsOnRelease(rc.tag, rc.at).filter((s) => !s.id.startsWith("rp-"))
     const demotions = this.store.allDemotions().filter((d) => d.since >= rc.at)
     if (demotions.length > 0) {
       this.withdrawCandidate(`demotion of ${demotions.map((d) => d.action).join(", ")} during the canary`, now)
       return
     }
     if (now < rc.watch_until) return
-    const rate = (sessions: ReadonlyArray<{ ticket_id: string }>) => {
+    const verdictsOf = (sessions: ReadonlyArray<{ ticket_id: string }>) => {
       const ids = new Set(sessions.map((s) => s.ticket_id))
-      const verdicts = this.store.verdictsSince(rc.at).filter((v) => ids.has(v.ticket_id))
-      return verdicts.length === 0 ? 0 : verdicts.filter((v) => v.verdict === "reject").length / verdicts.length
+      return this.store.verdictsSince(rc.at).filter((v) => ids.has(v.ticket_id))
     }
-    const baseline = rate(this.store.sessionsOnRelease(this.org.tag, rc.at))
-    const candidateRate = rate(onCandidate)
-    if (onCandidate.length > 0 && candidateRate > baseline + this.config.policy.release.max_regression) {
-      this.withdrawCandidate(`rejection rate ${candidateRate.toFixed(2)} vs baseline ${baseline.toFixed(2)} (+${this.config.policy.release.max_regression} allowed)`, now)
+    const rate = (vs: ReadonlyArray<{ verdict: string }>) => (vs.length === 0 ? 0 : vs.filter((v) => v.verdict === "reject").length / vs.length)
+    const candidateVerdicts = verdictsOf(onCandidate)
+    const baselineVerdicts = verdictsOf(this.store.sessionsOnRelease(this.org.tag, rc.at))
+    const sample = `${onCandidate.length} candidate session(s), ${candidateVerdicts.length} candidate verdict(s), ${baselineVerdicts.length} baseline verdict(s)`
+    // D86: below the noise floor the rate difference is noise — neither promote nor withdraw on it
+    const floor = { min_sessions: this.config.policy.release.min_sessions ?? CANARY_SAMPLE_DEFAULTS.min_sessions, min_verdicts: this.config.policy.release.min_verdicts ?? CANARY_SAMPLE_DEFAULTS.min_verdicts }
+    // once the Operator has been asked, their answer governs, whatever the sample does afterwards (a demotion,
+    // above, still withdraws at any time)
+    const asked = this.store.inboxLatestFor("canary_sample", rc.tag)
+    if (asked?.status === "open") return
+    if (asked?.status === "approved") return this.promoteCandidate(now, `promoted by the Operator below the canary floor (${sample})`)
+    if (asked) return this.withdrawCandidate(`canary sample below the floor and the Operator did not promote it (${asked.status}; ${sample})`, now)
+    // the floor is on the candidate side: with canary_traffic 1 the baseline has no production sessions in the window,
+    // and its rate then counts as 0 (the strictest comparison), as before D86
+    if (onCandidate.length < floor.min_sessions || candidateVerdicts.length < floor.min_verdicts) {
+      if (this.store.getMeta(`canary_extended:${rc.tag}`) !== "1") {
+        this.store.transaction(() => {
+          this.store.setReleaseWatch(rc.tag, now + durationMs(this.config.policy.release.watch))
+          this.store.setMeta(`canary_extended:${rc.tag}`, "1")
+        })
+        void this.notifier.send("info", this.say(`candidate ${rc.tag}: too little evidence to judge (${sample}; need ${floor.min_sessions} sessions and ${floor.min_verdicts} verdicts on the candidate); watch extended once by ${this.config.policy.release.watch}`, `후보 ${rc.tag}: 판정할 표본 부족 (${sample}; 후보 세션 ${floor.min_sessions}개, 판정 ${floor.min_verdicts}개 필요); 감시를 ${this.config.policy.release.watch} 한 번 연장`))
+        return
+      }
+      this.store.inboxAdd("canary_sample", null, {
+        title: `Candidate ${rc.tag}: canary sample too small to judge`,
+        tag: rc.tag,
+        changes: rc.changes,
+        note: `${sample} after an extended watch; the floor is ${floor.min_sessions} candidate sessions and ${floor.min_verdicts} candidate verdicts (policy.release.min_sessions / min_verdicts)`,
+        approve: "promote the candidate as it is",
+        reject: "withdraw it: main returns to the current release (also what happens if this item expires)",
+      }, now)
+      void this.notifier.send("warning", this.say(`candidate ${rc.tag}: still too little evidence after the extended watch (${sample}); not promoted — decide in the inbox`, `후보 ${rc.tag}: 연장 감시 후에도 표본 부족 (${sample}); 승격하지 않음 — 인박스에서 결정`))
       return
     }
-    this.promoteCandidate(now, `canary ${onCandidate.length} session(s), reject ${candidateRate.toFixed(2)} vs ${baseline.toFixed(2)}`)
+    const baseline = rate(baselineVerdicts)
+    const candidateRate = rate(candidateVerdicts)
+    if (candidateRate > baseline + this.config.policy.release.max_regression) {
+      this.withdrawCandidate(`rejection rate ${candidateRate.toFixed(2)} vs baseline ${baseline.toFixed(2)} (+${this.config.policy.release.max_regression} allowed; ${sample})`, now)
+      return
+    }
+    this.promoteCandidate(now, `canary ${sample}, reject ${candidateRate.toFixed(2)} vs ${baseline.toFixed(2)}`)
   }
 
   private promoteCandidate(now: number, why: string) {
@@ -638,6 +740,11 @@ export class Supervisor {
     if (tag === undefined) return
     void this.notifier.send("info", this.say(`candidate ${rc.tag} promoted to ${tag} (${why})`, `후보 ${rc.tag}가 ${tag}로 승격 (${why})`))
     if (pending) this.createCandidate("improvement merged during the previous canary", now)
+  }
+
+  /** D86: an open "too small to judge" question about a candidate that is no longer a candidate is closed, not left to answer. */
+  private closeCanaryQuestion(tag: string, why: string, now: number) {
+    for (const i of this.store.inboxOpen()) if (i.kind === "canary_sample" && i.payload["tag"] === tag) this.store.inboxDecide(i.id, "expired", why, now)
   }
 
   /** `holdco release withdraw`. */
@@ -655,7 +762,10 @@ export class Supervisor {
       spawnSync("git", existed ? ["checkout", this.org.tag, "--", p] : ["rm", "-q", "--", p], { cwd: this.root })
     }
     if (paths.length > 0) spawnSync("git", ["commit", "-qam", `withdraw ${rc.tag}: ${why}`], { cwd: this.root })
-    this.store.setReleaseStatus(rc.tag, "withdrawn")
+    this.store.transaction(() => {
+      this.store.setReleaseStatus(rc.tag, "withdrawn")
+      this.closeCanaryQuestion(rc.tag, `superseded: the candidate was withdrawn (${why})`, now)
+    })
     this.candidate = undefined
     this.store.setMeta("release_pending", "0")
     const t = this.store.allTickets().find((x) => x.department === "improvement" && x.state === "done" && x.updated_at >= rc.at)
@@ -747,7 +857,7 @@ export class Supervisor {
   private escalateBlocked(now: number) {
     const after = durationMs(this.config.policy.executive.blocked_after)
     for (const t of this.store.ticketsIn(["blocked"])) {
-      if (this.store.inboxOpen().some((i) => i.ticket_id === t.id && i.kind === "blocked")) continue
+      if (this.store.inboxOpen().some((i) => i.ticket_id === t.id && (i.kind === "blocked" || i.kind === "recovery"))) continue // D85: a recovery item is the decision; "blocked → triaged" would re-run the action
       const decided = this.store.db.query<{ id: number }, [string, number]>("SELECT id FROM inbox WHERE ticket_id = ? AND kind = 'blocked' AND created_at >= ?").get(t.id, t.updated_at)
       if (decided) continue
       if (this.config.modules.executive === "none" || now - t.updated_at > after) {
@@ -1110,7 +1220,10 @@ export class Supervisor {
     this.store.addRelease(tag, now, now + durationMs(this.config.policy.release.watch), note)
     this.store.setMeta("release_pending", "0")
     if (rc) {
-      this.store.setReleaseStatus(rc.tag, "promoted", tag)
+      this.store.transaction(() => {
+        this.store.setReleaseStatus(rc.tag, "promoted", tag)
+        this.closeCanaryQuestion(rc.tag, `superseded: the candidate was promoted to ${tag}`, now)
+      })
       this.candidate = undefined
     }
     this.org = Org.load(this.root)

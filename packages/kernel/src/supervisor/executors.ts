@@ -23,7 +23,15 @@ export interface ExecResult {
   readonly pending?: boolean
   /** External command succeeded but its postcondition failed; preserve undo and do not auto-retry. */
   readonly applied?: boolean
+  /**
+   * D85: the command was killed (timeout or signal) before it reported, so it may or may not have taken effect.
+   * The kernel never re-runs it; the Operator decides.
+   */
+  readonly unknown?: boolean
 }
+
+/** D85: how a ticket's note starts when the kernel does not know whether its external action took effect. */
+export const OUTCOME_UNKNOWN = "outcome unknown:"
 
 /** Kernel git: its own identity and no signing, whatever ~/.gitconfig says (a signing key would hang on pinentry). */
 const GIT_ID = ["-c", "user.name=holdco", "-c", "user.email=holdco@localhost", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"]
@@ -212,11 +220,20 @@ export interface RunExecutorOptions {
   readonly cwd: string
   readonly placeholders: Placeholders
   readonly env: Record<string, string | undefined>
+  /** D85: the action_log row's key, passed to the command and the postcheck as HOLDCO_IDEMPOTENCY_KEY. */
+  readonly idempotencyKey?: string
 }
 
 interface Ran { readonly status: number | null; readonly stdout: string; readonly stderr: string; readonly error?: string }
 
-/** Run argv without blocking the supervisor's event loop; a timeout kills the process. */
+/** After a timeout kill, how long to wait for the pipes to close before giving up on them. */
+const KILL_GRACE_MS = 5_000
+
+/**
+ * Run argv without blocking the supervisor's event loop. A timeout kills the command's whole process group (the
+ * command runs as its own group leader), and the result is settled within a grace period even if a descendant that
+ * escaped the group still holds the output pipes open.
+ */
 export const runAsync = (argv: ReadonlyArray<string>, cwd: string, env: Record<string, string>, timeoutMs: number): Promise<Ran> =>
   new Promise((resolve) => {
     const [cmd, ...args] = argv as [string, ...Array<string>]
@@ -224,16 +241,26 @@ export const runAsync = (argv: ReadonlyArray<string>, cwd: string, env: Record<s
     let stderr = ""
     let child: ReturnType<typeof spawn>
     try {
-      child = spawn(cmd, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] })
+      child = spawn(cmd, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" })
     } catch (e) {
       resolve({ status: null, stdout, stderr, error: String(e) })
       return
     }
-    const timer = setTimeout(() => { stderr += `\nkilled after ${timeoutMs} ms`; child.kill("SIGKILL") }, timeoutMs)
+    let grace: ReturnType<typeof setTimeout> | undefined
+    // once the deadline passed, the run timed out whatever exit code arrives later (the group leader may have exited
+    // 0 before the kill while a descendant was still working): no exit code, so the caller sees an unknown outcome
+    let timedOut = false
+    const done = (r: Ran) => { clearTimeout(timer); if (grace) clearTimeout(grace); resolve(timedOut && r.error === undefined ? { ...r, status: null } : r) }
+    const timer = setTimeout(() => {
+      timedOut = true
+      stderr += `\nkilled after ${timeoutMs} ms`
+      try { if (child.pid !== undefined && process.platform !== "win32") process.kill(-child.pid, "SIGKILL"); else child.kill("SIGKILL") } catch { child.kill("SIGKILL") }
+      grace = setTimeout(() => done({ status: null, stdout, stderr: `${stderr}\noutput pipes still open ${KILL_GRACE_MS} ms after the kill` }), KILL_GRACE_MS)
+    }, timeoutMs)
     child.stdout?.on("data", (d: Buffer) => { stdout += d.toString() })
     child.stderr?.on("data", (d: Buffer) => { stderr += d.toString() })
-    child.on("error", (e) => { clearTimeout(timer); resolve({ status: null, stdout, stderr, error: String(e) }) })
-    child.on("close", (code) => { clearTimeout(timer); resolve({ status: code, stdout, stderr }) })
+    child.on("error", (e) => done({ status: null, stdout, stderr, error: String(e) }))
+    child.on("close", (code) => done({ status: code, stdout, stderr }))
   })
 
 /**
@@ -246,11 +273,14 @@ export const runExecutor = async (o: RunExecutorOptions): Promise<ExecResult> =>
   // Validate probe placeholders before performing an external effect.
   const check = o.executor.postcheck ? renderArgv(o.executor.postcheck, o.placeholders) : undefined
   if (typeof check === "string") return fail(check)
-  const r = await runAsync(argv, o.cwd, executorEnv(o.executor.env ?? [], o.env), durationMs(o.executor.timeout ?? "15m"))
+  const env = { ...executorEnv(o.executor.env ?? [], o.env), ...(o.idempotencyKey ? { HOLDCO_IDEMPOTENCY_KEY: o.idempotencyKey } : {}) }
+  const r = await runAsync(argv, o.cwd, env, durationMs(o.executor.timeout ?? "15m"))
   const stdout = r.stdout
   const stderr = r.stderr + (r.error ? `\n${r.error}` : "")
   const json = stdout.split("\n").map((l) => l.trim()).filter((l) => l.startsWith("{")).map((l) => { try { return JSON.parse(l) as Record<string, unknown> } catch { return undefined } }).filter((x) => x !== undefined).at(-1)
   const outputs: Record<string, unknown> = { command: argv, exit: r.status, stdout: stdout.slice(-4000), stderr: stderr.slice(-4000), ...(json ? { result: json } : {}) }
+  // killed by the timeout or a signal (no exit code, no spawn error): it may have done part or all of its work
+  if (r.status === null && r.error === undefined) return { ok: false, unknown: true, outputs, undo: {}, error: `${o.action} was killed before it reported (${stderr.trim().split("\n").at(-1) ?? "signal"})` }
   if (r.status !== 0) return { ok: false, outputs, undo: {}, error: `${o.action} exited ${r.status ?? "by signal"}: ${stderr.trim().split("\n").at(-1) ?? ""}`.trim() }
   let undo: Record<string, unknown> = {}
   if (o.executor.undo) {
@@ -259,7 +289,7 @@ export const runExecutor = async (o: RunExecutorOptions): Promise<ExecResult> =>
     undo = typeof u === "string" ? { kind: "executor-undo-unavailable", reason: u } : { kind: "executor-undo", action: o.action, argv: u, cwd: o.cwd, env: o.executor.env ?? [] }
   }
   if (check) {
-    const probe = await runAsync(check, o.cwd, executorEnv(o.executor.env ?? [], o.env), durationMs(o.executor.timeout ?? "15m"))
+    const probe = await runAsync(check, o.cwd, env, durationMs(o.executor.timeout ?? "15m"))
     outputs["postcheck"] = { command: check, exit: probe.status, stdout: probe.stdout.slice(-4000), stderr: (probe.stderr + (probe.error ?? "")).slice(-4000) }
     if (probe.status !== 0) return { ok: false, applied: true, outputs, undo, error: `postcheck exited ${probe.status ?? "by signal"}` }
   }

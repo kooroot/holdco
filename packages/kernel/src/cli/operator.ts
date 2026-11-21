@@ -382,11 +382,18 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
           const item = store.inboxItem(id)
           if (!item || item.status !== "open") throw new OperatorError(`inbox #${id} is not open`)
           const note = args.flag("note") ?? `${sub} by the Operator`
-          store.inboxDecide(id, sub === "approve" ? "approved" : "rejected", note, now)
+          // D85: an unknown outcome is decided and its ticket settled together, never re-run
+          if (store.isUnknownOutcomeItem(item)) {
+            let state: string
+            try { state = store.decideUnknownOutcome(id, sub === "approve" ? "approved" : "rejected", note, now) } catch (e) { throw new OperatorError(e instanceof Error ? e.message : String(e)) }
+            console.log(`#${id} ${sub}d${item.ticket_id ? `; ${item.ticket_id} is now ${state}` : ""}`)
+            return true
+          }
+          if (!store.inboxDecide(id, sub === "approve" ? "approved" : "rejected", note, now)) throw new OperatorError(`inbox #${id} was decided by someone else`)
           const t = item.ticket_id ? store.ticket(item.ticket_id) : undefined
           if (t && (item.kind === "triage" || item.kind === "blocked")) store.transition(t.id, sub === "approve" ? "triaged" : "declined", "operator", note, now)
           if (item.kind === "graduation" && sub === "approve") await runOperator("promote", { ...args, positional: ["promote", String(item.payload["action"])] }, dir)
-          console.log(`#${id} ${sub}d${t ? `; ${t.id} is now ${store.ticket(t.id)?.state}` : ""}${["t3", "t2_objection", "manual_action"].includes(item.kind) ? " (the supervisor acts on the next tick)" : ""}`)
+          console.log(`#${id} ${sub}d${t ? `; ${t.id} is now ${store.ticket(t.id)?.state}` : ""}${["t3", "t2_objection", "manual_action", "canary_sample"].includes(item.kind) ? " (the supervisor acts on the next tick)" : ""}`)
         } else throw new OperatorError("usage: holdco inbox [list] | approve <id> [--note n] | reject <id> [--note n]")
       } finally {
         store.close()
