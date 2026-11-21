@@ -50,6 +50,9 @@ export type Tier = typeof Tier.Type
 
 // ── kernel floors (required-adjustable minimums; not configurable) ─────────
 
+/** D86: minimum canary sample before its rejection rate decides anything (overridable in policy.release). */
+export const CANARY_SAMPLE_DEFAULTS = { min_sessions: 5, min_verdicts: 3 } as const
+
 export const KERNEL_FLOORS = {
   auditWeeklySample: 3,
   graduationSamples: 5,
@@ -282,6 +285,13 @@ const Policy = Schema.Struct({
     max_regression: Ratio,
     watch: Duration,
     canary_traffic: Ratio,
+    /**
+     * D86: the noise floor. A candidate is promoted or withdrawn on its rejection rate only when at least this many
+     * candidate sessions ran and this many verdicts exist on its sessions' tickets; otherwise the watch is extended once, then
+     * the Operator decides. Defaults: `CANARY_SAMPLE_DEFAULTS`.
+     */
+    min_sessions: Schema.optionalKey(IntIn(1, 1000)),
+    min_verdicts: Schema.optionalKey(IntIn(1, 1000)),
   }),
   audit: Schema.Struct({
     weekly_sample: Schema.Int.check(Schema.isGreaterThanOrEqualTo(KERNEL_FLOORS.auditWeeklySample)),
