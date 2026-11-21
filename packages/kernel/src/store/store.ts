@@ -338,6 +338,10 @@ export class Store {
   }
   /** Move a ticket, append the event. Throws on an illegal transition. */
   transition(id: string, to: TicketState, actor: string, note: string, now: number, patch: Partial<Record<"approval_stage" | "action" | "branch" | "department" | "window_closes_at" | "priority" | "project", unknown>> = {}) {
+    // one transaction: the ticket move, its event and the superseded inbox items land together or not at all
+    this.transaction(() => this.transitionNow(id, to, actor, note, now, patch))
+  }
+  private transitionNow(id: string, to: TicketState, actor: string, note: string, now: number, patch: Partial<Record<"approval_stage" | "action" | "branch" | "department" | "window_closes_at" | "priority" | "project", unknown>>) {
     const t = this.ticket(id)
     if (t === undefined) throw new Error(`ticket ${id} not found`)
     if (!TRANSITIONS[t.state].includes(to)) throw new IllegalTransition(id, t.state, to)
@@ -757,6 +761,10 @@ export class Store {
   finishAction(id: number, r: { at: number; outputs: unknown; undo: unknown }): boolean {
     return this.db.run("UPDATE action_log SET status = 'done', finished_at = ?, outputs = ?, undo = ? WHERE id = ? AND status = 'started'", [r.at, JSON.stringify(r.outputs), JSON.stringify(r.undo), id]).changes === 1
   }
+  /** Persist what a killed command printed while its postcheck still runs: a crash in between keeps the evidence (the row stays `started`). */
+  checkpointAction(id: number, outputs: Record<string, unknown>): boolean {
+    return this.db.run("UPDATE action_log SET outputs = ? WHERE id = ? AND status = 'started'", [JSON.stringify(outputs), id]).changes === 1
+  }
   /** The command may or may not have taken effect (crash, kill, timeout). The row is never re-run. */
   markActionUnknown(id: number, at: number, reason: string, collected: Record<string, unknown> = {}): boolean {
     // keep what the command printed before it was lost (and the postcheck's answer, if one ran): it is the Operator's
@@ -765,7 +773,7 @@ export class Store {
     const kept: Record<string, unknown> = { ...collected, stdout: cap(collected["stdout"], 4000), stderr: cap(collected["stderr"], 4000) }
     const probe = collected["postcheck"]
     if (probe && typeof probe === "object") kept["postcheck"] = { ...(probe as Record<string, unknown>), stdout: cap((probe as Record<string, unknown>)["stdout"], 2000), stderr: cap((probe as Record<string, unknown>)["stderr"], 2000) }
-    return this.db.run("UPDATE action_log SET status = 'unknown', finished_at = ?, outputs = ? WHERE id = ? AND status = 'started'", [at, JSON.stringify({ ...kept, unknown: reason }), id]).changes === 1
+    return this.db.run("UPDATE action_log SET status = 'unknown', finished_at = ?, outputs = ? WHERE id = ? AND status = 'started'", [at, JSON.stringify({ ...kept, unknown: reason.slice(0, 1000) }), id]).changes === 1
   }
   /**
    * D86: how often the canary sample floor bit since `since`, so the defaults can be tuned: how many candidates had their
@@ -774,8 +782,10 @@ export class Store {
   canarySampleStats(since: number): { extended: number; asked: number; approved: number; rejected: number; expired: number; open: number } {
     const rows = this.db.query<{ status: string; n: number }, [number]>("SELECT status, COUNT(*) AS n FROM inbox WHERE kind = 'canary_sample' AND created_at >= ? GROUP BY status").all(since)
     const by = (st: string) => rows.find((r) => r.status === st)?.n ?? 0
+    // "expired" means nobody answered; a question closed because its candidate was promoted or withdrawn meanwhile is not that
+    const unanswered = this.db.query<{ n: number }, [number]>("SELECT COUNT(*) AS n FROM inbox WHERE kind = 'canary_sample' AND status = 'expired' AND created_at >= ? AND note LIKE 'no answer%'").get(since)?.n ?? 0
     const extended = this.db.query<{ n: number }, [number]>("SELECT COUNT(*) AS n FROM releases WHERE at >= ? AND EXISTS (SELECT 1 FROM meta WHERE key = 'canary_extended:' || releases.tag)").get(since)?.n ?? 0
-    return { extended, asked: rows.reduce((a, r) => a + r.n, 0), approved: by("approved"), rejected: by("rejected"), expired: by("expired"), open: by("open") }
+    return { extended, asked: rows.reduce((a, r) => a + r.n, 0), approved: by("approved"), rejected: by("rejected"), expired: unanswered, open: by("open") }
   }
   /** The recorded outputs of an action_log row (for the recovery item and the dashboard). */
   actionOutputs(id: number): Record<string, unknown> {

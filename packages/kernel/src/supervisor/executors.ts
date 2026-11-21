@@ -226,6 +226,8 @@ export interface RunExecutorOptions {
   readonly attempt?: number
   /** Aborted when the supervisor stops and its grace period for running executors has passed: the command's process group is killed. */
   readonly signal?: AbortSignal
+  /** Called with what the killed command printed, before the postcheck runs, so it can be persisted while the probe is still going. */
+  readonly onUnknown?: (outputs: Record<string, unknown>) => void
 }
 
 interface Ran { readonly status: number | null; readonly stdout: string; readonly stderr: string; readonly error?: string }
@@ -254,10 +256,11 @@ export const runAsync = (argv: ReadonlyArray<string>, cwd: string, env: Record<s
       return
     }
     let grace: ReturnType<typeof setTimeout> | undefined
+    let offAbort: (() => void) | undefined
     // once the deadline passed, the run timed out whatever exit code arrives later (the group leader may have exited
     // 0 before the kill while a descendant was still working): no exit code, so the caller sees an unknown outcome
     let timedOut = false
-    const done = (r: Ran) => { clearTimeout(timer); if (grace) clearTimeout(grace); resolve(timedOut && r.error === undefined ? { ...r, status: null } : r) }
+    const done = (r: Ran) => { offAbort?.(); clearTimeout(timer); if (grace) clearTimeout(grace); resolve(timedOut && r.error === undefined ? { ...r, status: null } : r) }
     const kill = (why: string) => {
       if (timedOut) return
       timedOut = true
@@ -268,7 +271,12 @@ export const runAsync = (argv: ReadonlyArray<string>, cwd: string, env: Record<s
     const timer = setTimeout(() => kill(`killed after ${timeoutMs} ms`), timeoutMs)
     if (signal) {
       if (signal.aborted) kill("killed: the supervisor stopped")
-      else signal.addEventListener("abort", () => kill("killed: the supervisor stopped"), { once: true })
+      else {
+        // removed once the run settles: a late abort must never signal the process group of a run that already ended
+        const onAbort = () => kill("killed: the supervisor stopped")
+        signal.addEventListener("abort", onAbort, { once: true })
+        offAbort = () => signal.removeEventListener("abort", onAbort)
+      }
     }
     child.stdout?.on("data", (d: Buffer) => { stdout += d.toString() })
     child.stderr?.on("data", (d: Buffer) => { stderr += d.toString() })
@@ -297,7 +305,8 @@ export const runExecutor = async (o: RunExecutorOptions): Promise<ExecResult> =>
     // D85: the Operator has to decide whether it took effect, so give them the probe's answer too (the status stays
     // unknown: a probe is evidence, not proof). Not after a kill at supervisor stop: shutdown must not wait on it.
     if (check && !o.signal?.aborted) {
-      const probe = await runAsync(check, o.cwd, env, Math.min(durationMs(o.executor.timeout ?? "15m"), POSTCHECK_AFTER_UNKNOWN_MS))
+      try { o.onUnknown?.({ ...outputs, unknown: "the command was killed; its postcheck is running" }) } catch { /* the checkpoint is best effort */ }
+      const probe = await runAsync(check, o.cwd, env, Math.min(durationMs(o.executor.timeout ?? "15m"), POSTCHECK_AFTER_UNKNOWN_MS), o.signal)
       outputs["postcheck"] = { command: check, exit: probe.status, stdout: probe.stdout.slice(-4000), stderr: (probe.stderr + (probe.error ?? "")).slice(-4000), after: "unknown outcome" }
     }
     return { ok: false, unknown: true, outputs, undo: {}, error: `${o.action} was killed before it reported (${stderr.trim().split("\n").at(-1) ?? "signal"})` }
@@ -310,7 +319,7 @@ export const runExecutor = async (o: RunExecutorOptions): Promise<ExecResult> =>
     undo = typeof u === "string" ? { kind: "executor-undo-unavailable", reason: u } : { kind: "executor-undo", action: o.action, argv: u, cwd: o.cwd, env: o.executor.env ?? [] }
   }
   if (check) {
-    const probe = await runAsync(check, o.cwd, env, durationMs(o.executor.timeout ?? "15m"))
+    const probe = await runAsync(check, o.cwd, env, durationMs(o.executor.timeout ?? "15m"), o.signal)
     outputs["postcheck"] = { command: check, exit: probe.status, stdout: probe.stdout.slice(-4000), stderr: (probe.stderr + (probe.error ?? "")).slice(-4000) }
     if (probe.status !== 0) return { ok: false, applied: true, outputs, undo, error: `postcheck exited ${probe.status ?? "by signal"}` }
   }

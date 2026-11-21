@@ -13,7 +13,7 @@ import { CANARY_SAMPLE_DEFAULTS, CompanyConfig } from "../src/config/company.ts"
 import { renderCompanyYaml, scaffold } from "../src/scaffold/scaffold.ts"
 import { HeldForRecovery, Store } from "../src/store/store.ts"
 import { Supervisor } from "../src/supervisor/supervisor.ts"
-import { executorEnv, mergeViaGithub, renderArgv, runExecutor, undoAction } from "../src/supervisor/executors.ts"
+import { executorEnv, mergeViaGithub, renderArgv, runAsync, runExecutor, undoAction } from "../src/supervisor/executors.ts"
 import { FakeEngine } from "./fake-engine.ts"
 
 const base = mkdtempSync(NodePath.join(tmpdir(), "holdco-rel-"))
@@ -1005,7 +1005,7 @@ describe("review follow-ups (D85/D86)", () => {
 
   test("when the grace expires, stop kills the executor's process group and only then is the outcome unknown", async () => {
     const marker = NodePath.join(base, "stop-kill-marker.txt")
-    const c = execCompany("stop-kills", `#!/bin/sh\necho started > ${marker}\nsleep 20\necho late >> ${marker}\n`, {})
+    const c = execCompany("stop-kills", `#!/bin/sh\necho started > ${marker}\n(sleep 3; echo late >> ${marker}) &\nwait\n`, {})
     const raw = Bun.YAML.parse(readFileSync(NodePath.join(c.dir, "company.yaml"), "utf8")) as Record<string, unknown>
     ;(raw["runtime"] as Record<string, unknown>)["executor_stop_grace"] = "1s"
     const config = Schema.decodeUnknownSync(CompanyConfig)(raw)
@@ -1020,13 +1020,53 @@ describe("review follow-ups (D85/D86)", () => {
     }
     const started = Date.now()
     await sup.stop()
-    expect(Date.now() - started).toBeLessThan(10_000) // 1 s grace, not the command's 20 s
+    expect(Date.now() - started).toBeLessThan(10_000) // 1 s grace, not the command's full run
     const row = store.actionsSince(0).find((a) => a.action === "deploy.staging")!
     expect(store.actionLog(row.id)?.status).toBe("unknown")
     expect(store.actionOutputs(row.id)["unknown"]).toContain("supervisor stopped")
     expect(store.ticket(id)?.state).toBe("blocked")
     expect(store.inboxOpen().some((i) => i.kind === "recovery" && i.ticket_id === id)).toBe(true)
-    await Bun.sleep(300)
-    expect(readFileSync(marker, "utf8")).not.toContain("late") // the group was killed, not left running
+    await Bun.sleep(4_000) // the background subshell (not the script's own shell) would have written by now
+    expect(readFileSync(marker, "utf8")).not.toContain("late") // the whole group was killed, not left running
+  }, 30_000)
+
+  test("a late abort never signals the process group of a run that already ended", async () => {
+    const ac = new AbortController()
+    const real = process.kill
+    const calls: Array<number> = []
+    process.kill = ((pid: number) => { calls.push(pid); return true }) as typeof process.kill
+    try {
+      const r = await runAsync(["true"], base, { PATH: process.env["PATH"] ?? "" }, 5_000, ac.signal)
+      expect(r.status).toBe(0)
+      ac.abort()
+      await Bun.sleep(50)
+    } finally {
+      process.kill = real
+    }
+    expect(calls).toEqual([])
+  })
+
+  test("what a killed command printed is checkpointed on its row before the postcheck runs, and boot recovery keeps it", async () => {
+    const store = new Store(":memory:")
+    const begun = store.beginAction({ at: 1, actor: "kernel", ticket_id: "ENG-9", action: "deploy.staging", effective_tier: "T1", forced_by: [], inputs: {} })
+    if (!("id" in begun)) throw new Error("claim refused")
+    expect(store.checkpointAction(begun.id, { stdout: "half-done", stderr: "e" })).toBe(true)
+    expect(store.actionLog(begun.id)?.status).toBe("started") // still started: a crash now reaches boot recovery with the evidence
+    store.markActionUnknown(begun.id, 2, "r".repeat(5_000), store.actionOutputs(begun.id))
+    const out = store.actionOutputs(begun.id) as { stdout: string; unknown: string }
+    expect(out.stdout).toBe("half-done")
+    expect(out.unknown.length).toBe(1_000)
+    expect(store.checkpointAction(begun.id, { stdout: "late" })).toBe(false) // only a started row can be checkpointed
+  })
+
+  test("the canary stats count only unanswered questions as expired", () => {
+    const store = new Store(":memory:")
+    const a = store.inboxAdd("canary_sample", null, { title: "t", tag: "rc-1" }, 10)
+    const b = store.inboxAdd("canary_sample", null, { title: "t", tag: "rc-2" }, 10)
+    store.inboxDecide(a, "expired", "no answer within the timeout: policy.release.on_sample_timeout is withdraw", 20)
+    store.inboxDecide(b, "expired", "superseded: the candidate was promoted to r3", 20)
+    const c = store.canarySampleStats(0)
+    expect(c.asked).toBe(2)
+    expect(c.expired).toBe(1)
   })
 })

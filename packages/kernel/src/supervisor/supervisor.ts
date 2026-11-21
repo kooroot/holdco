@@ -36,7 +36,7 @@ import { Return } from "../protocol/return.ts"
 import { SessionReport } from "../protocol/report.ts"
 import { CeoCycleReport, Proposal } from "../protocol/approval.ts"
 import { Verdict } from "../protocol/verdict.ts"
-import { END_STATES, Store, type Ticket, TRANSITIONS } from "../store/store.ts"
+import { END_STATES, HeldForRecovery, Store, type Ticket, TRANSITIONS } from "../store/store.ts"
 import { clear as clearInterrupt, raise as raiseInterrupt, readControl } from "./control.ts"
 import { type ExecResult, executorEnv, executorKind, mergeBranch, mergeViaGithub, OUTCOME_UNKNOWN, runAsync, runExecutor } from "./executors.ts"
 import { consoleNotifier, type Notifier } from "./notify.ts"
@@ -234,7 +234,7 @@ export class Supervisor {
    */
   private recoverUnknownActions(now: number): number {
     const rows = this.store.startedActions()
-    for (const r of rows) this.raiseUnknownOutcome(r.id, r.ticket_id, r.action, "the supervisor stopped while the command was running", now)
+    for (const r of rows) this.raiseUnknownOutcome(r.id, r.ticket_id, r.action, "the supervisor stopped while the command was running", now, this.store.actionOutputs(r.id))
     return rows.length
   }
 
@@ -271,16 +271,19 @@ export class Supervisor {
   async stop() {
     if (this.timer) clearInterval(this.timer)
     this.stopping = true // no new executor starts from here on
+    // the grace period is measured from here: waiting for agent sessions first does not extend it
+    const graceText = this.config.runtime.executor_stop_grace ?? EXECUTOR_STOP_GRACE_DEFAULT
+    const graceEnds = Date.now() + durationMs(graceText)
     for (const r of this.running.values()) r.abort.abort()
     await Promise.allSettled([...this.running.values()].map((r) => r.promise))
     // D85: a running executor is not abandoned: wait for it up to runtime.executor_stop_grace, then kill its process
     // group (the killed run becomes an unknown outcome through its own settle path). Only then is it unknown.
     if (this.pending.size > 0) {
-      const grace = durationMs(this.config.runtime.executor_stop_grace ?? EXECUTOR_STOP_GRACE_DEFAULT)
+      const grace = Math.max(0, graceEnds - Date.now())
       let timer: ReturnType<typeof setTimeout> | undefined
       const expired = new Promise<"grace">((resolve) => { timer = setTimeout(() => resolve("grace"), grace) })
       const settled = Promise.allSettled([...this.pending]).then(() => "settled" as const)
-      this.log(`stopping: waiting up to ${this.config.runtime.executor_stop_grace ?? EXECUTOR_STOP_GRACE_DEFAULT} for ${this.pending.size} running executor(s)`)
+      this.log(`stopping: waiting up to ${graceText} for ${this.pending.size} running executor(s)`)
       const first = await Promise.race([settled, expired])
       if (timer) clearTimeout(timer)
       if (first === "grace") {
@@ -570,7 +573,7 @@ export class Supervisor {
       }
       const begun = claim
       this.executing.add(t.id)
-      const run = runExecutor({ executor: declared, action, cwd, placeholders: { branch: t.branch, ticket: t.id, deliverable }, env: this.env, idempotencyKey: begun.idem_key, attempt: begun.attempt, signal: this.executorAbort.signal }).then((r) => {
+      const run = runExecutor({ executor: declared, action, cwd, placeholders: { branch: t.branch, ticket: t.id, deliverable }, env: this.env, idempotencyKey: begun.idem_key, attempt: begun.attempt, signal: this.executorAbort.signal, onUnknown: (o) => void this.store.checkpointAction(begun.id, o) }).then((r) => {
         const end = this.now()
         if (r.unknown) {
           this.raiseUnknownOutcome(begun.id, t.id, action, r.error ?? "the command was killed before it reported", end, r.outputs)
@@ -887,12 +890,22 @@ export class Supervisor {
       if (now - i.created_at > timeout) {
         // one item's failure never stops the others (or the rest of the tick): it is logged and the item stays closed
         try {
-          this.store.inboxDecide(i.id, "expired", "no answer within the timeout: rejected by default", now)
-          if ((i.kind === "blocked" || i.kind === "triage") && i.ticket_id) {
-            const t = this.store.ticket(i.ticket_id)
-            // a ticket held for an unknown outcome moves only through its recovery item: a stale item never declines it
-            if (t && (t.state === "blocked" || t.state === "new")) this.store.transition(t.id, "declined", "operator", `inbox #${i.id} expired: rejected by default`, now)
-          }
+          // the item and its ticket settle together, and only if this process won the decision: a stale expiry that lost
+          // the race to an answer (or a supersede) changes nothing
+          const sample = i.kind === "canary_sample"
+          const note = sample ? `no answer within the timeout: policy.release.on_sample_timeout is ${this.config.policy.release.on_sample_timeout ?? "withdraw"}` : "no answer within the timeout: rejected by default"
+          const won = this.store.transaction(() => {
+            if (!this.store.inboxDecide(i.id, "expired", note, now)) return false
+            if ((i.kind === "blocked" || i.kind === "triage") && i.ticket_id) {
+              const t = this.store.ticket(i.ticket_id)
+              // a ticket held for an unknown outcome moves only through its recovery item: a stale item never declines it
+              if (t && (t.state === "blocked" || t.state === "new")) {
+                try { this.store.transition(t.id, "declined", "operator", `inbox #${i.id} expired: rejected by default`, now) } catch (e) { if (!(e instanceof HeldForRecovery)) throw e } // held: the stale item just closes
+              }
+            }
+            return true
+          })
+          if (!won) continue
         } catch (e) {
           this.log(`inbox #${i.id} expiry: ${String(e)}`)
           continue

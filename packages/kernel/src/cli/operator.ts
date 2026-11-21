@@ -7,7 +7,7 @@ import { spawnSync } from "node:child_process"
 import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs"
 import * as NodePath from "node:path"
 import { Exit, Schema } from "effect"
-import { assignmentFor, authMode, CompanyConfig, type EngineId, ENGINE_IDS, ROLE_KINDS, type RoleKind, type Tier, budgetMode } from "../config/company.ts"
+import { assignmentFor, authMode, CompanyConfig, durationMs, EXECUTOR_STOP_GRACE_DEFAULT, type EngineId, ENGINE_IDS, ROLE_KINDS, type RoleKind, type Tier, budgetMode } from "../config/company.ts"
 import { defaultRoles, EXAMPLE_PRICES, formatAssignment, MODEL_DEFAULTS, MODEL_MODES, type ModelMode, parseAssignment, PRICES_CHECKED_ON } from "../config/models.ts"
 import type { Engine } from "../engine/types.ts"
 import { renderCompanyYaml } from "../scaffold/scaffold.ts"
@@ -692,6 +692,8 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
       const status = () => { const pid = pidAlive(); console.log(`${config.company.name}: supervisor ${pid ? `running (pid ${pid})` : "not running"}\ndashboard: ${dashboardUrl}\nlog: ${logFile}`); return pid }
       const waitUp = async () => { for (let i = 0; i < 120; i++) { if (pidAlive()) return true; await Bun.sleep(500) } return false } // doctor (sandbox probes, logins, usage endpoints) runs before the pid is written
       const run = (cmd: string, args: Array<string>) => spawnSync(cmd, args, { stdio: "pipe", encoding: "utf8" })
+      // D85: the service manager must give a stopping supervisor the executor grace period (plus a minute) before it kills anything
+      const stopSeconds = Math.ceil(durationMs(config.runtime.executor_stop_grace ?? EXECUTOR_STOP_GRACE_DEFAULT) / 1000) + 60
       const action = sub ?? "show"
       if (action === "logs") { spawnSync("tail", ["-n", "100", "-f", logFile], { stdio: "inherit" }); return true }
       if (action === "status") { status(); return true }
@@ -699,7 +701,7 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
         const name = `holdco-${config.company.name}`
         const unit = [
           "[Unit]", `Description=Holdco company: ${config.company.name}`, "After=network-online.target", "",
-          "[Service]", `WorkingDirectory=${dir}`, `Environment="PATH=${path}"`, `EnvironmentFile=-${envFile}`, `ExecStartPre=${q(bin)} doctor`, `ExecStart=${q(bin)} supervise`, "Restart=always", "RestartSec=10", "",
+          "[Service]", `WorkingDirectory=${dir}`, `Environment="PATH=${path}"`, `EnvironmentFile=-${envFile}`, `ExecStartPre=${q(bin)} doctor`, `ExecStart=${q(bin)} supervise`, "Restart=always", "RestartSec=10", "KillMode=mixed", `TimeoutStopSec=${stopSeconds}`, "",
           "[Install]", "WantedBy=default.target", "",
         ].join("\n")
         const out = NodePath.join(home, ".config", "systemd", "user", `${name}.service`)
@@ -727,7 +729,7 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
   <key>ProgramArguments</key><array><string>${x(bin)}</string><string>supervise</string></array>
   <key>WorkingDirectory</key><string>${x(dir)}</string>
   <key>EnvironmentVariables</key><dict><key>PATH</key><string>${x(path)}</string><key>HOME</key><string>${x(home)}</string><key>HOLDCO_CAFFEINATE</key><string>1</string></dict>
-  <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
+  <key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ExitTimeOut</key><integer>${stopSeconds}</integer>
   <key>StandardOutPath</key><string>${x(logFile)}</string>
   <key>StandardErrorPath</key><string>${x(logFile)}</string>
 </dict></plist>
