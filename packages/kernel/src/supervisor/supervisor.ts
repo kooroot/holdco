@@ -712,6 +712,8 @@ export class Supervisor {
         void this.notifier.send("info", this.say(`candidate ${rc.tag}: too little evidence to judge (${sample}; need ${floor.min_sessions} sessions and ${floor.min_verdicts} verdicts on the candidate); watch extended once by ${this.config.policy.release.watch}`, `후보 ${rc.tag}: 판정할 표본 부족 (${sample}; 후보 세션 ${floor.min_sessions}개, 판정 ${floor.min_verdicts}개 필요); 감시를 ${this.config.policy.release.watch} 한 번 연장`))
         return
       }
+      // another process (a manual release) may have settled this candidate since it was read: ask nothing then
+      if (this.store.candidate()?.tag !== rc.tag) return
       this.store.inboxAdd("canary_sample", null, {
         title: `Candidate ${rc.tag}: canary sample too small to judge`,
         tag: rc.tag,
