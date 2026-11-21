@@ -1069,4 +1069,17 @@ describe("review follow-ups (D85/D86)", () => {
     expect(c.asked).toBe(2)
     expect(c.expired).toBe(1)
   })
+
+  test("a postcheck killed at the shutdown deadline is an unknown outcome, not a failed postcheck", async () => {
+    const dir = NodePath.join(base, "pc-abort")
+    mkdirSync(dir)
+    writeFileSync(NodePath.join(dir, "d.sh"), "#!/bin/sh\necho applied\n")
+    const ac = new AbortController()
+    const run = runExecutor({ executor: { command: ["sh", "./d.sh"], postcheck: ["sh", "-c", "sleep 20"] }, action: "deploy.staging", cwd: dir, placeholders: { ticket: "ENG-9" }, env: { PATH: process.env["PATH"] }, signal: ac.signal })
+    setTimeout(() => ac.abort(), 500)
+    const r = await run
+    expect(r.ok).toBe(false)
+    expect(r.unknown).toBe(true)
+    expect(r.applied).toBeUndefined()
+  })
 })

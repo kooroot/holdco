@@ -57,7 +57,7 @@ export const Inbox = () => {
           const openIt = idx === cur
           return (
             <div key={i.id} {...cx(st.item(), i.urgency === "urgent" && st.urgent(), openIt && st.sel())} onClick={(e) => { if ((e.target as HTMLElement).closest("button, a, input")) return; setSel(idx) }}>
-              <div><div {...st.title()}>{tx(String(i.payload["title"] ?? t(KIND_LABEL[i.kind] ?? i.kind)))}</div><div {...st.meta()}><Pill tone={i.urgency === "urgent" ? "signal" : undefined}>{t(KIND_LABEL[i.kind] ?? i.kind)}</Pill><span>{t("{t} ago", { t: ago(S.now - i.created_at) })}</span>{exp !== null ? <span {...cn(ui.num(), exp < 6 * 3600000 && st.soon())}>{t("rejects itself in {t}", { t: left(exp) })}</span> : null}</div></div>
+              <div><div {...st.title()}>{tx(String(i.payload["title"] ?? t(KIND_LABEL[i.kind] ?? i.kind)))}</div><div {...st.meta()}><Pill tone={i.urgency === "urgent" ? "signal" : undefined}>{t(KIND_LABEL[i.kind] ?? i.kind)}</Pill><span>{t("{t} ago", { t: ago(S.now - i.created_at) })}</span>{exp !== null ? <span {...cn(ui.num(), exp < 6 * 3600000 && st.soon())}>{i.kind === "canary_sample" ? t("on_sample_timeout policy applies in {t}", { t: left(exp) }) : t("rejects itself in {t}", { t: left(exp) })}</span> : null}</div></div>
               <div {...st.acts()}><Button tone="ok" sm kbd="a" onClick={() => decide(i.id, "approved")}>{t("Approve")}</Button><Button tone="bad" sm kbd="r" onClick={() => decide(i.id, "rejected")}>{t("Reject")}</Button></div>
               {openIt ? (
                 <div {...st.body()}>

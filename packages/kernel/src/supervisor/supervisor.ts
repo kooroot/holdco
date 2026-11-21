@@ -271,27 +271,16 @@ export class Supervisor {
   async stop() {
     if (this.timer) clearInterval(this.timer)
     this.stopping = true // no new executor starts from here on
-    // the grace period is measured from here: waiting for agent sessions first does not extend it
+    // D85: a running executor is not abandoned: it gets runtime.executor_stop_grace, measured from here (agent sessions
+    // winding down do not extend it), then its process group is killed and the run becomes an unknown outcome through its
+    // own settle path. Nothing new starts meanwhile.
     const graceText = this.config.runtime.executor_stop_grace ?? EXECUTOR_STOP_GRACE_DEFAULT
-    const graceEnds = Date.now() + durationMs(graceText)
+    const killTimer = setTimeout(() => { if (this.pending.size > 0) this.log("stopping: grace expired; killing the running executors (their outcome becomes unknown)"); this.executorAbort.abort() }, durationMs(graceText))
+    if (this.pending.size > 0) this.log(`stopping: waiting up to ${graceText} for ${this.pending.size} running executor(s)`)
     for (const r of this.running.values()) r.abort.abort()
     await Promise.allSettled([...this.running.values()].map((r) => r.promise))
-    // D85: a running executor is not abandoned: wait for it up to runtime.executor_stop_grace, then kill its process
-    // group (the killed run becomes an unknown outcome through its own settle path). Only then is it unknown.
-    if (this.pending.size > 0) {
-      const grace = Math.max(0, graceEnds - Date.now())
-      let timer: ReturnType<typeof setTimeout> | undefined
-      const expired = new Promise<"grace">((resolve) => { timer = setTimeout(() => resolve("grace"), grace) })
-      const settled = Promise.allSettled([...this.pending]).then(() => "settled" as const)
-      this.log(`stopping: waiting up to ${graceText} for ${this.pending.size} running executor(s)`)
-      const first = await Promise.race([settled, expired])
-      if (timer) clearTimeout(timer)
-      if (first === "grace") {
-        this.log("stopping: grace expired; killing the running executors (their outcome becomes unknown)")
-        this.executorAbort.abort()
-        await Promise.allSettled([...this.pending])
-      }
-    }
+    await Promise.allSettled([...this.pending])
+    clearTimeout(killTimer)
     for (const t of this.store.allTickets()) if (t.lease_holder) this.store.releaseLease(t.id, t.lease_holder)
     await this.tools.close()
   }

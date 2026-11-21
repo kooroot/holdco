@@ -321,6 +321,8 @@ export const runExecutor = async (o: RunExecutorOptions): Promise<ExecResult> =>
   if (check) {
     const probe = await runAsync(check, o.cwd, env, durationMs(o.executor.timeout ?? "15m"), o.signal)
     outputs["postcheck"] = { command: check, exit: probe.status, stdout: probe.stdout.slice(-4000), stderr: (probe.stderr + (probe.error ?? "")).slice(-4000) }
+    // the shutdown deadline killed the probe: nobody learned whether the effect is right, so it is an unknown outcome
+    if (probe.status === null && probe.error === undefined && o.signal?.aborted) return { ok: false, unknown: true, outputs, undo, error: `${o.action} ran, but its postcheck was killed because the supervisor stopped` }
     if (probe.status !== 0) return { ok: false, applied: true, outputs, undo, error: `postcheck exited ${probe.status ?? "by signal"}` }
   }
   return { ok: true, outputs, undo }
