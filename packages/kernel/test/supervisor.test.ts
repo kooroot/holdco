@@ -13,7 +13,7 @@ import { CompanyConfig } from "../src/config/company.ts"
 import { scaffold } from "../src/scaffold/scaffold.ts"
 import { renderCompanyYaml } from "../src/scaffold/scaffold.ts"
 import { statementHash, Store } from "../src/store/store.ts"
-import { Supervisor } from "../src/supervisor/supervisor.ts"
+import { STEER_HEADING, STEER_NOTICE, Supervisor } from "../src/supervisor/supervisor.ts"
 import { raise, readControl, clear } from "../src/supervisor/control.ts"
 import { DEFAULT_SCRIPTS, FakeEngine, type Script } from "./fake-engine.ts"
 import { hashText } from "../src/supervisor/i18n.ts"
@@ -1325,6 +1325,10 @@ describe("the Operator steers a running session (D91)", () => {
     const senior = engine.runs.find((r) => r.role.kind === "senior")!
     expect(senior.prompt).toContain("keep the public API unchanged")
     expect(senior.prompt).not.toContain("use the batch endpoint")
+    // the session is told to expect a note mid-run, under the heading the note then arrives with; unannounced, a model takes it for tool output
+    expect(senior.prompt).toContain(STEER_NOTICE)
+    expect(STEER_NOTICE).toContain(STEER_HEADING)
+    expect(String(seen["hook"]).startsWith(STEER_HEADING)).toBe(true)
     expect(seen["atStart"]).toBeUndefined()
     expect(seen["reaches"]).toBe("the running senior session, at its next step")
     expect(seen["hook"]).toContain("## The Operator wrote to you while you were working")
@@ -1336,6 +1340,7 @@ describe("the Operator steers a running session (D91)", () => {
     // the judge that follows reads every note, the steer included
     await cycle(sup, clock, 2)
     expect(engine.runs.find((r) => r.role.kind === "verification")?.prompt).toContain("use the batch endpoint, not one call per item")
+    expect(engine.runs.find((r) => r.role.kind === "verification")?.prompt).toContain(STEER_NOTICE)
     // executives and juniors are not steered through a ticket's notes
     expect(engine.runs.filter((r) => r.role.kind === "ceo" || r.role.kind.startsWith("junior")).every((r) => r.steer === undefined)).toBe(true)
     await sup.stop()
