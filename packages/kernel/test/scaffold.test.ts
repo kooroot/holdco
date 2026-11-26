@@ -116,14 +116,14 @@ describe("canaries", () => {
 
 describe("compensations", () => {
   const full = {
-    abort: true, structuredOutput: true, systemInstructions: true, reportsCost: true, midSessionBudgetCap: true,
+    abort: true, structuredOutput: true, systemInstructions: true, reportsCost: true, midSessionBudgetCap: true, midSessionInput: true,
     preToolHook: "in-process", subagentIdentityInHooks: true, osSandboxWrites: true, osSandboxDenyRead: "native",
     projectConfigIsolation: "native", companyTools: "in-process-or-mcp",
   } as const
   test("an engine with every guarantee needs none", () => expect(compensations(full)).toEqual([]))
   test("every missing guarantee has a named compensation", () => {
-    const bare = { ...full, abort: false, structuredOutput: false, systemInstructions: false, reportsCost: false, midSessionBudgetCap: false,
+    const bare = { ...full, abort: false, structuredOutput: false, systemInstructions: false, reportsCost: false, midSessionBudgetCap: false, midSessionInput: false,
       preToolHook: "none", subagentIdentityInHooks: false, osSandboxWrites: false, osSandboxDenyRead: "none", projectConfigIsolation: "none" } as const
-    expect(compensations(bare).length).toBe(10)
+    expect(compensations(bare).length).toBe(11)
   })
 })

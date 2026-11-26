@@ -53,6 +53,19 @@ export const preToolUseHook =
     }
   }
 
+/**
+ * D91: an Operator note written while the session runs reaches the model with the result of the tool call that
+ * just finished (PostToolUse `additionalContext`, Agent SDK 0.3.310 types). Only the session's own agent is
+ * steered: a native subagent's calls carry an agent_id and are left alone.
+ */
+export const postToolUseHook =
+  (spec: SessionSpec): HookCallback =>
+  async (input) => {
+    if (input.hook_event_name !== "PostToolUse" || input.agent_id !== undefined) return {}
+    const text = spec.steer?.()
+    return text === undefined ? {} : { hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: text } }
+  }
+
 export const toClaudeOptions = (
   spec: SessionSpec,
   abortController: AbortController,
@@ -70,7 +83,7 @@ export const toClaudeOptions = (
     mcpServers: { company: companyServer(spec) },
     // Every call is gated by the PreToolUse hook; a canUseTool callback would be shadowed by the bare
     // allowedTools entries (SDK warning CLAUDE_SDK_CAN_USE_TOOL_SHADOWED) and is therefore not set.
-    hooks: { PreToolUse: [{ matcher: "*", hooks: [preToolUseHook(spec, onEvent)] }] },
+    hooks: { PreToolUse: [{ matcher: "*", hooks: [preToolUseHook(spec, onEvent)] }], ...(spec.steer ? { PostToolUse: [{ matcher: "*", hooks: [postToolUseHook(spec)] }] } : {}) },
     sandbox: {
       enabled: true,
       failIfUnavailable: true,

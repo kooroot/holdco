@@ -84,6 +84,28 @@ describe("in-process guard", () => {
   })
 })
 
+describe("steers between tool calls (D91)", () => {
+  const input = { hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: "bun test" }, tool_response: "ok", tool_use_id: "u", session_id: "x", transcript_path: "t", cwd: "/w/app" } as unknown as HookInput
+  const run = async (s: SessionSpec, i: HookInput = input) => (await opts(s).hooks!.PostToolUse![0]!.hooks[0]!(i, "u", { signal: new AbortController().signal })) as any
+  test("what the kernel has for the session is handed to the model after the tool call, once", async () => {
+    const queue = ["## The Operator wrote to you while you were working\n- use the batch API"]
+    const s = spec({ steer: () => queue.shift() })
+    expect(await run(s)).toEqual({ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: "## The Operator wrote to you while you were working\n- use the batch API" } })
+    expect(await run(s)).toEqual({}) // nothing new: the call passes untouched
+  })
+  test("a native subagent's calls are not steered, and nothing is taken for them", async () => {
+    let asked = 0
+    const s = spec({ steer: () => { asked++; return "note" } })
+    expect(await run(s, { ...input, agent_id: "sub-1" } as unknown as HookInput)).toEqual({})
+    expect(asked).toBe(0)
+  })
+  test("a session the kernel does not steer registers no such hook; the guard is untouched either way", () => {
+    expect(opts(spec()).hooks?.PostToolUse).toBeUndefined()
+    expect(opts(spec()).hooks?.PreToolUse?.length).toBe(1)
+    expect(opts(spec({ steer: () => undefined })).hooks?.PreToolUse?.length).toBe(1)
+  })
+})
+
 describe("results", () => {
   const usage = { input_tokens: 1000, cache_read_input_tokens: 400, output_tokens: 200 }
   const result = (subtype: string, extra: object = {}) =>

@@ -17,6 +17,7 @@ export const capabilities: EngineCapabilities = {
   systemInstructions: true,
   reportsCost: true,
   midSessionBudgetCap: true,
+  midSessionInput: true,
   preToolHook: "in-process",
   subagentIdentityInHooks: true,
   osSandboxWrites: true,

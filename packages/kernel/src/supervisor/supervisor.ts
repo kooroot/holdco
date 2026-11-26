@@ -79,6 +79,8 @@ interface Running {
 const MIN_SESSION_USD = 0.05
 /** D78: the CEO prompt lists at most this many tickets per section; a bigger backlog is paged across cycles. */
 export const CEO_LIST_CAP = 25
+/** D91: the sessions that work or judge a ticket and so take the Operator's notes on it; juniors answer to their brief. */
+const STEERED: ReadonlySet<RoleKind> = new Set(["senior", "improvement", "verification"])
 /** D89: how long a dead end is shown to the CEO before it opens work. */
 const DEAD_END_MEMORY_MS = 90 * 86_400_000
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}…` : s)
@@ -1403,10 +1405,39 @@ export class Supervisor {
   }
 
   /** The Operator's comments on a ticket, newest last, as a prompt section (D55); the Operator outranks every charter. */
-  private operatorNotes(ticketId: string): string {
+  private operatorNotes(ticketId: string, sessionId: string): string {
+    // D91: a session that starts is handed every note so far; none of them is a steer for it any more
+    this.store.markSeen(this.store.unseenComments(ticketId).map((c) => c.id), sessionId, "start", this.now())
     const notes = this.store.comments(ticketId).slice(-8)
     if (notes.length === 0) return ""
     return ["## Notes from the Operator (binding; later notes override earlier ones)", ...notes.map((n) => `- ${new Date(n.at).toISOString().slice(0, 16).replace("T", " ")}: ${n.body}`)].join("\n")
+  }
+
+  /**
+   * D91: the notes the Operator wrote on a ticket since its running session last heard from them, as text for the
+   * model, and marked delivered. The adapter's hook (`hook`) and the company tool server (`tool`) both ask; the
+   * first to ask delivers, so a note is never handed over twice.
+   */
+  private takeSteers(ticketId: string, sessionId: string, via: "hook" | "tool"): string | undefined {
+    const fresh = this.store.unseenComments(ticketId)
+    if (fresh.length === 0) return undefined
+    this.store.markSeen(fresh.map((c) => c.id), sessionId, via, this.now())
+    this.log(`${ticketId}: ${fresh.length} Operator note(s) handed to ${sessionId} (${via})`)
+    return [
+      "## The Operator wrote to you while you were working",
+      "This outranks your charter and the ticket text. Act on it from your next step, undo what it contradicts, and say in your final report what you changed because of it.",
+      ...fresh.map((n) => `- ${new Date(n.at).toISOString().slice(0, 16).replace("T", " ")}: ${n.body}`),
+    ].join("\n")
+  }
+
+  /** D91: where a note written on this ticket now will land, in words for the Operator. */
+  steerReach(ticketId: string): string {
+    const live = [...this.running.values()].find((r) => r.ticketId === ticketId && STEERED.has(r.kind))
+    if (!live) return "the next session on this ticket"
+    const engine = this.engines.get(live.engine)
+    return engine?.capabilities.midSessionInput
+      ? `the running ${live.kind} session, at its next step`
+      : `the running ${live.kind} session with its next company tool call, or else the next session`
   }
 
   private resolveProject(path: string): string {
@@ -1450,7 +1481,7 @@ export class Supervisor {
       project?.verify ? `The project's verify command is \`${renderVerify(project.verify)}\`: run it in your worktree before returning; the kernel runs the same command outside your sandbox and rejects the ticket if it fails. Your sandbox may refuse listening sockets (tests that start a local server): that is an environmental limit, not a defect — note it and let the kernel's run decide.` : project ? "This project has no verify command yet. If your change adds tests or a check script, say in the report what command proves the project works, so the Operator can register it (projects[].verify)." : "",
       project && t.checks.length ? `This ticket must also pass these registered checks, which the kernel runs after verify and which reject the ticket when they fail — run them before returning: ${t.checks.map((n) => `${n} (\`${project.checks?.[n] ? renderVerify(project.checks[n] as ReadonlyArray<string>) : "not registered"}\`)`).join("; ")}.` : "",
       project?.checker?.length ? `These paths define how the project is checked: ${project.checker.join(", ")}. If your branch changes any of them, the kernel still checks it with the default branch's version, and the merge needs the Operator. A change to the checker belongs in its own ticket.` : "",
-      this.operatorNotes(t.id),
+      this.operatorNotes(t.id, sessionId),
       prior.length ? `Earlier session reports:\n${prior.map((s) => s.report).join("\n")}` : "",
       "",
       this.config.modules.juniors.enabled ? `Commit before delegating: juniors branch from your branch's HEAD and never see uncommitted files. Team: list the ticket's independent parts first; two or more → one junior each, started together (consecutive delegate_start, one delegate_wait), up to ${this.config.modules.juniors.max_per_task}. Solo only when the work is small or cannot be split. Record the choice in the report's \`team\`.` : "",
@@ -1579,7 +1610,7 @@ export class Supervisor {
       `Department: ${t.department}. Action: ${t.action ?? "unknown"}. Rubric: ${rubricRef}. Mechanical gates required by this action: ${gates.join(", ") || "none"}.`,
       `Goal: ${t.goal}`, `Done criteria:`, ...t.done_criteria.map((c) => `- ${c}`),
       `The branch ${t.branch ?? "(none)"} is checked out read-only at ${cwd}. Files changed versus ${base}: ${paths.length ? paths.join(", ") : "(none)"}.${deps ? ` ${deps}.` : ""}`,
-      this.operatorNotes(t.id),
+      this.operatorNotes(t.id, sessionId),
       verified,
       ...VERIFICATION_RULES(gates, t.id),
       "",
@@ -1661,6 +1692,7 @@ export class Supervisor {
       limits: { maxTurns: p.maxTurns ?? 60, maxBudgetUsd: p.cap, timeoutMs: durationMs(this.config.runtime.session_timeout) },
       sandbox: { writableRoots: writable, denyWrite, denyRead, allowedDomains },
       tools: { kind: "http", url: this.tools.url(p.sessionId), token: binding.token },
+      ...(STEERED.has(kind) ? { steer: () => this.takeSteers(p.ticketId, p.sessionId, "hook") } : {}),
       guard: (event) => {
         let active: Array<Interrupt> = []
         try {
@@ -1764,6 +1796,7 @@ export class Supervisor {
       now: this.now,
       writeReport: (kind, name, body) => this.writeReport(kind, name, body),
       notify: (en, ko) => void this.notifier.send("info", this.say(en, ko)),
+      takeSteers: (b) => (STEERED.has(b.kind) ? this.takeSteers(b.ticketId, b.sessionId, "tool") : undefined),
       delegateStart: async (binding, brief) => this.delegateStart(binding, brief),
       delegateWait: async (_binding, ids) => Promise.all(ids.map((id) => this.delegations.get(id) ?? Promise.resolve({ brief_id: id, status: "failed", result: "unknown brief id" }))),
     }

@@ -15,6 +15,8 @@ export type Script = (ctx: Ctx) => Promise<Partial<Outcome> & { report?: unknown
 export interface Ctx {
   readonly spec: SessionSpec
   readonly call: (tool: string, args: Record<string, unknown>) => Promise<unknown>
+  /** Every text block of a company tool's result, as the model would read them (D91: a steer rides as a second block). */
+  readonly callRaw: (tool: string, args: Record<string, unknown>) => Promise<Array<string>>
   readonly emit: (e: SessionEvent) => void
   readonly git: (...args: Array<string>) => string
   readonly signal: AbortSignal
@@ -88,7 +90,8 @@ export const DEFAULT_SCRIPTS: Record<string, Script> = {
 }
 
 export class FakeEngine implements Engine {
-  readonly capabilities = { abort: true, structuredOutput: true, systemInstructions: true, reportsCost: true, midSessionBudgetCap: true, preToolHook: "in-process", subagentIdentityInHooks: true, osSandboxWrites: true, osSandboxDenyRead: "native", projectConfigIsolation: "native", companyTools: "in-process-or-mcp" } as const
+  // not readonly: a test may switch a guarantee off to exercise the kernel's compensation for it
+  capabilities: Engine["capabilities"] = { abort: true, structuredOutput: true, systemInstructions: true, reportsCost: true, midSessionBudgetCap: true, midSessionInput: true, preToolHook: "in-process", subagentIdentityInHooks: true, osSandboxWrites: true, osSandboxDenyRead: "native", projectConfigIsolation: "native", companyTools: "in-process-or-mcp" } as const
   readonly runs: Array<SessionSpec> = []
   /** D72: what `quota()` answers (set by a test); undefined = no subscription login. */
   quotaAnswer: EngineQuota | undefined | (() => Promise<EngineQuota | undefined>) = undefined
@@ -118,13 +121,18 @@ export class FakeEngine implements Engine {
       onEvent({ kind: "tool", name: tool, ok: !(r as { isError?: boolean }).isError })
       return parseResult(r)
     }
+    const callRaw = async (tool: string, args: Record<string, unknown>) => {
+      if (client === undefined) throw new Error("juniors have no company tools")
+      const r = (await client.callTool({ name: tool, arguments: args })) as { content?: Array<{ type: string; text?: string }> }
+      return (r.content ?? []).map((c) => c.text ?? "")
+    }
     const git = (...args: Array<string>) => {
       const r = spawnSync("git", args, { cwd: spec.cwd, encoding: "utf8" })
       if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr}`)
       return r.stdout
     }
     try {
-      const partial = await script({ spec, call, emit: onEvent, git, signal })
+      const partial = await script({ spec, call, callRaw, emit: onEvent, git, signal })
       return { status: "success", finalText: "", costUsd: Math.min(this.costPerRun, spec.limits.maxBudgetUsd), costSource: "engine", turns: 3, ...partial }
     } catch (e) {
       if (signal.aborted) return { status: "aborted", finalText: "", costUsd: Math.min(this.costPerRun / 2, spec.limits.maxBudgetUsd), costSource: "engine", turns: 1 }

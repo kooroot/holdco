@@ -117,7 +117,8 @@ export const Snapshot = Schema.Struct({
 export type Snapshot = typeof Snapshot.Type
 
 export const Event = Schema.Struct({ at: Num, actor: Str, from_state: NullStr, to_state: Str, note: NullStr })
-export const Comment = Schema.Struct({ id: Num, at: Num, author: Str, body: Str })
+/** D91: `seen_*` — which session was first handed the note, when, and how (start | hook | tool); null while it waits. */
+export const Comment = Schema.Struct({ id: Num, at: Num, author: Str, body: Str, seen_by_session: NullStr, seen_at: NullNum, seen_via: NullStr })
 export const Diff = Schema.Struct({ base: Str, stat: Str, patch: Str, truncated: Bool })
 export const VerdictFull = Schema.Struct({ verdict: Str, overall: Num, confidence: Str, at: Num, payload: Schema.Unknown })
 export const TicketDetail = Schema.Struct({

@@ -1246,6 +1246,102 @@ describe("checks run by the kernel, against what was judged (D90)", () => {
   })
 })
 
+describe("the Operator steers a running session (D91)", () => {
+  const finish = async ({ spec, call, git }: Parameters<Script>[0]) => {
+    writeFileSync(NodePath.join(spec.cwd, `${spec.ticketId}.md`), "x\n")
+    git("add", "-A")
+    git("commit", "-qm", `${spec.ticketId}: work`)
+    const t = (await call("ticket_get", { id: spec.ticketId })) as { branch: string }
+    await call("ticket_update", { state: "ready_for_verification", note: "done", branch: t.branch, action: "code.merge.app" })
+    return { report: { ticket: spec.ticketId, status: "ready", summary: "ok", branch: t.branch, action: "code.merge.app", changed_paths: [], assumptions: [], opened_tickets: [] } }
+  }
+  const open = (store: Store, now: number) => store.createTicket({ department: "engineering", title: "x", goal: "y", why: "z", done_criteria: ["a"], opened_by: "operator", project: "app", state: "triaged", action: "code.merge.app", now }).id
+
+  test("a note written while the senior works reaches it at its next step, once; notes from before are in its prompt", async () => {
+    const c = company("steer")
+    const clock = { now: Date.UTC(2026, 9, 26, 9) }
+    const seen: Record<string, unknown> = {}
+    let note: () => Promise<string> = async () => ""
+    const engine = new FakeEngine({
+      ceo: async () => ({}),
+      senior: async (ctx) => {
+        seen["atStart"] = ctx.spec.steer?.() // the opening prompt already carried the earlier note
+        seen["reaches"] = await note() // the Operator writes while the session runs
+        seen["hook"] = ctx.spec.steer?.() // what the adapter's hook is handed after the next tool call
+        seen["again"] = ctx.spec.steer?.()
+        seen["tool"] = await ctx.callRaw("ticket_get", { id: ctx.spec.ticketId }) // already delivered: the tool result carries nothing extra
+        return finish(ctx)
+      },
+    })
+    const { sup, store } = makeSupervisor(c, engine, clock)
+    await sup.boot()
+    const id = open(store, clock.now)
+    const { act } = await import("../src/dashboard/api.ts")
+    const ctx = { root: c.dir, config: () => c.config, store, now: () => clock.now, supervisor: sup, saveConfig: () => {} }
+    expect(await act(ctx, { kind: "comment", id, body: "keep the public API unchanged" })).toMatchObject({ reaches: "the next session on this ticket" })
+    note = async () => String((await act(ctx, { kind: "comment", id, body: "use the batch endpoint, not one call per item" }))["reaches"])
+    await cycle(sup, clock, 2)
+    const senior = engine.runs.find((r) => r.role.kind === "senior")!
+    expect(senior.prompt).toContain("keep the public API unchanged")
+    expect(senior.prompt).not.toContain("use the batch endpoint")
+    expect(seen["atStart"]).toBeUndefined()
+    expect(seen["reaches"]).toBe("the running senior session, at its next step")
+    expect(seen["hook"]).toContain("## The Operator wrote to you while you were working")
+    expect(seen["hook"]).toContain("use the batch endpoint, not one call per item")
+    expect(seen["hook"]).not.toContain("keep the public API unchanged") // only what is new
+    expect(seen["again"]).toBeUndefined()
+    expect((seen["tool"] as Array<string>).length).toBe(1)
+    expect(store.comments(id).map((n) => [n.body.slice(0, 8), n.seen_via, n.seen_at !== null])).toEqual([["keep the", "start", true], ["use the ", "hook", true]])
+    // the judge that follows reads every note, the steer included
+    await cycle(sup, clock, 2)
+    expect(engine.runs.find((r) => r.role.kind === "verification")?.prompt).toContain("use the batch endpoint, not one call per item")
+    // executives and juniors are not steered through a ticket's notes
+    expect(engine.runs.filter((r) => r.role.kind === "ceo" || r.role.kind.startsWith("junior")).every((r) => r.steer === undefined)).toBe(true)
+    await sup.stop()
+  })
+
+  test("an engine that cannot take input between tool calls gets the note with its next company tool result, and the Operator is told so", async () => {
+    const c = company("steer-tool")
+    const clock = { now: Date.UTC(2026, 9, 26, 9) }
+    const seen: Record<string, unknown> = {}
+    let note: () => Promise<string> = async () => ""
+    const engine = new FakeEngine({
+      ceo: async () => ({}),
+      senior: async (ctx) => {
+        seen["reaches"] = await note()
+        // this adapter never calls spec.steer; the session's next company tool call carries the note instead
+        seen["tool"] = await ctx.callRaw("ticket_get", { id: ctx.spec.ticketId })
+        seen["next"] = await ctx.callRaw("ticket_get", { id: ctx.spec.ticketId })
+        await note()
+        try { await ctx.call("ticket_update", { state: "dead_end", note: "x" }) } catch { /* a refused call still delivers */ }
+        seen["afterError"] = await ctx.callRaw("ticket_get", { id: ctx.spec.ticketId })
+        return finish(ctx)
+      },
+    })
+    engine.capabilities = { ...engine.capabilities, midSessionInput: false }
+    const { sup, store } = makeSupervisor(c, engine, clock)
+    await sup.boot()
+    const id = open(store, clock.now)
+    const { act } = await import("../src/dashboard/api.ts")
+    const ctx = { root: c.dir, config: () => c.config, store, now: () => clock.now, supervisor: sup, saveConfig: () => {} }
+    note = async () => String((await act(ctx, { kind: "comment", id, body: "stop: the schema changed upstream" }))["reaches"])
+    await cycle(sup, clock, 2)
+    expect(seen["reaches"]).toBe("the running senior session with its next company tool call, or else the next session")
+    const first = seen["tool"] as Array<string>
+    expect(first.length).toBe(2)
+    expect(JSON.parse(first[0]!)).toMatchObject({ id })
+    expect(first[1]).toContain("## The Operator wrote to you while you were working")
+    expect(first[1]).toContain("stop: the schema changed upstream")
+    expect((seen["next"] as Array<string>).length).toBe(1)
+    expect((seen["afterError"] as Array<string>).length).toBe(1) // the second note rode on the refused call's result
+    expect(store.comments(id).map((n) => n.seen_via)).toEqual(["tool", "tool"])
+    // without a supervisor in reach (the dashboard on its own), the answer is the honest general one
+    const { supervisor: _s, ...alone } = ctx
+    expect(await act(alone, { kind: "comment", id, body: "later" })).toMatchObject({ reaches: "the next session on this ticket" })
+    await sup.stop()
+  })
+})
+
 describe("tool server", () => {
   test("rejects a bad token and unknown sessions", async () => {
     const c = company("auth")

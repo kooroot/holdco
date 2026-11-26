@@ -42,6 +42,8 @@ export interface ToolHost {
   writeReport(kind: string, name: string, body: string): string
   /** Tell the Operator something happened (their alert channels), in English and Korean. */
   notify?(en: string, ko: string): void
+  /** D91: Operator notes this session has not been handed yet, as text for the model; taking them marks them delivered. */
+  takeSteers?(binding: SessionBinding): string | undefined
 }
 
 type JsonSchema = Record<string, unknown>
@@ -584,10 +586,13 @@ export class ToolServer {
       if (tool === undefined) return { isError: true, content: [{ type: "text", text: `unknown tool '${req.params.name}' for role ${binding.role}` }] }
       try {
         const result = await tool.run((req.params.arguments ?? {}) as Record<string, unknown>, binding, this.host)
-        return { content: [{ type: "text", text: JSON.stringify(result ?? { ok: true }, null, 2) }] }
+        // D91: a note the Operator wrote while this session ran rides on the result, whatever the engine
+        const steer = this.host.takeSteers?.(binding)
+        return { content: [{ type: "text", text: JSON.stringify(result ?? { ok: true }, null, 2) }, ...(steer ? [{ type: "text", text: steer }] : [])] }
       } catch (e) {
         const text = e instanceof ToolError ? e.message : `tool failed: ${String(e)}`
-        return { isError: true, content: [{ type: "text", text }] }
+        const steer = this.host.takeSteers?.(binding)
+        return { isError: true, content: [{ type: "text", text }, ...(steer ? [{ type: "text", text: steer }] : [])] }
       }
     })
     const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: () => randomBytes(16).toString("hex"), enableJsonResponse: true })

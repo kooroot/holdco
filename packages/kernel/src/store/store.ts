@@ -262,6 +262,20 @@ export interface CheckRun {
   readonly tail: string
 }
 
+/**
+ * An Operator note on a ticket. D91: `seen_*` say which session was first handed it, when, and how — in its
+ * opening prompt (`start`), between two tool calls (`hook`), or with a company tool's result (`tool`).
+ */
+export interface Comment {
+  readonly id: number
+  readonly at: number
+  readonly author: string
+  readonly body: string
+  readonly seen_by_session: string | null
+  readonly seen_at: number | null
+  readonly seen_via: "start" | "hook" | "tool" | null
+}
+
 /** D88: a parent or need that cannot be given to a ticket. */
 export class LinkError extends Error {}
 
@@ -323,6 +337,8 @@ const ADDED_COLUMNS: ReadonlyArray<readonly [table: string, column: string, ddl:
   ["tickets", "checks", "TEXT NOT NULL DEFAULT '[]'"],
   ["verdicts", "commit_sha", "TEXT"],
   ["verdicts", "statement", "TEXT"],
+  ["ticket_comments", "seen_at", "INTEGER"],
+  ["ticket_comments", "seen_via", "TEXT"],
 ]
 
 export class Store {
@@ -530,8 +546,16 @@ export class Store {
     const r = this.db.run("INSERT INTO ticket_comments(ticket_id, at, author, body) VALUES (?, ?, ?, ?)", [ticketId, now, author, body])
     return Number(r.lastInsertRowid)
   }
-  comments(ticketId: string): Array<{ id: number; at: number; author: string; body: string }> {
-    return this.db.query<{ id: number; at: number; author: string; body: string }, [string]>("SELECT id, at, author, body FROM ticket_comments WHERE ticket_id = ? ORDER BY at").all(ticketId)
+  comments(ticketId: string): Array<Comment> {
+    return this.db.query<Comment, [string]>("SELECT id, at, author, body, seen_by_session, seen_at, seen_via FROM ticket_comments WHERE ticket_id = ? ORDER BY at, id").all(ticketId)
+  }
+  /** D91: the notes no session has been handed yet, oldest first. */
+  unseenComments(ticketId: string): Array<Comment> {
+    return this.comments(ticketId).filter((c) => c.seen_at === null)
+  }
+  /** D91: these notes were put in front of a session: which one, when, and by which way (`start`, `hook`, `tool`). */
+  markSeen(ids: ReadonlyArray<number>, sessionId: string, via: Comment["seen_via"] & string, now: number) {
+    for (const id of ids) this.db.run("UPDATE ticket_comments SET seen_by_session = ?, seen_at = ?, seen_via = ? WHERE id = ? AND seen_at IS NULL", [sessionId, now, via, id])
   }
   /** Edit the Operator-owned fields of a ticket that has not reached an end state. */
   // ── roadmap (D83): each project's milestones, in order; tickets point at the one they serve ──

@@ -65,6 +65,12 @@ export interface SessionSpec {
   readonly tools: ToolEndpoint
   /** In-process guard (same code as the binary hook). Engines that can call back use this. */
   readonly guard: (event: HookEvent) => Blocked | undefined
+  /**
+   * D91: what the Operator has said about this ticket since the session last heard from them, as text to put in
+   * front of the model now; undefined when there is nothing new. Calling it marks those notes delivered, so an
+   * adapter calls it only where it can hand the text to the model at once (between two tool calls).
+   */
+  readonly steer?: () => string | undefined
   /** Compiled guard binary for engines that only run command hooks. */
   readonly hookCommand: string
   /** Environment for the engine process: auth and minimal PATH/HOME. Never production secrets. */
@@ -120,6 +126,8 @@ export interface EngineCapabilities {
   readonly systemInstructions: boolean
   readonly reportsCost: boolean
   readonly midSessionBudgetCap: boolean
+  /** D91: can the adapter hand the model new input between two tool calls (`SessionSpec.steer`)? */
+  readonly midSessionInput: boolean
   readonly preToolHook: "in-process" | "command" | "none"
   readonly subagentIdentityInHooks: boolean
   readonly osSandboxWrites: boolean

@@ -178,5 +178,5 @@ describe("cost and events", () => {
 
 test("Codex gaps each have a named compensation", () => {
   const gaps = compensations(capabilities).map((c) => c.gap)
-  expect(gaps).toEqual(expect.arrayContaining(["no system instructions", "no cost reporting", "no mid-session budget cap", "hook runs as a command, not in-process"]))
+  expect(gaps).toEqual(expect.arrayContaining(["no system instructions", "no cost reporting", "no mid-session budget cap", "no input between tool calls", "hook runs as a command, not in-process"]))
 })

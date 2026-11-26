@@ -569,7 +569,9 @@ export const act = async (ctx: DashboardContext, a: Action): Promise<Record<stri
       const body = a.body.trim()
       if (!body) throw new ActionError("empty note")
       const id = store.addComment(a.id, "operator", body, now)
-      return { ok: true, id, reaches: t.state === "in_progress" || t.state === "ready_for_verification" ? "the next session on this ticket (the running one does not see it)" : "the next session on this ticket" }
+      // D91: a running session is handed the note mid-run; where exactly depends on its engine, which the supervisor knows
+      const live = store.openSessions().find((x) => x.ticket_id === t.id && (x.kind === "senior" || x.kind === "improvement" || x.kind === "verification"))
+      return { ok: true, id, reaches: ctx.supervisor ? ctx.supervisor.steerReach(t.id) : live ? `the running ${live.kind} session mid-run where its engine allows (holdco engines), or else the next session` : "the next session on this ticket" }
     }
     case "role_set": {
       const config = ctx.config()

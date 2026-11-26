@@ -284,3 +284,21 @@ describe("what was judged is on record (D90)", () => {
   })
 })
 
+describe("Operator notes know who was handed them (D91)", () => {
+  test("a note is unseen until a session is handed it, and the first hand-over is the one on record", () => {
+    const s = new Store(":memory:")
+    const t = s.createTicket({ department: "engineering", title: "t", goal: "g", why: "w", done_criteria: ["a"], opened_by: "operator", project: "app", now: 1 })
+    const a = s.addComment(t.id, "operator", "first", 10)
+    const b = s.addComment(t.id, "operator", "second", 11)
+    expect(s.unseenComments(t.id).map((c) => c.body)).toEqual(["first", "second"])
+    s.markSeen([a], "s-1", "start", 20)
+    expect(s.unseenComments(t.id).map((c) => c.id)).toEqual([b])
+    s.markSeen([a, b], "s-2", "hook", 30)
+    expect(s.comments(t.id)).toEqual([
+      expect.objectContaining({ id: a, seen_by_session: "s-1", seen_at: 20, seen_via: "start" }),
+      expect.objectContaining({ id: b, seen_by_session: "s-2", seen_at: 30, seen_via: "hook" }),
+    ])
+    expect(s.unseenComments(t.id)).toEqual([])
+  })
+})
+

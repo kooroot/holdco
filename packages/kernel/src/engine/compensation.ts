@@ -37,6 +37,13 @@ export const compensations = (caps: EngineCapabilities): Array<Compensation> => 
       strength: "detect",
     })
   }
+  if (!caps.midSessionInput) {
+    out.push({
+      gap: "no input between tool calls",
+      kernelDoes: "an Operator note for a running session rides on its next company tool result (ticket_get, delegate_wait, ticket_update …); one that finds no such call opens the next session's prompt, and the Operator is told which of the two it will be",
+      strength: "detect",
+    })
+  }
   if (caps.preToolHook === "none") {
     out.push({
       gap: "no pre-tool hook",
