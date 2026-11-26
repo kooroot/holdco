@@ -947,6 +947,7 @@ describe("split and dead ends (D89)", () => {
           await refused(() => ctx.call("ticket_split", { parts: [part("a"), part("b", { after: [1] })], note: "n" }))
           await refused(() => ctx.call("ticket_split", { parts: [part("a"), part("b"), part("c"), part("d")], note: "n" }))
           await refused(() => ctx.call("ticket_split", { parts: [part("a", { department: "sales" })], note: "n" }))
+          await refused(() => ctx.call("ticket_split", { parts: [part("a", { department: "improvement" })], note: "n" }))
           const r = (await ctx.call("ticket_split", { parts: [part("Schema"), part("Endpoint", { after: [0] })], note: "two layers; wiring them is left for this ticket" })) as { held_until_ended: Array<string> }
           made = r.held_until_ended
           // the ticket is no longer this session's
@@ -966,6 +967,7 @@ describe("split and dead ends (D89)", () => {
       expect.stringContaining("part 1: `after` names positions of earlier parts"),
       expect.stringContaining("would have 4 parts; the limit is 3"),
       expect.stringContaining("department 'sales' is not enabled"),
+      expect.stringContaining("part 0: Improvement is off"), // a part nobody could start would hold the ticket for good
       expect.stringContaining("ticket is triaged, not in_progress"),
     ])
     // a split is not a failed attempt; the ticket is held by its parts, which inherit where it sits
@@ -1434,6 +1436,61 @@ describe("a merge with nothing in it is not an action (D92)", () => {
     expect(existsSync(NodePath.join(c.app, "part.md"))).toBe(true)
     expect(store.actionsSince(0).map((a) => a.ticket_id)).toEqual(made)
     await sup.stop()
+  })
+})
+
+describe("review of D88–D92: a failed diff is not an empty one; a check does not outlive stop()", () => {
+  test("`unchanged` is true only when git says so: a change, a missing ref and a missing repository are all not \"nothing to merge\"", async () => {
+    const { unchanged, changedPaths } = await import("../src/supervisor/worktrees.ts")
+    const repo = NodePath.join(base, "unchanged-repo")
+    mkdirSync(repo)
+    git(repo, "init", "-q", "-b", "main"); git(repo, "config", "user.email", "t@t"); git(repo, "config", "user.name", "t")
+    writeFileSync(NodePath.join(repo, "a.md"), "a\n"); git(repo, "add", "-A"); git(repo, "commit", "-qm", "init")
+    git(repo, "branch", "same")
+    git(repo, "checkout", "-q", "-b", "changed"); writeFileSync(NodePath.join(repo, "b.md"), "b\n"); git(repo, "add", "-A"); git(repo, "commit", "-qm", "b"); git(repo, "checkout", "-q", "main")
+    expect(unchanged(repo, "main", "same")).toBe(true)
+    expect(unchanged(repo, "main", "changed")).toBe(false)
+    // the case the review named: the diff fails, changedPaths answers [] as it does for no change, and the two must not look alike
+    expect(changedPaths(repo, "main", "no-such-branch")).toEqual([])
+    expect(unchanged(repo, "main", "no-such-branch")).toBe(false)
+    expect(unchanged(NodePath.join(base, "not-a-repo"), "main", "same")).toBe(false)
+  })
+
+  test("stop() kills a kernel check that is still running; the interrupted check is not a failed one", async () => {
+    const c = company("stop-check", (raw) => { (raw["projects"] as Array<Record<string, unknown>>)[0]!["verify"] = ["sh", "-c", "echo $$ > check.pid; sleep 30"] })
+    const clock = { now: Date.UTC(2026, 9, 26, 9) }
+    const engine = new FakeEngine({
+      ceo: async () => ({}),
+      senior: async ({ spec, call, git: g }) => {
+        writeFileSync(NodePath.join(spec.cwd, "f.md"), "x\n")
+        g("add", "-A"); g("commit", "-qm", "work")
+        const t = (await call("ticket_get", { id: spec.ticketId })) as { branch: string }
+        await call("ticket_update", { state: "ready_for_verification", note: "done", branch: t.branch, action: "code.merge.app" })
+        return { report: { ticket: spec.ticketId, status: "ready", summary: "ok", branch: t.branch, action: "code.merge.app", changed_paths: ["f.md"], assumptions: [], opened_tickets: [] } }
+      },
+    })
+    const { sup, store } = makeSupervisor(c, engine, clock)
+    await sup.boot()
+    const id = store.createTicket({ department: "engineering", title: "x", goal: "y", why: "z", done_criteria: ["a"], opened_by: "operator", project: "app", state: "triaged", action: "code.merge.app", now: clock.now }).id
+    // tick without draining: drain() would wait for the 30s check
+    const pidFile = NodePath.join(c.app, ".claude", "worktrees", `v-${id}`, "check.pid")
+    for (let i = 0; i < 40 && !existsSync(pidFile); i++) {
+      if (store.ticket(id)?.lease_holder === null) { clock.now += 60_000; await sup.tick() }
+      await new Promise((r) => setTimeout(r, 100))
+    }
+    expect(existsSync(pidFile)).toBe(true)
+    const pid = Number(readFileSync(pidFile, "utf8").trim())
+    const alive = () => { try { process.kill(pid, 0); return true } catch { return false } }
+    expect(alive()).toBe(true)
+    const t0 = Date.now()
+    await sup.stop()
+    expect(Date.now() - t0).toBeLessThan(10_000) // not the check's 30s, nor an executor's grace
+    expect(alive()).toBe(false)
+    // nothing was held against the ticket: it waits, unleased, for the next supervisor
+    expect(store.ticket(id)).toMatchObject({ state: "ready_for_verification", attempts: 0, lease_holder: null })
+    expect(store.checkRuns(id)).toEqual([])
+    expect(store.events(id).some((e) => e.to_state === "rejected" || e.to_state === "blocked")).toBe(false)
+    expect(engine.runs.some((r) => r.role.kind === "verification")).toBe(false)
   })
 })
 

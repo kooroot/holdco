@@ -43,7 +43,7 @@ import { consoleNotifier, type Notifier } from "./notify.ts"
 import { Org, projectInstructions } from "./org.ts"
 import { renderDigest } from "./digest.ts"
 import { type SessionBinding, ToolServer, type ToolHost } from "./tools.ts"
-import { changedPaths, createDetachedWorktree, createWorktree, defaultBranch, ensureFirstCommit, provisionDependencies, headOf, removeTicketWorktrees, removeWorktree, syncWithBase, takeFrom, worktreeDir } from "./worktrees.ts"
+import { changedPaths, createDetachedWorktree, createWorktree, defaultBranch, ensureFirstCommit, provisionDependencies, headOf, removeTicketWorktrees, removeWorktree, syncWithBase, takeFrom, unchanged, worktreeDir } from "./worktrees.ts"
 
 export interface SupervisorOptions {
   readonly companyRoot: string
@@ -175,8 +175,10 @@ export class Supervisor {
   /** Tickets whose declared executor is running right now (execute() is re-entered every tick). */
   private readonly executing = new Set<string>()
   private readonly pending = new Set<Promise<void>>()
-  /** D90: the kernel's own check runs (verify and named checks) still in flight; awaited by drain(), never by stop(). */
+  /** D90: the kernel's own check runs (verify and named checks) still in flight; awaited by drain(). */
   private readonly checking = new Set<Promise<void>>()
+  /** Aborted by stop(): a check has no effect outside its worktree, so it is killed at once rather than given a grace. */
+  private readonly checkAbort = new AbortController()
   /** D85: aborted after the stop grace period to kill running executors' process groups. */
   private readonly executorAbort = new AbortController()
   private stopping = false
@@ -283,8 +285,12 @@ export class Supervisor {
     const graceText = this.config.runtime.executor_stop_grace ?? EXECUTOR_STOP_GRACE_DEFAULT
     const killTimer = setTimeout(() => { if (this.pending.size > 0) this.log("stopping: grace expired; killing the running executors (their outcome becomes unknown)"); this.executorAbort.abort() }, timerMs(graceText))
     if (this.pending.size > 0) this.log(`stopping: waiting up to ${graceText} for ${this.pending.size} running executor(s)`)
+    // D90: the kernel's own checks are killed now and waited for, so none is still running in a verification worktree
+    // when the next supervisor starts; an interrupted check is not a failed one (no record, no rejection, no attempt)
+    this.checkAbort.abort()
     for (const r of this.running.values()) r.abort.abort()
     await Promise.allSettled([...this.running.values()].map((r) => r.promise))
+    await Promise.allSettled([...this.checking])
     await Promise.allSettled([...this.pending])
     clearTimeout(killTimer)
     for (const t of this.store.allTickets()) if (t.lease_holder) this.store.releaseLease(t.id, t.lease_holder)
@@ -444,7 +450,7 @@ export class Supervisor {
     }
     // D92: a merge with nothing in it is not an action. The branch holds no change of its own — its parts already
     // landed the work, or the session found nothing to do — so there is nothing to approve, execute or undo.
-    if (executorKind(t.action) === "merge" && t.branch !== null && paths.length === 0) {
+    if (executorKind(t.action) === "merge" && t.branch !== null && paths.length === 0 && unchanged(repo, base, t.branch)) {
       const stale = this.staleVerdict(t, repo)
       if (stale) {
         this.store.transition(t.id, "ready_for_verification", "kernel", stale, now)
@@ -1748,8 +1754,8 @@ export class Supervisor {
         let verifyTail = ""
         for (const [name, argv] of commands) {
           const started = Date.now()
-          const r = await runAsync(argv, cwd, env, timeout)
-          if (!mine()) return
+          const r = await runAsync(argv, cwd, env, timeout, this.checkAbort.signal)
+          if (this.stopping || !mine()) return // stop() killed it: the ticket stays ready for the next supervisor to verify afresh
           const ok = r.status === 0 && !r.error
           const tail = (r.stdout + (r.stderr ? `\n${r.stderr}` : "")).trim().split("\n").slice(-40).join("\n").slice(-4000)
           this.store.addCheckRun({ ticket_id: t.id, session_id: sessionId, at: this.now(), name, command: renderVerify(argv), passed: ok, exit_code: r.status ?? null, duration_ms: Date.now() - started, commit_sha: head, statement, overlaid, tail })
@@ -1772,12 +1778,12 @@ export class Supervisor {
           ...(overlaid.length ? [`## The branch changes how the project is checked\nPaths: ${overlaid.join(", ")}. The kernel ran the commands above with the default branch's version of those paths, so the passes hold under the checker that was already trusted; the merge needs the Operator's approval. Judge whether the change to the checker itself is warranted by the ticket.`] : []),
         ].join("\n\n"))
       })().catch((e) => {
-        if (!mine()) return
+        if (this.stopping || !mine()) return
         this.log(`${t.id}: the kernel could not run the checks: ${String(e)}`)
         this.store.transition(t.id, "blocked", "kernel", `the kernel could not run the checks: ${String(e)}`, this.now())
         giveUp()
       })
-      // drain() waits for the kernel's own checks; stop() does not (D85 gives its grace to executors, whose effects are external)
+      // tracked apart from `pending`: D85 gives executors a grace on stop() because their effects are external; a check is simply killed
       this.checking.add(run)
       void run.finally(() => this.checking.delete(run))
       return

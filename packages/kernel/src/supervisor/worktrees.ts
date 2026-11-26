@@ -238,6 +238,14 @@ export const listWorktrees = (repo: string): Array<string> => {
 }
 
 /**
+ * True only when git itself says the branch holds no change against `base`. A diff that failed (a missing ref, a
+ * broken repository) is not "no change": `changedPaths` answers both with an empty list, and D92 must not close a
+ * ticket on the strength of a command that did not run.
+ */
+export const unchanged = (repo: string, base: string, branch: string): boolean =>
+  spawnSync("git", ["diff", "--quiet", "--no-renames", `${base}...${branch}`], { cwd: repo }).status === 0
+
+/**
  * Every path a branch touches versus `base`. `--no-renames`: a moved file is reported as the path it left and the
  * path it arrived at. With rename detection git names only the new path, so a locked or checker file moved out of
  * its glob would not be seen as changed (D90: a change cannot loosen its own check by moving it).

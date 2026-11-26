@@ -299,6 +299,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
         for (const k of after) if (!Number.isInteger(k) || k < 0 || k >= i) throw new ToolError(`part ${i}: \`after\` names positions of earlier parts in this call (0..${i - 1}); got ${k}`)
         const department = p["department"] === undefined ? t.department : String(p["department"])
         if (!enabled.includes(department)) throw new ToolError(`part ${i}: department '${department}' is not enabled`)
+        if (department === "improvement" && !host.config.modules.improvement.enabled) throw new ToolError(`part ${i}: Improvement is off`) // as ticket_create: a part nobody can start would hold its parent for good
         const action = p["action"] === undefined ? (department === t.department ? t.action : null) : String(p["action"])
         if (action !== null && !host.config.actions.some((x) => x.id === action)) throw new ToolError(`part ${i}: unknown action '${action}'`)
         return { title, goal, done_criteria, after, needs: Array.isArray(p["needs"]) ? (p["needs"] as Array<unknown>).map(String) : [], department, action, checks: registeredChecks(host, t.project, p["checks"]) }
