@@ -41,6 +41,11 @@ export const renderDigest = (config: CompanyConfig, store: Store, now: number, r
     `- Verdicts: ${verdicts.length} (approve ${verdicts.filter((v) => v.verdict === "approve").length}, reject ${verdicts.filter((v) => v.verdict === "reject").length}, cannot-score ${verdicts.filter((v) => v.verdict === "cannot-score").length}); low confidence: ${verdicts.filter((v) => v.confidence === "low").length}`,
     `- Evaluator–Operator agreement: ${agreement}`,
     `- Demotions active: ${store.allDemotions().map((d) => d.action).join(", ") || "none"}`,
+    ...(() => {
+      // D86: how often the canary sample floor bit over the last 30 days (tune policy.release.min_sessions / min_verdicts / on_sample_timeout)
+      const c = store.canarySampleStats(now - 30 * 86_400_000)
+      return c.extended + c.asked === 0 ? [] : [`- Canary sample floor (30 days): watch extended ${c.extended}×; asked the Operator ${c.asked}× (approved ${c.approved}, rejected ${c.rejected}, expired unanswered ${c.expired}, open ${c.open}). Frequent: lower min_sessions/min_verdicts or set on_sample_timeout.`]
+    })(),
     "",
     "## Executive health",
     `- COO reviews: ${reviews.reviews}, objections ${reviews.objections} (${reviews.reviews ? ((reviews.objections / reviews.reviews) * 100).toFixed(0) : "0"}%)${reviews.reviews > 0 && reviews.objections === 0 ? " — watch for rubber-stamping" : ""}`,

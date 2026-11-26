@@ -9,11 +9,11 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os"
 import * as NodePath from "node:path"
 import { Schema } from "effect"
-import { CompanyConfig } from "../src/config/company.ts"
+import { CANARY_SAMPLE_DEFAULTS, CompanyConfig } from "../src/config/company.ts"
 import { renderCompanyYaml, scaffold } from "../src/scaffold/scaffold.ts"
-import { Store } from "../src/store/store.ts"
+import { HeldForRecovery, Store } from "../src/store/store.ts"
 import { Supervisor } from "../src/supervisor/supervisor.ts"
-import { executorEnv, mergeViaGithub, renderArgv, runExecutor, undoAction } from "../src/supervisor/executors.ts"
+import { executorEnv, mergeViaGithub, renderArgv, runAsync, runExecutor, undoAction } from "../src/supervisor/executors.ts"
 import { FakeEngine } from "./fake-engine.ts"
 
 const base = mkdtempSync(NodePath.join(tmpdir(), "holdco-rel-"))
@@ -270,7 +270,7 @@ describe("candidate releases, canary and promotion (D53)", () => {
       ;(raw["projects"] as Array<Record<string, unknown>>).splice(1)
       ;(raw["budget"] as Record<string, unknown>)["shares"] = { engineering: 0.3, research: 0.05, gtm: 0.05, operations: 0.05, verification: 0.2, executive: 0.25, improvement: 0.1 }
       ;((raw["policy"] as Record<string, Record<string, unknown>>)["executive"] as Record<string, unknown>)["canary_rate"] = 0.01
-      ;(raw["policy"] as Record<string, Record<string, unknown>>)["release"] = { day: "sat", at: "12:00", min_gain: 0.02, max_regression: 0.01, watch: "1h", canary_traffic: 1 }
+      ;(raw["policy"] as Record<string, Record<string, unknown>>)["release"] = { day: "sat", at: "12:00", min_gain: 0.02, max_regression: 0.01, watch: "1h", canary_traffic: 1, min_sessions: 1, min_verdicts: 1 }
     }, "full")
     const roleFile = "org/roles/engineering-senior.md"
     const original = readFileSync(NodePath.join(c.dir, roleFile), "utf8")
@@ -316,7 +316,7 @@ describe("candidate releases, canary and promotion (D53)", () => {
       ;(raw["projects"] as Array<Record<string, unknown>>).splice(1)
       ;(raw["budget"] as Record<string, unknown>)["shares"] = { engineering: 0.3, research: 0.05, gtm: 0.05, operations: 0.05, verification: 0.2, executive: 0.25, improvement: 0.1 }
       ;((raw["policy"] as Record<string, Record<string, unknown>>)["executive"] as Record<string, unknown>)["canary_rate"] = 0.01
-      ;(raw["policy"] as Record<string, Record<string, unknown>>)["release"] = { day: "sat", at: "12:00", min_gain: 0.02, max_regression: 0.01, watch: "3d", canary_traffic: 0.5 }
+      ;(raw["policy"] as Record<string, Record<string, unknown>>)["release"] = { day: "sat", at: "12:00", min_gain: 0.02, max_regression: 0.01, watch: "3d", canary_traffic: 0.5, min_sessions: 1, min_verdicts: 1 }
     }, "full")
     const roleFile = "org/roles/engineering-senior.md"
     const original = readFileSync(NodePath.join(c.dir, roleFile), "utf8")
@@ -363,7 +363,7 @@ describe("replay gate (D54)", () => {
         ;(raw["projects"] as Array<Record<string, unknown>>).splice(1)
         ;(raw["budget"] as Record<string, unknown>)["shares"] = { engineering: 0.3, research: 0.05, gtm: 0.05, operations: 0.05, verification: 0.2, executive: 0.25, improvement: 0.1 }
         ;((raw["policy"] as Record<string, Record<string, unknown>>)["executive"] as Record<string, unknown>)["canary_rate"] = 0.01
-        ;(raw["policy"] as Record<string, Record<string, unknown>>)["release"] = { day: "sat", at: "12:00", min_gain: 0.02, max_regression: 0.01, watch: "1h", canary_traffic: 1 }
+        ;(raw["policy"] as Record<string, Record<string, unknown>>)["release"] = { day: "sat", at: "12:00", min_gain: 0.02, max_regression: 0.01, watch: "1h", canary_traffic: 1, min_sessions: 1, min_verdicts: 1 }
       }, "full")
       git(c.dir, "checkout", "-q", "-b", "imp/IMP-X", "r0")
       const rubric = NodePath.join(c.dir, "evals", "rubrics", "engineering.md")
@@ -419,7 +419,17 @@ describe("replay gate (D54)", () => {
       } else {
         expect(store.candidate()?.tag).toBe("rc-1")
         expect(sent.some((s) => s.includes("replay gate passed") && s.includes("0.00 → 1.00"))).toBe(true)
+        // no production session ran on the candidate during the watch: below the canary floor (D86), so the watch is
+        // extended once, then the Operator decides; approving promotes it
         clock.now += 3_600_000
+        await cycle(sup, clock, 1)
+        expect(store.candidate()?.tag).toBe("rc-1")
+        expect(sent.some((s) => s.includes("watch extended once"))).toBe(true)
+        clock.now += 3_600_000
+        await cycle(sup, clock, 1)
+        const ask = store.inboxOpen().find((i) => i.kind === "canary_sample")!
+        expect(ask.payload["tag"]).toBe("rc-1")
+        store.inboxDecide(ask.id, "approved", "ok", clock.now)
         await cycle(sup, clock, 1)
         expect(store.latestRelease()?.tag).toBe("r1")
       }
@@ -491,5 +501,617 @@ describe("evidence-backed execution", () => {
     const bad = await runExecutor({ ...opts, executor: { command: ["touch", "should-not-exist"], postcheck: ["test", "-f", "{deliverable}"] } })
     expect(bad.ok).toBe(false)
     expect(existsSync(NodePath.join(dir, "should-not-exist"))).toBe(false)
+  })
+})
+
+describe("crash-safe executors (D85)", () => {
+  const deployCompany = (name: string, script: string, timeout = "1m") => {
+    const c = company(name, (raw) => {
+      ;(raw["actions"] as Array<Record<string, unknown>>).push({ id: "deploy.staging", department: "engineering", tier: "T1", evaluator: "engineering.md#app", gates: ["verification-approved", "rollback-tested"], graduation: "auto" })
+      raw["executors"] = { "deploy.staging": { command: ["sh", "./deploy.sh"], cwd: "project", undo: ["sh", "./undo.sh"], timeout } }
+    })
+    writeFileSync(NodePath.join(c.app, "deploy.sh"), script)
+    git(c.app, "add", "-A")
+    git(c.app, "commit", "-qm", "deploy script")
+    return c
+  }
+  const deployEngine = () => new FakeEngine({ ceo: async () => ({}), senior: seniorScript("deploy.staging"), verification: async ({ spec, call }) => {
+    const verdict = { ticket: spec.ticketId, rubric: "engineering.md#app", verdict: "approve", scores: { correctness: 4 }, overall: 4, confidence: "high", failures: [], gates: [{ gate: "rollback-tested", passed: true, evidence: "fixture" }], summary: "verified" }
+    await call("verdict_submit", { verdict })
+    return { report: verdict }
+  } })
+
+  test("a supervisor that dies while the command runs: the next boot never re-runs it; the outcome is unknown and goes to the urgent inbox", async () => {
+    const count = NodePath.join(base, "crash-runs.txt")
+    const c = deployCompany("crash", `#!/bin/sh\necho "run $HOLDCO_IDEMPOTENCY_KEY $HOLDCO_ATTEMPT" >> ${count}\nsleep 2\necho '{"previous":"v1"}'\n`)
+    const clock = { now: Date.UTC(2026, 9, 26, 9) }
+    const { sup, store } = makeSupervisor(c, deployEngine(), clock)
+    await sup.boot()
+    const id = store.createTicket({ department: "engineering", title: "Deploy", goal: "g", why: "w", done_criteria: ["d"], opened_by: "operator", project: "app", state: "triaged", action: "deploy.staging", now: clock.now }).id
+    // run until the command has started, without draining: it is still in flight when supervisor 1 "dies"
+    for (let i = 0; i < 40 && !existsSync(count); i++) {
+      clock.now += 60_000
+      await sup.tick()
+      await Bun.sleep(300)
+    }
+    expect(existsSync(count)).toBe(true)
+    // the write-ahead record exists before the command could have had any effect
+    const started = store.actionsSince(0).filter((a) => a.action === "deploy.staging")
+    expect(started.length).toBe(1)
+    expect(store.actionLog(started[0]!.id)).toMatchObject({ status: "started", idem_key: `${id}:deploy.staging` })
+
+    // supervisor 2 boots on the same store; supervisor 1's in-memory state is gone
+    const sent2: Array<string> = []
+    const sup2 = new Supervisor({ companyRoot: c.dir, config: c.config, engines: new Map([["claude", deployEngine()]]), store, now: () => clock.now, notifier: { send: async (s, t) => void sent2.push(`${s}: ${t}`), heartbeat: async () => {} }, env: { PATH: process.env["PATH"], HOME: base }, log: () => {} })
+    await sup2.boot()
+    await cycle(sup2, clock, 3)
+    await sup.drain() // supervisor 1's orphaned command finishes late; its result must not override the boot's decision
+
+    expect(readFileSync(count, "utf8").trim().split("\n")).toEqual([`run ${id}:deploy.staging 1`]) // ran once, with its key
+    const row = store.actionLog(started[0]!.id)!
+    expect(row.status).toBe("unknown")
+    expect(store.actionsSince(0).filter((a) => a.action === "deploy.staging").length).toBe(1)
+    const t = store.ticket(id)!
+    expect(t.state).toBe("blocked")
+    expect(t.note).toStartWith("outcome unknown:")
+    const item = store.inboxOpen().find((i) => i.kind === "recovery" && i.ticket_id === id)!
+    expect(item.urgency).toBe("urgent")
+    expect(item.payload["action_log"]).toBe(started[0]!.id)
+    expect(store.inboxOpen().some((i) => i.kind === "blocked" && i.ticket_id === id)).toBe(false) // one decision, not two
+    expect(sent2.some((s) => s.startsWith("critical:") && s.includes("will not be re-run"))).toBe(true)
+    expect(sent2.some((s) => s.includes("1 action(s) with an unknown outcome"))).toBe(true)
+
+    // the ticket moves only through that decision: an unblock or a triage by anyone is refused while it is open
+    expect(() => store.transition(id, "triaged", "operator", "unblocked by hand", clock.now)).toThrow(HeldForRecovery)
+    expect(() => store.transition(id, "declined", "ceo", "drop it", clock.now)).toThrow(HeldForRecovery)
+    await cycle(sup2, clock, 3)
+    expect(readFileSync(count, "utf8").trim().split("\n").length).toBe(1)
+    expect(store.ticket(id)?.state).toBe("blocked")
+    expect(store.decideUnknownOutcome(item.id, "approved", "checked: staging has it", clock.now)).toBe("done")
+    expect(store.ticket(id)?.state).toBe("done")
+    expect(store.actionsSince(0).filter((a) => a.action === "deploy.staging").length).toBe(1)
+    await sup2.stop()
+    await sup.stop()
+  })
+
+  test("a command killed by its timeout is an unknown outcome, not a failure to retry", async () => {
+    const count = NodePath.join(base, "timeout-runs.txt")
+    const c = deployCompany("timeout", `#!/bin/sh\necho run >> ${count}\nexec sleep 30\n`, "1s")
+    const clock = { now: Date.UTC(2026, 9, 26, 9) }
+    const { sup, store } = makeSupervisor(c, deployEngine(), clock)
+    await sup.boot()
+    const id = store.createTicket({ department: "engineering", title: "Deploy", goal: "g", why: "w", done_criteria: ["d"], opened_by: "operator", project: "app", state: "triaged", action: "deploy.staging", now: clock.now }).id
+    await cycle(sup, clock, 8)
+    expect(readFileSync(count, "utf8").trim().split("\n").length).toBe(1)
+    const rows = store.actionsSince(0).filter((a) => a.action === "deploy.staging")
+    expect(rows.length).toBe(1)
+    expect(store.actionLog(rows[0]!.id)?.status).toBe("unknown")
+    expect(store.ticket(id)?.state).toBe("blocked")
+    expect(store.inboxOpen().find((i) => i.kind === "recovery" && i.ticket_id === id)?.urgency).toBe("urgent")
+    await sup.stop()
+  })
+
+  test("a run is claimed once: a second claim is refused while it runs or after an unknown outcome; the key is stable across retries (the attempt number is separate); a row settles once", () => {
+    const store = new Store(":memory:")
+    const begin = (ticket: string, at: number) => store.beginAction({ at, actor: "kernel", ticket_id: ticket, action: "deploy", effective_tier: "T1", forced_by: [], inputs: {} })
+    const a = begin("ENG-1", 1)
+    if (!("id" in a)) throw new Error("first claim refused")
+    expect(a.idem_key).toBe("ENG-1:deploy")
+    expect(a.attempt).toBe(1)
+    expect(begin("ENG-1", 2)).toEqual({ held: { id: a.id, status: "started" } }) // still running: no second launch
+    expect(store.ticketRunning("ENG-1")).toBe(true)
+    expect(store.finishAction(a.id, { at: 3, outputs: { ok: true }, undo: {} })).toBe(true)
+    expect(store.finishAction(a.id, { at: 4, outputs: { ok: false }, undo: {} })).toBe(false) // settled once
+    expect(store.ticketRunning("ENG-1")).toBe(false)
+    const b = begin("ENG-1", 5) // a known result frees the action for a deliberate retry
+    if (!("id" in b)) throw new Error("second claim refused")
+    expect(b.idem_key).toBe("ENG-1:deploy") // the same key on a retry: a script can recognise work it already half did
+    expect(b.attempt).toBe(2)
+    expect(store.markActionUnknown(b.id, 6, "lost")).toBe(true)
+    expect(store.finishAction(b.id, { at: 7, outputs: {}, undo: {} })).toBe(false) // unknown stays unknown
+    expect(begin("ENG-1", 8)).toEqual({ held: { id: b.id, status: "unknown" } }) // never again on this ticket
+    expect("id" in begin("ENG-2", 9)).toBe(true) // a new ticket may run it
+    expect(store.startedActions().map((r) => r.ticket_id)).toEqual(["ENG-2"])
+    expect(store.actionLog(b.id)?.idem_key).toBe(store.actionLog(a.id)?.idem_key)
+    // rows written before D85 read as done and carry no key
+    const legacy = store.logAction({ at: 10, actor: "kernel", ticket_id: "ENG-3", action: "x", effective_tier: "T1", forced_by: [], inputs: {}, outputs: {}, undo: {} })
+    expect(store.actionLog(legacy)).toMatchObject({ status: "done", idem_key: null })
+  })
+})
+
+describe("crash-safe executors (D85): recovery and process groups", () => {
+  test("the CLI settles an unknown-outcome recovery item: reject declines the ticket and runs nothing", async () => {
+    const c = company("cli-recovery")
+    let store = Store.open(c.dir)
+    const now = Date.UTC(2026, 9, 26, 9)
+    const id = store.createTicket({ department: "engineering", title: "Deploy", goal: "g", why: "w", done_criteria: ["d"], opened_by: "operator", project: "app", state: "triaged", action: "deploy.staging", now }).id
+    const run = store.beginAction({ at: now, actor: "kernel", ticket_id: id, action: "deploy.staging", effective_tier: "T1", forced_by: [], inputs: {} })
+    if (!("id" in run)) throw new Error("claim refused")
+    store.markActionUnknown(run.id, now, "lost")
+    const item = store.inboxAdd("recovery", id, { title: `Outcome unknown: deploy.staging for ${id}`, action: "deploy.staging", action_log: run.id }, now, "urgent")
+    store.close()
+    const { runOperator, OperatorError } = await import("../src/cli/operator.ts")
+    const cli = (verb: string) => runOperator("inbox", { positional: ["inbox", verb, String(item)], flag: () => undefined, has: () => false }, c.dir)
+    const log = console.log
+    console.log = () => {}
+    try {
+      // the ticket is not blocked (say it was put back in the queue by hand): refused, and the item stays open
+      await expect(cli("reject")).rejects.toBeInstanceOf(OperatorError)
+      store = Store.open(c.dir)
+      expect(store.inboxItem(item)?.status).toBe("open")
+      store.transition(id, "blocked", "kernel", "outcome unknown: deploy.staging: lost", now)
+      store.close()
+      await cli("reject")
+    } finally {
+      console.log = log
+    }
+    store = Store.open(c.dir)
+    expect(store.inboxItem(item)?.status).toBe("rejected")
+    expect(store.ticket(id)?.state).toBe("declined")
+    expect(store.ticket(id)?.note).toContain("nothing is re-run")
+    store.close()
+  })
+
+  test("a timeout kills the command's whole process group and settles even if a child kept the pipes", async () => {
+    const dir = NodePath.join(base, "pgroup")
+    mkdirSync(dir)
+    const started = Date.now()
+    const r = await runExecutor({ executor: { command: ["sh", "-c", "sleep 30 & sleep 30 & wait"], timeout: "1s" }, action: "x", cwd: dir, placeholders: { ticket: "T" }, env: { PATH: process.env["PATH"] } })
+    expect(Date.now() - started).toBeLessThan(5_000)
+    expect(r.ok).toBe(false)
+    expect(r.unknown).toBe(true)
+    // the command itself exits 0 at once but leaves work running past the deadline: still unknown, never success
+    const early = await runExecutor({ executor: { command: ["sh", "-c", "sleep 3 & exit 0"], timeout: "1s" }, action: "x", cwd: dir, placeholders: { ticket: "T" }, env: { PATH: process.env["PATH"] } })
+    expect(early.ok).toBe(false)
+    expect(early.unknown).toBe(true)
+  })
+})
+
+describe("canary noise floor (D86)", () => {
+  const canary = async (name: string, release: Record<string, unknown> = {}) => {
+    const c = company(name, (raw) => {
+      ;(raw["projects"] as Array<Record<string, unknown>>).splice(1)
+      ;(raw["budget"] as Record<string, unknown>)["shares"] = { engineering: 0.3, research: 0.05, gtm: 0.05, operations: 0.05, verification: 0.2, executive: 0.25, improvement: 0.1 }
+      ;((raw["policy"] as Record<string, Record<string, unknown>>)["executive"] as Record<string, unknown>)["canary_rate"] = 0.01
+      ;(raw["policy"] as Record<string, Record<string, unknown>>)["release"] = { day: "sat", at: "12:00", min_gain: 0.02, max_regression: 0.01, watch: "1h", canary_traffic: 0.5, ...release } // default floor
+    }, "full")
+    const roleFile = "org/roles/engineering-senior.md"
+    git(c.dir, "checkout", "-q", "-b", "imp/IMP-X", "r0")
+    writeFileSync(NodePath.join(c.dir, roleFile), `${readFileSync(NodePath.join(c.dir, roleFile), "utf8")}\nA CHANGE\n`)
+    git(c.dir, "add", "-A")
+    git(c.dir, "commit", "-qm", "role change")
+    git(c.dir, "checkout", "-q", "main")
+    const clock = { now: Date.UTC(2026, 9, 26, 9) }
+    const { sup, store, sent } = makeSupervisor(c, new FakeEngine({ ceo: async () => ({}) }), clock, new FakeEngine({}, 0.1, "codex"))
+    await sup.boot()
+    const imp = store.createTicket({ department: "improvement", title: "Role change", goal: "g", why: "w", done_criteria: ["d"], opened_by: "operator", project: null, state: "verified", action: "improvement.merge", now: clock.now }).id
+    store.db.run("UPDATE tickets SET branch = ? WHERE id = ?", ["imp/IMP-X", imp])
+    store.addVerdict({ ticket_id: imp, session_id: "v", at: clock.now, verdict: "approve", overall: 4, confidence: "high", payload: {} })
+    await cycle(sup, clock, 1)
+    expect(store.candidate()?.tag).toBe("rc-1")
+    /** `n` finished production sessions on `release`, each with a verdict. */
+    const work = (release: string, n: number, verdict: "approve" | "reject") => {
+      for (let i = 0; i < n; i++) {
+        const t = store.createTicket({ department: "engineering", title: `w ${release} ${i}`, goal: "g", why: "w", done_criteria: ["d"], opened_by: "operator", project: "app", state: "done", action: "code.merge.app", now: clock.now })
+        const sid = `s-${release}-${t.id}`
+        store.startSession({ id: sid, ticket_id: t.id, parent_session: null, role: "engineering-senior", kind: "department", department: "engineering", engine: "claude", model: "m", worktree: null, started_at: clock.now, boot_id: "b", release })
+        store.endSession(sid, { ended_at: clock.now + 1, status: "ok", turns: 1, cost_usd: 0, cost_source: "sdk", report: null })
+        store.addVerdict({ ticket_id: t.id, session_id: `v-${sid}`, at: clock.now + 1, verdict, overall: verdict === "approve" ? 4 : 1, confidence: "high", payload: {} })
+      }
+    }
+    return { c, clock, sup, store, sent, work }
+  }
+
+  test("the defaults are a floor of 3 candidate sessions and 2 verdicts", () => {
+    expect(CANARY_SAMPLE_DEFAULTS).toEqual({ min_sessions: 3, min_verdicts: 2 })
+  })
+
+  test("too little evidence at the end of the watch: not promoted; the watch is extended once, then the Operator decides (approve promotes)", async () => {
+    const { clock, sup, store, sent, work } = await canary("floor-approve")
+    work("rc-1", 2, "approve")
+    const rc = store.candidate()!
+    clock.now = rc.watch_until
+    await cycle(sup, clock, 1)
+    expect(store.candidate()?.tag).toBe("rc-1") // not promoted on two sessions
+    expect(store.candidate()!.watch_until).toBeGreaterThan(rc.watch_until)
+    expect(sent.some((s) => s.includes("watch extended once"))).toBe(true)
+    expect(store.inboxOpen().some((i) => i.kind === "canary_sample")).toBe(false)
+    clock.now = store.candidate()!.watch_until
+    await cycle(sup, clock, 1)
+    const ask = store.inboxOpen().filter((i) => i.kind === "canary_sample")
+    expect(ask.length).toBe(1)
+    expect(ask[0]!.payload["tag"]).toBe("rc-1")
+    expect(store.candidate()?.tag).toBe("rc-1") // still not promoted, and not extended again
+    await cycle(sup, clock, 2)
+    expect(store.inboxOpen().filter((i) => i.kind === "canary_sample").length).toBe(1) // one question, not one per tick
+    store.inboxDecide(ask[0]!.id, "approved", "looks fine", clock.now)
+    await cycle(sup, clock, 1)
+    expect(store.candidate()).toBeUndefined()
+    expect(store.latestRelease()?.tag).toBe("r1")
+    await sup.stop()
+  })
+
+  test("rejected (or expired) below the floor: the candidate is withdrawn, never promoted", async () => {
+    const { c, clock, sup, store, work } = await canary("floor-reject")
+    work("rc-1", 1, "approve")
+    clock.now = store.candidate()!.watch_until
+    await cycle(sup, clock, 1)
+    clock.now = store.candidate()!.watch_until
+    await cycle(sup, clock, 1)
+    const ask = store.inboxOpen().find((i) => i.kind === "canary_sample")!
+    store.inboxDecide(ask.id, "rejected", "not enough", clock.now)
+    await cycle(sup, clock, 1)
+    expect(store.candidate()).toBeUndefined()
+    expect(store.db.query<{ status: string }, []>("SELECT status FROM releases WHERE tag = 'rc-1'").get()?.status).toBe("withdrawn")
+    expect(git(c.dir, "tag", "--list", "r*").split("\n")).not.toContain("r1")
+    await sup.stop()
+  })
+
+  const askAndLetExpire = async (ctx: Awaited<ReturnType<typeof canary>>) => {
+    const { clock, sup, store } = ctx
+    clock.now = store.candidate()!.watch_until
+    await cycle(sup, clock, 1) // extended
+    clock.now = store.candidate()!.watch_until
+    await cycle(sup, clock, 1) // asked
+    expect(store.inboxOpen().some((i) => i.kind === "canary_sample")).toBe(true)
+    clock.now += 49 * 3_600_000 // unanswered past policy.inbox.timeout (48h)
+    await cycle(sup, clock, 1) // expired
+  }
+
+  test("on_sample_timeout: promote ships the candidate when the question goes unanswered", async () => {
+    const ctx = await canary("floor-timeout-promote", { on_sample_timeout: "promote" })
+    await askAndLetExpire(ctx)
+    await cycle(ctx.sup, ctx.clock, 1)
+    expect(ctx.store.candidate()).toBeUndefined()
+    expect(ctx.store.latestRelease()?.tag).toBe("r1")
+    await ctx.sup.stop()
+  })
+
+  test("on_sample_timeout: hold keeps the candidate and asks again; once the floor is met the rates decide", async () => {
+    const ctx = await canary("floor-timeout-hold", { on_sample_timeout: "hold" })
+    await askAndLetExpire(ctx)
+    await cycle(ctx.sup, ctx.clock, 1)
+    expect(ctx.store.candidate()?.tag).toBe("rc-1") // still a candidate
+    const again = ctx.store.inboxOpen().filter((i) => i.kind === "canary_sample")
+    expect(again.length).toBe(1) // asked again, once
+    expect(String(again[0]!.payload["note"])).toContain("asked again")
+    ctx.store.inboxDecide(again[0]!.id, "expired", "unanswered", ctx.clock.now)
+    ctx.work("rc-1", 3, "approve") // the evidence arrived meanwhile
+    ctx.work("r0", 2, "approve")
+    await cycle(ctx.sup, ctx.clock, 1)
+    expect(ctx.store.latestRelease()?.tag).toBe("r1") // the floor is met: decided on the rates, not asked again
+    await ctx.sup.stop()
+  })
+
+  test("the default on_sample_timeout is withdraw, and an explicit rejection withdraws under every setting", async () => {
+    const cfg = company("floor-timeout-default").config
+    expect(cfg.policy.release.on_sample_timeout).toBeUndefined()
+    const ctx = await canary("floor-reject-promote-policy", { on_sample_timeout: "promote" })
+    ctx.clock.now = ctx.store.candidate()!.watch_until
+    await cycle(ctx.sup, ctx.clock, 1)
+    ctx.clock.now = ctx.store.candidate()!.watch_until
+    await cycle(ctx.sup, ctx.clock, 1)
+    ctx.store.inboxDecide(ctx.store.inboxOpen().find((i) => i.kind === "canary_sample")!.id, "rejected", "no", ctx.clock.now)
+    await cycle(ctx.sup, ctx.clock, 1)
+    expect(ctx.store.candidate()).toBeUndefined()
+    expect(git(ctx.c.dir, "tag", "--list", "r*").split("\n")).not.toContain("r1")
+    await ctx.sup.stop()
+  })
+
+  test("canarySampleStats counts extensions and how the questions ended, and the weekly digest says so", async () => {
+    const ctx = await canary("floor-stats")
+    await askAndLetExpire(ctx)
+    await cycle(ctx.sup, ctx.clock, 1) // default withdraw
+    const stats = ctx.store.canarySampleStats(0)
+    expect(stats).toEqual({ extended: 1, asked: 1, approved: 0, rejected: 0, expired: 1, open: 0 })
+    const { renderDigest } = await import("../src/supervisor/digest.ts")
+    expect(renderDigest(ctx.c.config, ctx.store, ctx.clock.now, "r0", [])).toContain("Canary sample floor (30 days): watch extended 1×; asked the Operator 1× (approved 0, rejected 0, expired unanswered 1, open 0)")
+    await ctx.sup.stop()
+  })
+
+  test("an unanswered question expires into a withdrawal; once asked, a sample that later reaches the floor does not override it", async () => {
+    const { c, clock, sup, store, work } = await canary("floor-expire")
+    clock.now = store.candidate()!.watch_until
+    await cycle(sup, clock, 1)
+    clock.now = store.candidate()!.watch_until
+    await cycle(sup, clock, 1)
+    expect(store.inboxOpen().some((i) => i.kind === "canary_sample")).toBe(true)
+    work("rc-1", 5, "approve") // the evidence arrives after the question: the Operator's answer still governs
+    await cycle(sup, clock, 1)
+    expect(store.candidate()?.tag).toBe("rc-1")
+    clock.now += 49 * 3_600_000 // past policy.inbox.timeout (48h)
+    await cycle(sup, clock, 1)
+    expect(store.inboxLatestFor("canary_sample", "rc-1")?.status).toBe("expired")
+    await cycle(sup, clock, 1)
+    expect(store.candidate()).toBeUndefined()
+    expect(store.db.query<{ status: string }, []>("SELECT status FROM releases WHERE tag = 'rc-1'").get()?.status).toBe("withdrawn")
+    expect(git(c.dir, "tag", "--list", "r*").split("\n")).not.toContain("r1")
+    await sup.stop()
+  })
+
+  test("replay-gate sessions on the candidate's tag are not canary traffic and do not fill the floor", async () => {
+    const { clock, sup, store, sent, work } = await canary("floor-replays")
+    work("rc-1", 2, "approve")
+    for (const n of [1, 2]) {
+      const sid = `rp-ENG-${n}-x`
+      store.startSession({ id: sid, ticket_id: `ENG-${n}`, parent_session: null, role: "verification-senior", kind: "verification", department: "improvement", engine: "codex", model: "m", worktree: null, started_at: clock.now, boot_id: "b", release: "rc-1" })
+      store.endSession(sid, { ended_at: clock.now + 1, status: "ok", turns: 1, cost_usd: 0, cost_source: "sdk", report: null })
+    }
+    clock.now = store.candidate()!.watch_until
+    await cycle(sup, clock, 1)
+    expect(store.candidate()?.tag).toBe("rc-1")
+    expect(sent.some((s) => s.includes("watch extended once") && s.includes("2 candidate session(s)"))).toBe(true)
+    await sup.stop()
+  })
+
+  test("a candidate settled another way (a demotion) closes its open question", async () => {
+    const { clock, sup, store } = await canary("floor-superseded")
+    clock.now = store.candidate()!.watch_until
+    await cycle(sup, clock, 1)
+    clock.now = store.candidate()!.watch_until
+    await cycle(sup, clock, 1)
+    const ask = store.inboxOpen().find((i) => i.kind === "canary_sample")!
+    store.demote("code.merge.app", "agreement fell", clock.now)
+    await cycle(sup, clock, 1)
+    expect(store.candidate()).toBeUndefined()
+    expect(store.inboxItem(ask.id)?.status).toBe("expired")
+    expect(store.inboxOpen().some((i) => i.kind === "canary_sample")).toBe(false)
+    await sup.stop()
+  })
+
+  test("a sample at the floor is judged on the rates at the first watch end: no extension, no question", async () => {
+    const { clock, sup, store, sent, work } = await canary("floor-met")
+    work("rc-1", 3, "approve")
+    work("r0", 3, "approve")
+    clock.now = store.candidate()!.watch_until
+    await cycle(sup, clock, 1)
+    expect(store.latestRelease()?.tag).toBe("r1")
+    expect(sent.some((s) => s.includes("watch extended once"))).toBe(false)
+    expect(store.inboxOpen().some((i) => i.kind === "canary_sample")).toBe(false)
+    await sup.stop()
+  })
+
+  test("a sample at the floor that regresses is withdrawn", async () => {
+    const { clock, sup, store, work } = await canary("floor-regress")
+    work("rc-1", 5, "reject")
+    work("r0", 3, "approve")
+    clock.now = store.candidate()!.watch_until
+    await cycle(sup, clock, 1)
+    expect(store.candidate()).toBeUndefined()
+    expect(store.db.query<{ status: string }, []>("SELECT status FROM releases WHERE tag = 'rc-1'").get()?.status).toBe("withdrawn")
+    await sup.stop()
+  })
+
+  test("the floor is configurable per company", async () => {
+    const raw = Bun.YAML.parse(readFileSync(NodePath.join(company("floor-config").dir, "company.yaml"), "utf8")) as Record<string, unknown>
+    ;(raw["policy"] as Record<string, Record<string, unknown>>)["release"] = { day: "sat", at: "12:00", min_gain: 0.02, max_regression: 0.01, watch: "3d", canary_traffic: 0.2, min_sessions: 20, min_verdicts: 10 }
+    const config = Schema.decodeUnknownSync(CompanyConfig)(raw)
+    expect(config.policy.release).toMatchObject({ min_sessions: 20, min_verdicts: 10 })
+    ;(raw["policy"] as Record<string, Record<string, unknown>>)["release"] = { day: "sat", at: "12:00", min_gain: 0.02, max_regression: 0.01, watch: "3d", canary_traffic: 0.2, min_sessions: 0 }
+    expect(() => Schema.decodeUnknownSync(CompanyConfig)(raw)).toThrow()
+  })
+})
+
+
+describe("review follow-ups (D85/D86)", () => {
+  const mk = (store: Store, title: string, at: number) =>
+    store.createTicket({ department: "engineering", title, goal: "g", why: "w", done_criteria: ["d"], opened_by: "operator", project: "app", state: "triaged", action: "deploy.staging", now: at }).id
+
+  test("an unblock closes the ticket's open blocked item; a stale blocked item that expires later does not abort the tick", async () => {
+    const c = company("stale-blocked")
+    const clock = { now: Date.UTC(2026, 9, 26, 9) }
+    const { sup, store } = makeSupervisor(c, new FakeEngine({ ceo: async () => ({}) }), clock)
+    await sup.boot()
+    const a = mk(store, "A", clock.now)
+    store.transition(a, "blocked", "kernel", "stuck", clock.now)
+    const stale = store.inboxAdd("blocked", a, { title: `${a} is blocked` }, clock.now)
+    // the CEO (or anyone) releases it: its open blocked item is superseded, not left to expire later
+    store.transition(a, "triaged", "ceo", "go on", clock.now)
+    expect(store.inboxItem(stale)?.status).toBe("expired")
+
+    // the old item left open anyway (written by an older build) and the ticket later blocked as an unknown outcome:
+    // its expiry must not throw HeldForRecovery and skip the rest of the tick
+    store.db.run("UPDATE inbox SET status = 'open', decided_at = NULL WHERE id = ?", [stale])
+    const run = store.beginAction({ at: clock.now, actor: "kernel", ticket_id: a, action: "deploy.staging", effective_tier: "T1", forced_by: [], inputs: {} })
+    if (!("id" in run)) throw new Error("claim refused")
+    store.markActionUnknown(run.id, clock.now, "lost")
+    store.db.run("UPDATE tickets SET state = 'blocked' WHERE id = ?", [a])
+    store.inboxAdd("recovery", a, { title: "Outcome unknown", action: "deploy.staging", action_log: run.id }, clock.now, "urgent")
+    const b = mk(store, "B", clock.now)
+    store.transition(b, "blocked", "kernel", "stuck", clock.now)
+    const second = store.inboxAdd("blocked", b, { title: `${b} is blocked` }, clock.now)
+    clock.now += 49 * 3_600_000
+    await sup.tick() // must not throw, and must still reach item `second`
+    expect(store.inboxItem(stale)?.status).toBe("expired")
+    expect(store.ticket(a)?.state).toBe("blocked") // held for its recovery item
+    expect(store.inboxItem(second)?.status).toBe("expired")
+    expect(store.ticket(b)?.state).toBe("declined")
+    await sup.stop()
+  })
+
+  const execCompany = (name: string, script: string, opts: { timeout?: string; postcheck?: Array<string> } = {}) => {
+    const c = company(name, (raw) => {
+      ;(raw["actions"] as Array<Record<string, unknown>>).push({ id: "deploy.staging", department: "engineering", tier: "T1", evaluator: "engineering.md#app", gates: ["verification-approved", "rollback-tested"], graduation: "auto" })
+      raw["executors"] = { "deploy.staging": { command: ["sh", "./deploy.sh"], cwd: "project", undo: ["sh", "./undo.sh"], timeout: opts.timeout ?? "1m", ...(opts.postcheck ? { postcheck: opts.postcheck } : {}) } }
+    })
+    writeFileSync(NodePath.join(c.app, "deploy.sh"), script)
+    git(c.app, "add", "-A")
+    git(c.app, "commit", "-qm", "deploy script")
+    return c
+  }
+  const engine = () => new FakeEngine({ ceo: async () => ({}), senior: seniorScript("deploy.staging"), verification: async ({ spec, call }) => {
+    const verdict = { ticket: spec.ticketId, rubric: "engineering.md#app", verdict: "approve", scores: { correctness: 4 }, overall: 4, confidence: "high", failures: [], gates: [{ gate: "rollback-tested", passed: true, evidence: "fixture" }], summary: "verified" }
+    await call("verdict_submit", { verdict })
+    return { report: verdict }
+  } })
+
+  test("the idempotency key is the same on every retry of an action on a ticket; the attempt number is a separate variable", async () => {
+    const dir = NodePath.join(base, "idem-env")
+    mkdirSync(dir)
+    writeFileSync(NodePath.join(dir, "d.sh"), '#!/bin/sh\necho "$HOLDCO_IDEMPOTENCY_KEY $HOLDCO_ATTEMPT" >> seen.txt\n[ "$HOLDCO_ATTEMPT" = 1 ] && exit 3\nexit 0\n')
+    const store = new Store(":memory:")
+    const seen: Array<string> = []
+    for (let i = 0; i < 2; i++) {
+      const begun = store.beginAction({ at: i, actor: "kernel", ticket_id: "ENG-9", action: "deploy.staging", effective_tier: "T1", forced_by: [], inputs: {} })
+      if (!("id" in begun)) throw new Error("claim refused")
+      const r = await runExecutor({ executor: { command: ["sh", "./d.sh"] }, action: "deploy.staging", cwd: dir, placeholders: { ticket: "ENG-9" }, env: { PATH: process.env["PATH"] }, idempotencyKey: begun.idem_key, attempt: begun.attempt })
+      expect(r.ok).toBe(i === 1) // the first run applied part of its work and failed; the retry succeeds
+      store.finishAction(begun.id, { at: i, outputs: r.outputs, undo: {} })
+    }
+    expect(readFileSync(NodePath.join(dir, "seen.txt"), "utf8").trim().split("\n")).toEqual(["ENG-9:deploy.staging 1", "ENG-9:deploy.staging 2"])
+  })
+
+  test("an unknown outcome keeps what the command printed, and a declared postcheck is run once and attached to the recovery item", async () => {
+    const c = execCompany("unknown-evidence", "#!/bin/sh\necho applied > applied.txt\necho partial-output\necho half-error >&2\nexec sleep 30\n", { timeout: "1s", postcheck: ["sh", "-c", "test -f applied.txt && echo present"] })
+    const clock = { now: Date.UTC(2026, 9, 26, 9) }
+    const { sup, store } = makeSupervisor(c, engine(), clock)
+    await sup.boot()
+    const id = mk(store, "Deploy", clock.now)
+    store.db.run("UPDATE tickets SET state = 'triaged' WHERE id = ?", [id])
+    await cycle(sup, clock, 8)
+    const row = store.actionsSince(0).find((a) => a.action === "deploy.staging")!
+    expect(store.actionLog(row.id)?.status).toBe("unknown") // a probe is evidence, not proof: the status stays unknown
+    const out = store.actionOutputs(row.id) as { stdout: string; stderr: string; unknown: string; postcheck: { exit: number; stdout: string } }
+    expect(out.stdout).toContain("partial-output")
+    expect(out.stderr).toContain("half-error")
+    expect(out.unknown).toContain("killed")
+    expect(out.postcheck.exit).toBe(0)
+    expect(out.postcheck.stdout).toContain("present")
+    const item = store.inboxOpen().find((i) => i.kind === "recovery" && i.ticket_id === id)!
+    expect(String(item.payload["postcheck"])).toContain("passed")
+    expect(String(item.payload["stdout_tail"])).toContain("partial-output")
+    expect(store.ticket(id)?.state).toBe("blocked")
+    await sup.stop()
+  })
+
+  test("a graceful stop waits for a running executor: one that finishes within the grace is not unknown", async () => {
+    const c = execCompany("stop-waits", "#!/bin/sh\nsleep 1\necho '{\"previous\":\"v1\"}'\n")
+    const clock = { now: Date.UTC(2026, 9, 26, 9) }
+    const { sup, store } = makeSupervisor(c, engine(), clock)
+    await sup.boot()
+    const id = mk(store, "Deploy", clock.now)
+    for (let i = 0; i < 40 && store.actionsSince(0).length === 0; i++) {
+      clock.now += 60_000
+      await sup.tick()
+      await Bun.sleep(100)
+    }
+    expect(store.startedActions().length).toBe(1) // running right now
+    await sup.stop() // waits (default grace 30s) for the 1 s command
+    const row = store.actionsSince(0).find((a) => a.action === "deploy.staging")!
+    expect(store.actionLog(row.id)?.status).toBe("done")
+    expect(store.ticket(id)?.state).toBe("done")
+    expect(store.inboxOpen().some((i) => i.kind === "recovery")).toBe(false)
+  })
+
+  test("when the grace expires, stop kills the executor's process group and only then is the outcome unknown", async () => {
+    const marker = NodePath.join(base, "stop-kill-marker.txt")
+    const c = execCompany("stop-kills", `#!/bin/sh\necho started > ${marker}\n(sleep 3; echo late >> ${marker}) &\nwait\n`, {})
+    const raw = Bun.YAML.parse(readFileSync(NodePath.join(c.dir, "company.yaml"), "utf8")) as Record<string, unknown>
+    ;(raw["runtime"] as Record<string, unknown>)["executor_stop_grace"] = "1s"
+    const config = Schema.decodeUnknownSync(CompanyConfig)(raw)
+    const clock = { now: Date.UTC(2026, 9, 26, 9) }
+    const { sup, store } = makeSupervisor({ ...c, config }, engine(), clock)
+    await sup.boot()
+    const id = mk(store, "Deploy", clock.now)
+    for (let i = 0; i < 40 && !existsSync(marker); i++) {
+      clock.now += 60_000
+      await sup.tick()
+      await Bun.sleep(100)
+    }
+    const started = Date.now()
+    await sup.stop()
+    expect(Date.now() - started).toBeLessThan(10_000) // 1 s grace, not the command's full run
+    const row = store.actionsSince(0).find((a) => a.action === "deploy.staging")!
+    expect(store.actionLog(row.id)?.status).toBe("unknown")
+    expect(store.actionOutputs(row.id)["unknown"]).toContain("supervisor stopped")
+    expect(store.ticket(id)?.state).toBe("blocked")
+    expect(store.inboxOpen().some((i) => i.kind === "recovery" && i.ticket_id === id)).toBe(true)
+    await Bun.sleep(4_000) // the background subshell (not the script's own shell) would have written by now
+    expect(readFileSync(marker, "utf8")).not.toContain("late") // the whole group was killed, not left running
+  }, 30_000)
+
+  test("a late abort never signals the process group of a run that already ended", async () => {
+    const ac = new AbortController()
+    const real = process.kill
+    const calls: Array<number> = []
+    process.kill = ((pid: number) => { calls.push(pid); return true }) as typeof process.kill
+    try {
+      const r = await runAsync(["true"], base, { PATH: process.env["PATH"] ?? "" }, 5_000, ac.signal)
+      expect(r.status).toBe(0)
+      ac.abort()
+      await Bun.sleep(50)
+    } finally {
+      process.kill = real
+    }
+    expect(calls).toEqual([])
+  })
+
+  test("what a killed command printed is checkpointed on its row before the postcheck runs, and boot recovery keeps it", async () => {
+    const store = new Store(":memory:")
+    const begun = store.beginAction({ at: 1, actor: "kernel", ticket_id: "ENG-9", action: "deploy.staging", effective_tier: "T1", forced_by: [], inputs: {} })
+    if (!("id" in begun)) throw new Error("claim refused")
+    expect(store.checkpointAction(begun.id, { stdout: "half-done", stderr: "e" })).toBe(true)
+    expect(store.actionLog(begun.id)?.status).toBe("started") // still started: a crash now reaches boot recovery with the evidence
+    store.markActionUnknown(begun.id, 2, "r".repeat(5_000), store.actionOutputs(begun.id))
+    const out = store.actionOutputs(begun.id) as { stdout: string; unknown: string }
+    expect(out.stdout).toBe("half-done")
+    expect(out.unknown.length).toBe(1_000)
+    expect(store.checkpointAction(begun.id, { stdout: "late" })).toBe(false) // only a started row can be checkpointed
+  })
+
+  test("the canary stats count only unanswered questions as expired", () => {
+    const store = new Store(":memory:")
+    const a = store.inboxAdd("canary_sample", null, { title: "t", tag: "rc-1" }, 10)
+    const b = store.inboxAdd("canary_sample", null, { title: "t", tag: "rc-2" }, 10)
+    store.inboxDecide(a, "expired", "no answer within the timeout: policy.release.on_sample_timeout is withdraw", 20)
+    store.inboxDecide(b, "expired", "superseded: the candidate was promoted to r3", 20)
+    const c = store.canarySampleStats(0)
+    expect(c.asked).toBe(2)
+    expect(c.expired).toBe(1)
+  })
+
+  test("a postcheck killed at the shutdown deadline is an unknown outcome, not a failed postcheck", async () => {
+    const dir = NodePath.join(base, "pc-abort")
+    mkdirSync(dir)
+    writeFileSync(NodePath.join(dir, "d.sh"), "#!/bin/sh\necho '{\"previous\":\"v1\"}'\n")
+    const ac = new AbortController()
+    const run = runExecutor({ executor: { command: ["sh", "./d.sh"], postcheck: ["sh", "-c", "sleep 20"], undo: ["sh", "./undo.sh"] }, action: "deploy.staging", cwd: dir, placeholders: { ticket: "ENG-9" }, env: { PATH: process.env["PATH"] }, signal: ac.signal })
+    setTimeout(() => ac.abort(), 500)
+    const r = await run
+    expect(r.ok).toBe(false)
+    expect(r.unknown).toBe(true)
+    expect(r.applied).toBeUndefined()
+    expect(r.undo["kind"]).toBe("executor-undo")
+    const store = new Store(":memory:")
+    const begun = store.beginAction({ at: 1, actor: "kernel", ticket_id: "ENG-9", action: "deploy.staging", effective_tier: "T1", forced_by: [], inputs: {} })
+    if (!("id" in begun)) throw new Error("claim refused")
+    store.markActionUnknown(begun.id, 2, r.error ?? "killed", r.outputs, r.undo)
+    expect(JSON.parse(store.actionLog(begun.id)!.undo)["kind"]).toBe("executor-undo")
+  })
+
+  test("a postcheck that never returned a verdict is reported as inconclusive, not as missing effect", async () => {
+    const c = execCompany("unknown-inconclusive", "#!/bin/sh\necho started\nexec sleep 30\n", { timeout: "1s", postcheck: ["definitely-not-a-binary-d85"] })
+    const clock = { now: Date.UTC(2026, 9, 26, 9) }
+    const { sup, store } = makeSupervisor(c, engine(), clock)
+    await sup.boot()
+    const id = mk(store, "Deploy", clock.now)
+    store.db.run("UPDATE tickets SET state = 'triaged' WHERE id = ?", [id])
+    await cycle(sup, clock, 8)
+    const item = store.inboxOpen().find((i) => i.kind === "recovery" && i.ticket_id === id)!
+    expect(String(item.payload["postcheck"])).toContain("inconclusive")
+    expect(String(item.payload["postcheck"])).not.toContain("missing")
+    await sup.stop()
+  })
+
+  test("canarySampleStats counts a watch by when it was extended, not when the candidate was created", () => {
+    const store = new Store(":memory:")
+    const oldAt = Date.UTC(2026, 8, 1)
+    const recent = Date.UTC(2026, 9, 26)
+    store.addRelease("rc-old", oldAt, oldAt + 86_400_000, "c", "candidate")
+    store.setMeta("canary_extended:rc-old", String(recent))
+    store.addRelease("rc-stale", oldAt, oldAt + 86_400_000, "c", "candidate")
+    store.setMeta("canary_extended:rc-stale", String(oldAt))
+    const since = Date.UTC(2026, 9, 1)
+    expect(store.canarySampleStats(since).extended).toBe(1) // rc-old extended inside the window, even though it was created earlier
   })
 })

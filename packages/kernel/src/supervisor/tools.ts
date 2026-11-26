@@ -19,6 +19,7 @@ import { CLAIMABLE_ENDS, END_KINDS, type EndKind, LinkError, type Store, type Ti
 import { effectiveTier, UnknownAction } from "../policy/tiers.ts"
 import { projectProgress, setProjectStatus } from "./roadmap.ts"
 import { RESERVED_T3_NAMESPACES } from "../config/company.ts"
+import { OUTCOME_UNKNOWN } from "./executors.ts"
 
 export interface SessionBinding {
   readonly sessionId: string
@@ -333,6 +334,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
     run: (a, b, host) => {
       const t = host.store.ticket(String(a["id"]))
       if (t?.note?.startsWith("postcheck failed after action applied:")) throw new ToolError("postcheck recovery requires the Operator; do not automatically retry an applied action")
+      if (t?.note?.startsWith(OUTCOME_UNKNOWN)) throw new ToolError("an action whose outcome is unknown is decided by the Operator; it is never re-run automatically (D85)")
       const kind = a["kind"] === undefined ? undefined : String(a["kind"])
       if (kind !== undefined && !(END_KINDS as ReadonlyArray<string>).includes(kind)) throw new ToolError(`kind is one of: ${END_KINDS.join(", ")}`)
       try {

@@ -23,7 +23,15 @@ export interface ExecResult {
   readonly pending?: boolean
   /** External command succeeded but its postcondition failed; preserve undo and do not auto-retry. */
   readonly applied?: boolean
+  /**
+   * D85: the command was killed (timeout or signal) before it reported, so it may or may not have taken effect.
+   * The kernel never re-runs it; the Operator decides.
+   */
+  readonly unknown?: boolean
 }
+
+/** D85: how a ticket's note starts when the kernel does not know whether its external action took effect. */
+export const OUTCOME_UNKNOWN = "outcome unknown:"
 
 /** Kernel git: its own identity and no signing, whatever ~/.gitconfig says (a signing key would hang on pinentry). */
 const GIT_ID = ["-c", "user.name=holdco", "-c", "user.email=holdco@localhost", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"]
@@ -212,28 +220,68 @@ export interface RunExecutorOptions {
   readonly cwd: string
   readonly placeholders: Placeholders
   readonly env: Record<string, string | undefined>
+  /** D85: stable per (ticket, action), passed to the command and the postcheck as HOLDCO_IDEMPOTENCY_KEY. */
+  readonly idempotencyKey?: string
+  /** D85: which run of that action on the ticket this is (1, 2, …), passed as HOLDCO_ATTEMPT. */
+  readonly attempt?: number
+  /** Aborted when the supervisor stops and its grace period for running executors has passed: the command's process group is killed. */
+  readonly signal?: AbortSignal
+  /** Called with what the killed command printed, before the postcheck runs, so it can be persisted while the probe is still going. */
+  readonly onUnknown?: (outputs: Record<string, unknown>) => void
 }
 
 interface Ran { readonly status: number | null; readonly stdout: string; readonly stderr: string; readonly error?: string }
 
-/** Run argv without blocking the supervisor's event loop; a timeout kills the process. */
-export const runAsync = (argv: ReadonlyArray<string>, cwd: string, env: Record<string, string>, timeoutMs: number): Promise<Ran> =>
+/** The one postcheck run after an unknown outcome may take at most this long. */
+const POSTCHECK_AFTER_UNKNOWN_MS = 2 * 60_000
+
+/** After a timeout kill, how long to wait for the pipes to close before giving up on them. */
+const KILL_GRACE_MS = 5_000
+
+/**
+ * Run argv without blocking the supervisor's event loop. A timeout kills the command's whole process group (the
+ * command runs as its own group leader), and the result is settled within a grace period even if a descendant that
+ * escaped the group still holds the output pipes open.
+ */
+export const runAsync = (argv: ReadonlyArray<string>, cwd: string, env: Record<string, string>, timeoutMs: number, signal?: AbortSignal): Promise<Ran> =>
   new Promise((resolve) => {
     const [cmd, ...args] = argv as [string, ...Array<string>]
     let stdout = ""
     let stderr = ""
     let child: ReturnType<typeof spawn>
     try {
-      child = spawn(cmd, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] })
+      child = spawn(cmd, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" })
     } catch (e) {
       resolve({ status: null, stdout, stderr, error: String(e) })
       return
     }
-    const timer = setTimeout(() => { stderr += `\nkilled after ${timeoutMs} ms`; child.kill("SIGKILL") }, timeoutMs)
+    let grace: ReturnType<typeof setTimeout> | undefined
+    let offAbort: (() => void) | undefined
+    // once the deadline passed, the run timed out whatever exit code arrives later (the group leader may have exited
+    // 0 before the kill while a descendant was still working): no exit code, so the caller sees an unknown outcome
+    let timedOut = false
+    const done = (r: Ran) => { offAbort?.(); clearTimeout(timer); if (grace) clearTimeout(grace); resolve(timedOut && r.error === undefined ? { ...r, status: null } : r) }
+    const kill = (why: string) => {
+      if (timedOut) return
+      timedOut = true
+      stderr += `\n${why}`
+      try { if (child.pid !== undefined && process.platform !== "win32") process.kill(-child.pid, "SIGKILL"); else child.kill("SIGKILL") } catch { child.kill("SIGKILL") }
+      grace = setTimeout(() => done({ status: null, stdout, stderr: `${stderr}\noutput pipes still open ${KILL_GRACE_MS} ms after the kill` }), KILL_GRACE_MS)
+    }
+    const timer = setTimeout(() => kill(`killed after ${timeoutMs} ms`), timeoutMs)
+    if (signal) {
+      if (signal.aborted) kill("killed: the supervisor stopped")
+      else {
+        // removed once the run settles: a late abort must never signal the process group of a run that already ended
+        const onAbort = () => kill("killed: the supervisor stopped")
+        signal.addEventListener("abort", onAbort, { once: true })
+        offAbort = () => signal.removeEventListener("abort", onAbort)
+      }
+    }
     child.stdout?.on("data", (d: Buffer) => { stdout += d.toString() })
     child.stderr?.on("data", (d: Buffer) => { stderr += d.toString() })
-    child.on("error", (e) => { clearTimeout(timer); resolve({ status: null, stdout, stderr, error: String(e) }) })
-    child.on("close", (code) => { clearTimeout(timer); resolve({ status: code, stdout, stderr }) })
+    child.on("error", (e) => done({ status: null, stdout, stderr, error: String(e) }))
+    child.on("close", (code) => done({ status: code, stdout, stderr }))
   })
 
 /**
@@ -246,11 +294,23 @@ export const runExecutor = async (o: RunExecutorOptions): Promise<ExecResult> =>
   // Validate probe placeholders before performing an external effect.
   const check = o.executor.postcheck ? renderArgv(o.executor.postcheck, o.placeholders) : undefined
   if (typeof check === "string") return fail(check)
-  const r = await runAsync(argv, o.cwd, executorEnv(o.executor.env ?? [], o.env), durationMs(o.executor.timeout ?? "15m"))
+  const env = { ...executorEnv(o.executor.env ?? [], o.env), ...(o.idempotencyKey ? { HOLDCO_IDEMPOTENCY_KEY: o.idempotencyKey } : {}), ...(o.attempt !== undefined ? { HOLDCO_ATTEMPT: String(o.attempt) } : {}) }
+  const r = await runAsync(argv, o.cwd, env, durationMs(o.executor.timeout ?? "15m"), o.signal)
   const stdout = r.stdout
   const stderr = r.stderr + (r.error ? `\n${r.error}` : "")
   const json = stdout.split("\n").map((l) => l.trim()).filter((l) => l.startsWith("{")).map((l) => { try { return JSON.parse(l) as Record<string, unknown> } catch { return undefined } }).filter((x) => x !== undefined).at(-1)
   const outputs: Record<string, unknown> = { command: argv, exit: r.status, stdout: stdout.slice(-4000), stderr: stderr.slice(-4000), ...(json ? { result: json } : {}) }
+  // killed by the timeout or a signal (no exit code, no spawn error): it may have done part or all of its work
+  if (r.status === null && r.error === undefined) {
+    // D85: the Operator has to decide whether it took effect, so give them the probe's answer too (the status stays
+    // unknown: a probe is evidence, not proof). Not after a kill at supervisor stop: shutdown must not wait on it.
+    if (check && !o.signal?.aborted) {
+      try { o.onUnknown?.({ ...outputs, unknown: "the command was killed; its postcheck is running" }) } catch { /* the checkpoint is best effort */ }
+      const probe = await runAsync(check, o.cwd, env, Math.min(durationMs(o.executor.timeout ?? "15m"), POSTCHECK_AFTER_UNKNOWN_MS), o.signal)
+      outputs["postcheck"] = { command: check, exit: probe.status, stdout: probe.stdout.slice(-4000), stderr: (probe.stderr + (probe.error ?? "")).slice(-4000), after: "unknown outcome" }
+    }
+    return { ok: false, unknown: true, outputs, undo: {}, error: `${o.action} was killed before it reported (${stderr.trim().split("\n").at(-1) ?? "signal"})` }
+  }
   if (r.status !== 0) return { ok: false, outputs, undo: {}, error: `${o.action} exited ${r.status ?? "by signal"}: ${stderr.trim().split("\n").at(-1) ?? ""}`.trim() }
   let undo: Record<string, unknown> = {}
   if (o.executor.undo) {
@@ -259,8 +319,10 @@ export const runExecutor = async (o: RunExecutorOptions): Promise<ExecResult> =>
     undo = typeof u === "string" ? { kind: "executor-undo-unavailable", reason: u } : { kind: "executor-undo", action: o.action, argv: u, cwd: o.cwd, env: o.executor.env ?? [] }
   }
   if (check) {
-    const probe = await runAsync(check, o.cwd, executorEnv(o.executor.env ?? [], o.env), durationMs(o.executor.timeout ?? "15m"))
+    const probe = await runAsync(check, o.cwd, env, durationMs(o.executor.timeout ?? "15m"), o.signal)
     outputs["postcheck"] = { command: check, exit: probe.status, stdout: probe.stdout.slice(-4000), stderr: (probe.stderr + (probe.error ?? "")).slice(-4000) }
+    // the shutdown deadline killed the probe: nobody learned whether the effect is right, so it is an unknown outcome
+    if (probe.status === null && probe.error === undefined && o.signal?.aborted) return { ok: false, unknown: true, outputs, undo, error: `${o.action} ran, but its postcheck was killed because the supervisor stopped` }
     if (probe.status !== 0) return { ok: false, applied: true, outputs, undo, error: `postcheck exited ${probe.status ?? "by signal"}` }
   }
   return { ok: true, outputs, undo }

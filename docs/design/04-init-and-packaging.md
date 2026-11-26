@@ -133,6 +133,8 @@ ExecStartPre=%h/companies/my-co/node_modules/.bin/holdco doctor
 ExecStart=%h/companies/my-co/node_modules/.bin/holdco supervise
 Restart=always
 RestartSec=10
+KillMode=mixed
+TimeoutStopSec=90
 
 [Install]
 WantedBy=default.target

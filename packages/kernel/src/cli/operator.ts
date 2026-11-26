@@ -7,7 +7,7 @@ import { spawnSync } from "node:child_process"
 import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs"
 import * as NodePath from "node:path"
 import { Exit, Schema } from "effect"
-import { assignmentFor, authMode, CompanyConfig, type EngineId, ENGINE_IDS, ROLE_KINDS, type RoleKind, type Tier, budgetMode } from "../config/company.ts"
+import { assignmentFor, authMode, CompanyConfig, durationMs, EXECUTOR_STOP_GRACE_DEFAULT, type EngineId, ENGINE_IDS, ROLE_KINDS, type RoleKind, type Tier, budgetMode } from "../config/company.ts"
 import { defaultRoles, EXAMPLE_PRICES, formatAssignment, MODEL_DEFAULTS, MODEL_MODES, type ModelMode, parseAssignment, PRICES_CHECKED_ON } from "../config/models.ts"
 import type { Engine } from "../engine/types.ts"
 import { renderCompanyYaml } from "../scaffold/scaffold.ts"
@@ -415,11 +415,18 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
           const item = store.inboxItem(id)
           if (!item || item.status !== "open") throw new OperatorError(`inbox #${id} is not open`)
           const note = args.flag("note") ?? `${sub} by the Operator`
-          store.inboxDecide(id, sub === "approve" ? "approved" : "rejected", note, now)
+          // D85: an unknown outcome is decided and its ticket settled together, never re-run
+          if (store.isUnknownOutcomeItem(item)) {
+            let state: string
+            try { state = store.decideUnknownOutcome(id, sub === "approve" ? "approved" : "rejected", note, now) } catch (e) { throw new OperatorError(e instanceof Error ? e.message : String(e)) }
+            console.log(`#${id} ${sub}d${item.ticket_id ? `; ${item.ticket_id} is now ${state}` : ""}`)
+            return true
+          }
+          if (!store.inboxDecide(id, sub === "approve" ? "approved" : "rejected", note, now)) throw new OperatorError(`inbox #${id} was decided by someone else`)
           const t = item.ticket_id ? store.ticket(item.ticket_id) : undefined
           if (t && (item.kind === "triage" || item.kind === "blocked")) store.transition(t.id, sub === "approve" ? "triaged" : "declined", "operator", note, now, sub === "approve" ? {} : { end_kind: t.end_kind ?? "rejected" })
           if (item.kind === "graduation" && sub === "approve") await runOperator("promote", { ...args, positional: ["promote", String(item.payload["action"])] }, dir)
-          console.log(`#${id} ${sub}d${t ? `; ${t.id} is now ${store.ticket(t.id)?.state}` : ""}${["t3", "t2_objection", "manual_action"].includes(item.kind) ? " (the supervisor acts on the next tick)" : ""}`)
+          console.log(`#${id} ${sub}d${t ? `; ${t.id} is now ${store.ticket(t.id)?.state}` : ""}${["t3", "t2_objection", "manual_action", "canary_sample"].includes(item.kind) ? " (the supervisor acts on the next tick)" : ""}`)
         } else throw new OperatorError("usage: holdco inbox [list] | approve <id> [--note n] | reject <id> [--note n]")
       } finally {
         store.close()
@@ -741,6 +748,8 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
       const status = () => { const pid = pidAlive(); console.log(`${config.company.name}: supervisor ${pid ? `running (pid ${pid})` : "not running"}\ndashboard: ${dashboardUrl}\nlog: ${logFile}`); return pid }
       const waitUp = async () => { for (let i = 0; i < 120; i++) { if (pidAlive()) return true; await Bun.sleep(500) } return false } // doctor (sandbox probes, logins, usage endpoints) runs before the pid is written
       const run = (cmd: string, args: Array<string>) => spawnSync(cmd, args, { stdio: "pipe", encoding: "utf8" })
+      // D85: the service manager must give a stopping supervisor the executor grace period (plus a minute) before it kills anything
+      const stopSeconds = Math.ceil(durationMs(config.runtime.executor_stop_grace ?? EXECUTOR_STOP_GRACE_DEFAULT) / 1000) + 60
       const action = sub ?? "show"
       if (action === "logs") { spawnSync("tail", ["-n", "100", "-f", logFile], { stdio: "inherit" }); return true }
       if (action === "status") { status(); return true }
@@ -748,7 +757,7 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
         const name = `holdco-${config.company.name}`
         const unit = [
           "[Unit]", `Description=Holdco company: ${config.company.name}`, "After=network-online.target", "",
-          "[Service]", `WorkingDirectory=${dir}`, `Environment="PATH=${path}"`, `EnvironmentFile=-${envFile}`, `ExecStartPre=${q(bin)} doctor`, `ExecStart=${q(bin)} supervise`, "Restart=always", "RestartSec=10", "",
+          "[Service]", `WorkingDirectory=${dir}`, `Environment="PATH=${path}"`, `EnvironmentFile=-${envFile}`, `ExecStartPre=${q(bin)} doctor`, `ExecStart=${q(bin)} supervise`, "Restart=always", "RestartSec=10", "KillMode=mixed", `TimeoutStopSec=${stopSeconds}`, "",
           "[Install]", "WantedBy=default.target", "",
         ].join("\n")
         const out = NodePath.join(home, ".config", "systemd", "user", `${name}.service`)
@@ -776,7 +785,7 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
   <key>ProgramArguments</key><array><string>${x(bin)}</string><string>supervise</string></array>
   <key>WorkingDirectory</key><string>${x(dir)}</string>
   <key>EnvironmentVariables</key><dict><key>PATH</key><string>${x(path)}</string><key>HOME</key><string>${x(home)}</string><key>HOLDCO_CAFFEINATE</key><string>1</string></dict>
-  <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
+  <key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ExitTimeOut</key><integer>${stopSeconds}</integer>
   <key>StandardOutPath</key><string>${x(logFile)}</string>
   <key>StandardErrorPath</key><string>${x(logFile)}</string>
 </dict></plist>

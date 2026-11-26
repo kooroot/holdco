@@ -16,7 +16,7 @@ import { graduationCheck } from "../policy/graduation.ts"
 import type { Level } from "../schema/interrupts.ts"
 import { type ChatRow, statementHash, Store, type Ticket } from "../store/store.ts"
 import { clear as clearInterrupt, raise as raiseInterrupt, readControl } from "../supervisor/control.ts"
-import { undoAction } from "../supervisor/executors.ts"
+import { OUTCOME_UNKNOWN, undoAction } from "../supervisor/executors.ts"
 import { latestReleaseTag } from "../supervisor/org.ts"
 import { idleWakeMs, Supervisor, WORK_WAKE_MS } from "../supervisor/supervisor.ts"
 import { defaultBranch } from "../supervisor/worktrees.ts"
@@ -387,7 +387,12 @@ export const act = async (ctx: DashboardContext, a: Action): Promise<Record<stri
     case "inbox": {
       const item = store.inboxItem(a.id)
       if (!item || item.status !== "open") throw new ActionError(`inbox #${a.id} is not open`)
-      store.inboxDecide(a.id, a.decision, a.note ?? (a.decision === "approved" ? "approved from the dashboard" : "rejected from the dashboard"), now)
+      // D85: an unknown outcome is decided and its ticket settled together (approve = done, reject = declined), never re-run
+      if (store.isUnknownOutcomeItem(item)) {
+        try { store.decideUnknownOutcome(a.id, a.decision, a.note ?? (a.decision === "approved" ? "recovery verified by the Operator" : "declined from the dashboard"), now) } catch (e) { throw new ActionError(e instanceof Error ? e.message : String(e)) }
+        return { ok: true }
+      }
+      if (!store.inboxDecide(a.id, a.decision, a.note ?? (a.decision === "approved" ? "approved from the dashboard" : "rejected from the dashboard"), now)) throw new ActionError(`inbox #${a.id} was decided by someone else`)
       if ((item.kind === "blocked" || item.kind === "triage") && item.ticket_id) {
         const t = store.ticket(item.ticket_id)
         if (t && (t.state === "blocked" || t.state === "new")) store.transition(t.id, a.decision === "approved" ? "triaged" : "declined", "operator", a.note ?? `${a.decision} from the dashboard`, now, a.decision === "approved" ? {} : { end_kind: t.end_kind ?? "rejected" })
@@ -400,7 +405,9 @@ export const act = async (ctx: DashboardContext, a: Action): Promise<Record<stri
         if (t && t.state === "blocked") {
           if (a.decision === "approved") store.transition(t.id, "done", "operator", a.note ?? "recovery verified by the Operator", now)
           else {
-            const last = store.actionsSince(0).filter((x) => x.ticket_id === t.id).sort((x, y) => y.at - x.at)[0]
+            // the item names its action-log row (D85); older items fall back to the ticket's latest row
+            const named = typeof item.payload["action_log"] === "number" ? store.actionLog(item.payload["action_log"]) : undefined
+            const last = named ?? store.actionsSince(0).filter((x) => x.ticket_id === t.id).sort((x, y) => y.at - x.at || y.id - x.id)[0]
             const log = last ? store.actionLog(last.id) : undefined
             const undoable = (() => { try { return log !== undefined && !log.rolled_back && Object.keys(JSON.parse(log.undo) as object).length > 0 } catch { return false } })()
             if (log && undoable) {
@@ -413,7 +420,7 @@ export const act = async (ctx: DashboardContext, a: Action): Promise<Record<stri
               store.transition(t.id, "rolled_back", "operator", a.note ?? "rolled back after a failed postcheck", now)
               return r
             }
-            store.transition(t.id, "declined", "operator", a.note ?? "declined after a failed postcheck (no undo available)", now)
+            store.transition(t.id, "declined", "operator", a.note ?? (t.note?.startsWith(OUTCOME_UNKNOWN) ? "declined: the outcome was unknown and nothing is re-run" : "declined after a failed postcheck (no undo available)"), now)
           }
         }
       }

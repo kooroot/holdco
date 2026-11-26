@@ -48,11 +48,11 @@ const KO: Record<string, string> = {
   "Finished in the last 24h": "최근 24시간에 끝난 일", "Nothing finished in the last day.": "지난 하루 동안 끝난 일이 없습니다.", "{t} ago": "{t} 전",
   // states / kinds
   "New": "신규", "Triaged": "분류됨", "In progress": "진행 중", "Verifying": "검증 중", "Verified": "검증됨", "Approval": "승인 대기", "Done": "완료", "Rejected": "반려", "Blocked": "막힘", "Declined": "기각", "Rolled back": "롤백됨",
-  "Approval needed": "승인 필요", "COO objected": "COO 반대", "COO did not answer": "COO 무응답", "Triage": "분류", "Blocked ticket": "막힌 티켓", "Graduation proposal": "승격 제안", "Issue from an agent": "에이전트 이슈", "Run by hand": "수동 실행", "Candidate withdrawn": "후보 철회", "Recovery needed": "복구 필요",
+  "Approval needed": "승인 필요", "COO objected": "COO 반대", "COO did not answer": "COO 무응답", "Triage": "분류", "Blocked ticket": "막힌 티켓", "Graduation proposal": "승격 제안", "Issue from an agent": "에이전트 이슈", "Run by hand": "수동 실행", "Candidate withdrawn": "후보 철회", "Recovery needed": "복구 필요", "Canary too small to judge": "카나리 표본 부족",
   // inbox
   "Decisions only you can make. Unanswered items reject themselves at the deadline; urgent ones alert you at once.": "당신만 내릴 수 있는 결정. 답하지 않은 항목은 기한에 스스로 거절되고, 긴급한 것은 즉시 알립니다.",
   "{n} waiting": "{n}건 대기", "{n} waiting, {u} urgent": "{n}건 대기, 긴급 {u}", "Nothing waiting on you": "기다리는 결정 없음", "The company is working within its rules.": "회사가 규칙 안에서 일하고 있습니다.",
-  "rejects itself in {t}": "{t} 후 자동 거절", "Approve": "승인", "Reject": "거절", "Ticket": "티켓", "Goal": "목표", "Branch": "브랜치", "Verdict": "판정", "{o}/4, {c} confidence — {s}": "{o}/4, 신뢰도 {c} — {s}",
+  "rejects itself in {t}": "{t} 후 자동 거절", "on_sample_timeout policy applies in {t}": "{t} 후 on_sample_timeout 정책 적용", "Approve": "승인", "Reject": "거절", "Ticket": "티켓", "Goal": "목표", "Branch": "브랜치", "Verdict": "판정", "{o}/4, {c} confidence — {s}": "{o}/4, 신뢰도 {c} — {s}",
   "CEO proposes:": "CEO 제안:", "Why now:": "왜 지금:", "Cost:": "비용:", "Rollback:": "롤백:", "Risk:": "위험:", "Rejected alternatives:": "기각된 대안:", "COO {d}s:": "COO {d}:",
   "note (optional; goes to the ticket and the digest)": "메모 (선택; 티켓과 다이제스트에 남음)", "Approved": "승인함", "Rejected.": "거절함",
   'Approve "{t}"? The kernel executes it on the next tick.': '"{t}" 승인할까요? 커널이 다음 틱에 실행합니다.',

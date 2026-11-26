@@ -304,6 +304,14 @@ export class IllegalTransition extends Error {
   }
 }
 
+/** D85: a blocked ticket whose external run has an unknown outcome moves only through its recovery decision. */
+export class HeldForRecovery extends IllegalTransition {
+  constructor(ticketId: string, from: string, to: string, readonly item: number) {
+    super(ticketId, from, to)
+    this.message = `ticket ${ticketId} waits on inbox #${item}: an external run's outcome is unknown; decide that item (approve = done, reject = declined) instead of moving the ticket`
+  }
+}
+
 /** Legal ticket transitions (docs/design/03-runtime.md §4). Anything else throws. */
 export const TRANSITIONS: Readonly<Record<TicketState, ReadonlyArray<TicketState>>> = {
   new: ["triaged", "declined"],
@@ -339,6 +347,10 @@ const ADDED_COLUMNS: ReadonlyArray<readonly [table: string, column: string, ddl:
   ["verdicts", "statement", "TEXT"],
   ["ticket_comments", "seen_at", "INTEGER"],
   ["ticket_comments", "seen_via", "TEXT"],
+  // D85: an action is recorded as `started` before its external command runs, so a crash leaves evidence
+  ["action_log", "status", "TEXT NOT NULL DEFAULT 'done'"],
+  ["action_log", "idem_key", "TEXT"],
+  ["action_log", "finished_at", "INTEGER"],
 ]
 
 export class Store {
@@ -361,6 +373,10 @@ export class Store {
       const cols = this.db.query<{ name: string }, []>(`PRAGMA table_info(${table})`).all().map((c) => c.name)
       if (!cols.includes(column)) this.db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`)
     }
+    // the key is stable per (ticket, action): every retry of the same action on a ticket carries the same key
+    this.db.exec("DROP INDEX IF EXISTS action_log_idem")
+    this.db.exec("CREATE INDEX IF NOT EXISTS action_log_idem ON action_log(idem_key) WHERE idem_key IS NOT NULL")
+    this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS action_log_one_running ON action_log(ticket_id, action) WHERE status = 'started'")
   }
 
   close() {
@@ -491,9 +507,17 @@ export class Store {
 
   /** Move a ticket, append the event. Throws on an illegal transition. */
   transition(id: string, to: TicketState, actor: string, note: string, now: number, patch: Partial<Record<"approval_stage" | "action" | "branch" | "department" | "window_closes_at" | "priority" | "project" | "end_kind" | "end_into", unknown>> = {}) {
+    // one transaction: the ticket move, its event and the superseded inbox items land together or not at all
+    this.transaction(() => this.transitionNow(id, to, actor, note, now, patch))
+  }
+  private transitionNow(id: string, to: TicketState, actor: string, note: string, now: number, patch: Partial<Record<"approval_stage" | "action" | "branch" | "department" | "window_closes_at" | "priority" | "project" | "end_kind" | "end_into", unknown>>) {
     const t = this.ticket(id)
     if (t === undefined) throw new Error(`ticket ${id} not found`)
     if (!TRANSITIONS[t.state].includes(to)) throw new IllegalTransition(id, t.state, to)
+    if (t.state === "blocked" && !this.settlingRecovery) {
+      const held = this.inboxOpen().find((i) => i.ticket_id === id && this.isUnknownOutcomeItem(i))
+      if (held) throw new HeldForRecovery(id, t.state, to, held.id)
+    }
     const sets = ["state = ?", "updated_at = ?", "lease_holder = NULL", "lease_expires = NULL", "note = ?"]
     const vals: Array<unknown> = [to, now, note]
     if (t.state === "blocked" && to === "triaged") {
@@ -524,6 +548,11 @@ export class Store {
     vals.push(id)
     this.db.run(`UPDATE tickets SET ${sets.join(", ")} WHERE id = ?`, vals as Array<string | number | null>)
     this.db.run("INSERT INTO ticket_events(ticket_id, at, actor, from_state, to_state, note) VALUES (?, ?, ?, ?, ?, ?)", [id, now, actor, t.state, to, note])
+    // whoever moved a blocked ticket on made the decision a `blocked` inbox item was asking for: it is superseded, not
+    // left to expire later against a ticket that may have been blocked again for another reason (D85)
+    if (t.state === "blocked" && to !== "blocked") {
+      this.db.run("UPDATE inbox SET status = 'expired', decided_at = ?, note = ? WHERE ticket_id = ? AND kind = 'blocked' AND status = 'open'", [now, `superseded: ${id} moved to ${to} by ${actor}`, id])
+    }
   }
   setStage(id: string, stage: ApprovalStage, now: number) {
     this.db.run("UPDATE tickets SET approval_stage = ?, updated_at = ? WHERE id = ?", [stage, now, id])
@@ -712,9 +741,40 @@ export class Store {
     const r = this.db.query<Record<string, unknown>, [number]>("SELECT * FROM inbox WHERE id = ?").get(id)
     return r ? ({ ...r, payload: JSON.parse(String(r["payload"])) } as unknown as InboxItem) : undefined
   }
-  inboxDecide(id: number, status: "approved" | "rejected" | "expired", note: string, now: number) {
-    this.db.run("UPDATE inbox SET status = ?, decided_at = ?, note = ? WHERE id = ? AND status = 'open'", [status, now, note, id])
+  /** Close an open item; `false` when it was no longer open (someone else decided first). */
+  inboxDecide(id: number, status: "approved" | "rejected" | "expired", note: string, now: number): boolean {
+    return this.db.run("UPDATE inbox SET status = ?, decided_at = ?, note = ? WHERE id = ? AND status = 'open'", [status, now, note, id]).changes === 1
   }
+  /** D85: is this a recovery item for a run whose outcome is unknown (it names an `unknown` action-log row)? */
+  isUnknownOutcomeItem(item: InboxItem): boolean {
+    const logId = item.payload["action_log"]
+    return item.kind === "recovery" && typeof logId === "number" && this.actionLog(logId)?.status === "unknown"
+  }
+  /**
+   * D85: decide an unknown-outcome recovery item and settle its ticket in one transaction: approve = it took effect
+   * (done), reject = declined (nothing is run again). Refused, with nothing changed, unless the item is still open, names
+   * an `unknown` run, and its ticket is blocked. Returns the ticket's new state.
+   */
+  decideUnknownOutcome(itemId: number, decision: "approved" | "rejected", note: string, now: number): string {
+    return this.transaction(() => {
+      const item = this.inboxItem(itemId)
+      if (!item || item.status !== "open") throw new Error(`inbox #${itemId} is not open`)
+      if (!this.isUnknownOutcomeItem(item)) throw new Error(`inbox #${itemId} is not an unknown-outcome recovery item`)
+      const t = item.ticket_id ? this.ticket(item.ticket_id) : undefined
+      if (t && t.state !== "blocked" && !END_STATES.has(t.state)) throw new Error(`${t.id} is ${t.state}, not blocked; decide this item once the ticket is blocked again`)
+      if (!this.inboxDecide(itemId, decision, note, now)) throw new Error(`inbox #${itemId} was decided by someone else`)
+      if (!t || t.state !== "blocked") return t?.state ?? "none" // the ticket had already ended: only the item is decided
+      const to = decision === "approved" ? "done" : "declined"
+      this.settlingRecovery = true
+      try {
+        this.transition(t.id, to, "operator", decision === "approved" ? note : `${note}; the outcome was unknown and nothing is re-run`, now)
+      } finally {
+        this.settlingRecovery = false
+      }
+      return to
+    })
+  }
+  private settlingRecovery = false
   inboxStats(since: number): { opened: number; decided: number; medianHandlingMs: number | null } {
     const opened = this.db.query<{ n: number }, [number]>("SELECT COUNT(*) AS n FROM inbox WHERE created_at >= ?").get(since)?.n ?? 0
     const times = this.db.query<{ d: number }, [number]>("SELECT decided_at - created_at AS d FROM inbox WHERE decided_at IS NOT NULL AND created_at >= ? ORDER BY d").all(since).map((x) => x.d)
@@ -826,6 +886,17 @@ export class Store {
   candidate(): { tag: string; at: number; watch_until: number; changes: string } | undefined {
     return this.db.query<{ tag: string; at: number; watch_until: number; changes: string }, []>("SELECT tag, at, watch_until, changes FROM releases WHERE status = 'candidate' ORDER BY at DESC LIMIT 1").get() ?? undefined
   }
+  /** D86: extend a candidate's watch window (once, when the canary sample was too small to judge). */
+  setReleaseWatch(tag: string, watchUntil: number) {
+    this.db.run("UPDATE releases SET watch_until = ? WHERE tag = ?", [watchUntil, tag])
+  }
+  /** The most recent inbox item of a kind whose payload names `tag` (any status). */
+  inboxLatestFor(kind: string, tag: string): { id: number; status: string } | undefined {
+    for (const r of this.db.query<{ id: number; status: string; payload: string }, [string]>("SELECT id, status, payload FROM inbox WHERE kind = ? ORDER BY id DESC").all(kind)) {
+      try { if ((JSON.parse(r.payload) as Record<string, unknown>)["tag"] === tag) return { id: r.id, status: r.status } } catch { /* a malformed payload is not this tag's */ }
+    }
+    return undefined
+  }
   setReleaseStatus(tag: string, status: "released" | "candidate" | "withdrawn" | "promoted", promotedTo?: string) {
     this.db.run("UPDATE releases SET status = ?, promoted_to = ? WHERE tag = ?", [status, promotedTo ?? null, tag])
   }
@@ -875,8 +946,85 @@ export class Store {
     ])
     return Number(r.lastInsertRowid)
   }
-  actionLog(id: number): { id: number; at: number; ticket_id: string | null; action: string; undo: string; rolled_back: number } | undefined {
-    return this.db.query<{ id: number; at: number; ticket_id: string | null; action: string; undo: string; rolled_back: number }, [number]>("SELECT id, at, ticket_id, action, undo, rolled_back FROM action_log WHERE id = ?").get(id) ?? undefined
+  /**
+   * D85: write-ahead record of an external action, committed before the command runs. `idem_key` is unique
+   * (`<ticket>:<action>:<n>`) and is handed to the command, so a script can recognise a repeat of itself.
+   */
+  /**
+   * D85: claim a run of a declared executor. Refused (`held`) while a run of the same action on the same ticket is
+   * `started` (still running) or `unknown` (may have taken effect: never run again on this ticket).
+   */
+  beginAction(a: { at: number; actor: string; ticket_id: string; action: string; effective_tier: string; forced_by: ReadonlyArray<string>; inputs: unknown; expect_state?: string }): { id: number; idem_key: string; attempt: number } | { held: { id: number; status: string } } | { stale: string } {
+    // IMMEDIATE: the checks and the insert hold the write lock together, so two openers cannot both pass them, and a
+    // caller holding a stale copy of the ticket (another process already finished it) cannot claim it again
+    return this.db.transaction(() => {
+      if (a.expect_state !== undefined) {
+        const cur = this.ticket(a.ticket_id)
+        if (!cur || cur.state !== a.expect_state || cur.action !== a.action) return { stale: cur ? `${cur.state}${cur.action !== a.action ? ` (action ${cur.action ?? "none"})` : ""}` : "missing" }
+      }
+      const held = this.heldAction(a.ticket_id, a.action)
+      if (held) return { held }
+      const n = (this.db.query<{ n: number }, [string, string]>("SELECT COUNT(*) AS n FROM action_log WHERE ticket_id = ? AND action = ?").get(a.ticket_id, a.action)?.n ?? 0) + 1
+      const idem_key = `${a.ticket_id}:${a.action}` // stable across retries, so a script can recognise a repeat of work it already half did
+      const r = this.db.run("INSERT INTO action_log(at, actor, ticket_id, action, effective_tier, forced_by, inputs, outputs, undo, status, idem_key) VALUES (?, ?, ?, ?, ?, ?, ?, '{}', '{}', 'started', ?)", [
+        a.at, a.actor, a.ticket_id, a.action, a.effective_tier, JSON.stringify(a.forced_by), JSON.stringify(a.inputs), idem_key,
+      ])
+      return { id: Number(r.lastInsertRowid), idem_key, attempt: n }
+    }).immediate()
+  }
+  /** The command ended and its result is known (success or failure). Only a `started` row can finish. */
+  finishAction(id: number, r: { at: number; outputs: unknown; undo: unknown }): boolean {
+    return this.db.run("UPDATE action_log SET status = 'done', finished_at = ?, outputs = ?, undo = ? WHERE id = ? AND status = 'started'", [r.at, JSON.stringify(r.outputs), JSON.stringify(r.undo), id]).changes === 1
+  }
+  /** Persist what a killed command printed while its postcheck still runs: a crash in between keeps the evidence (the row stays `started`). */
+  checkpointAction(id: number, outputs: Record<string, unknown>): boolean {
+    return this.db.run("UPDATE action_log SET outputs = ? WHERE id = ? AND status = 'started'", [JSON.stringify(outputs), id]).changes === 1
+  }
+  /** The command may or may not have taken effect (crash, kill, timeout). The row is never re-run. */
+  markActionUnknown(id: number, at: number, reason: string, collected: Record<string, unknown> = {}, undo?: Record<string, unknown>): boolean {
+    // keep what the command printed before it was lost (and the postcheck's answer, if one ran): it is the Operator's
+    // evidence for "did it take effect?". Bounded: the tail of each stream, never more.
+    const cap = (v: unknown, n: number) => (typeof v === "string" ? v.slice(-n) : v)
+    const kept: Record<string, unknown> = { ...collected, stdout: cap(collected["stdout"], 4000), stderr: cap(collected["stderr"], 4000) }
+    const probe = collected["postcheck"]
+    if (probe && typeof probe === "object") kept["postcheck"] = { ...(probe as Record<string, unknown>), stdout: cap((probe as Record<string, unknown>)["stdout"], 2000), stderr: cap((probe as Record<string, unknown>)["stderr"], 2000) }
+    const outputs = JSON.stringify({ ...kept, unknown: reason.slice(0, 1000) })
+    // keep a rendered undo when the command itself succeeded (e.g. shutdown killed only the postcheck)
+    if (undo !== undefined) {
+      return this.db.run("UPDATE action_log SET status = 'unknown', finished_at = ?, outputs = ?, undo = ? WHERE id = ? AND status = 'started'", [at, outputs, JSON.stringify(undo), id]).changes === 1
+    }
+    return this.db.run("UPDATE action_log SET status = 'unknown', finished_at = ?, outputs = ? WHERE id = ? AND status = 'started'", [at, outputs, id]).changes === 1
+  }
+  /**
+   * D86: how often the canary sample floor bit since `since`, so the defaults can be tuned: how many candidates had their
+   * watch extended, and how the "sample too small" questions ended.
+   */
+  canarySampleStats(since: number): { extended: number; asked: number; approved: number; rejected: number; expired: number; open: number } {
+    const rows = this.db.query<{ status: string; n: number }, [number]>("SELECT status, COUNT(*) AS n FROM inbox WHERE kind = 'canary_sample' AND created_at >= ? GROUP BY status").all(since)
+    const by = (st: string) => rows.find((r) => r.status === st)?.n ?? 0
+    // "expired" means nobody answered; a question closed because its candidate was promoted or withdrawn meanwhile is not that
+    const unanswered = this.db.query<{ n: number }, [number]>("SELECT COUNT(*) AS n FROM inbox WHERE kind = 'canary_sample' AND status = 'expired' AND created_at >= ? AND note LIKE 'no answer%'").get(since)?.n ?? 0
+    const extended = this.db.query<{ n: number }, [number]>("SELECT COUNT(*) AS n FROM meta WHERE key LIKE 'canary_extended:%' AND CAST(value AS INTEGER) >= ?").get(since)?.n ?? 0
+    return { extended, asked: rows.reduce((a, r) => a + r.n, 0), approved: by("approved"), rejected: by("rejected"), expired: unanswered, open: by("open") }
+  }
+  /** The recorded outputs of an action_log row (for the recovery item and the dashboard). */
+  actionOutputs(id: number): Record<string, unknown> {
+    const r = this.db.query<{ outputs: string }, [number]>("SELECT outputs FROM action_log WHERE id = ?").get(id)
+    try { return r ? (JSON.parse(r.outputs) as Record<string, unknown>) : {} } catch { return {} }
+  }
+  startedActions(): Array<{ id: number; at: number; ticket_id: string | null; action: string; idem_key: string | null }> {
+    return this.db.query<{ id: number; at: number; ticket_id: string | null; action: string; idem_key: string | null }, []>("SELECT id, at, ticket_id, action, idem_key FROM action_log WHERE status = 'started' ORDER BY id").all()
+  }
+  /** The run that keeps this action from starting again on this ticket: one still `started`, or one with an `unknown` outcome. */
+  heldAction(ticketId: string, action: string): { id: number; status: string } | undefined {
+    return this.db.query<{ id: number; status: string }, [string, string]>("SELECT id, status FROM action_log WHERE ticket_id = ? AND action = ? AND status IN ('started', 'unknown') ORDER BY id DESC LIMIT 1").get(ticketId, action) ?? undefined
+  }
+  /** Any run on this ticket still `started` (the ticket is mid-execution: not to be re-classified or re-routed). */
+  ticketRunning(ticketId: string): boolean {
+    return this.db.query<{ id: number }, [string]>("SELECT id FROM action_log WHERE ticket_id = ? AND status = 'started' LIMIT 1").get(ticketId) != null
+  }
+  actionLog(id: number): { id: number; at: number; ticket_id: string | null; action: string; undo: string; rolled_back: number; status: string; idem_key: string | null } | undefined {
+    return this.db.query<{ id: number; at: number; ticket_id: string | null; action: string; undo: string; rolled_back: number; status: string; idem_key: string | null }, [number]>("SELECT id, at, ticket_id, action, undo, rolled_back, status, idem_key FROM action_log WHERE id = ?").get(id) ?? undefined
   }
   markRolledBack(id: number) {
     this.db.run("UPDATE action_log SET rolled_back = 1 WHERE id = ?", [id])

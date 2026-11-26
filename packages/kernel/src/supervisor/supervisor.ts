@@ -13,7 +13,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import * as NodePath from "node:path"
 import { spawnSync } from "node:child_process"
 import { Exit, Schema } from "effect"
-import { assignmentFor, authMode, budgetMode, CompanyConfig, durationMs, type EngineId, type RoleKind } from "../config/company.ts"
+import { assignmentFor, authMode, budgetMode, CANARY_SAMPLE_DEFAULTS, CompanyConfig, durationMs, EXECUTOR_STOP_GRACE_DEFAULT, timerMs, type EngineId, type RoleKind } from "../config/company.ts"
 import { HOST_DENY_READ, matchesGlob, UNREADABLE } from "../policy/paths.ts"
 import { effectiveTier, tierForChange, UnknownAction } from "../policy/tiers.ts"
 import { demotionDue, graduationCheck } from "../policy/graduation.ts"
@@ -36,9 +36,9 @@ import { Return } from "../protocol/return.ts"
 import { SessionReport } from "../protocol/report.ts"
 import { CeoCycleReport, Proposal } from "../protocol/approval.ts"
 import { Verdict } from "../protocol/verdict.ts"
-import { END_STATES, statementHash, Store, type Ticket, TRANSITIONS } from "../store/store.ts"
+import { END_STATES, HeldForRecovery, statementHash, Store, type Ticket, TRANSITIONS } from "../store/store.ts"
 import { clear as clearInterrupt, raise as raiseInterrupt, readControl } from "./control.ts"
-import { type ExecResult, executorEnv, executorKind, mergeBranch, mergeViaGithub, runAsync, runExecutor } from "./executors.ts"
+import { type ExecResult, executorEnv, executorKind, mergeBranch, mergeViaGithub, OUTCOME_UNKNOWN, runAsync, runExecutor } from "./executors.ts"
 import { consoleNotifier, type Notifier } from "./notify.ts"
 import { Org, projectInstructions } from "./org.ts"
 import { renderDigest } from "./digest.ts"
@@ -175,6 +175,11 @@ export class Supervisor {
   /** Tickets whose declared executor is running right now (execute() is re-entered every tick). */
   private readonly executing = new Set<string>()
   private readonly pending = new Set<Promise<void>>()
+  /** D90: the kernel's own check runs (verify and named checks) still in flight; awaited by drain(), never by stop(). */
+  private readonly checking = new Set<Promise<void>>()
+  /** D85: aborted after the stop grace period to kill running executors' process groups. */
+  private readonly executorAbort = new AbortController()
+  private stopping = false
   private halted = false
   private readonly delegations = new Map<string, Promise<{ brief_id: string; status: string; result: unknown }>>()
   private lastJob = new Map<string, number>()
@@ -199,7 +204,10 @@ export class Supervisor {
         this.candidate = new Org(opts.companyRoot, rc.tag)
         this.candidate.roles()
       } catch {
-        this.store.setReleaseStatus(rc.tag, "withdrawn")
+        this.store.transaction(() => {
+          this.store.setReleaseStatus(rc.tag, "withdrawn")
+          this.closeCanaryQuestion(rc.tag, "superseded: the candidate could not be loaded at startup", this.now())
+        })
         this.candidate = undefined
       }
     }
@@ -218,10 +226,47 @@ export class Supervisor {
     const crashed = this.store.markCrashed(this.bootId, now)
     const reaped = this.store.db.run("UPDATE tickets SET lease_expires = ? WHERE lease_holder IS NOT NULL", [now - 1]).changes
     this.store.reap(this.config.runtime.max_attempts, now)
+    const unknown = this.recoverUnknownActions(now)
     this.store.chatAbandon(this.say("The supervisor restarted before this was answered; ask again.", "답하기 전에 슈퍼바이저가 재시작됐습니다. 다시 물어봐 주세요."))
     this.store.setMeta("boot_id", this.bootId)
     this.store.setMeta("boot_at", String(now))
-    await this.notifier.send("info", this.say(`supervisor started: release ${this.org.tag}, ${crashed} crashed session(s) closed, ${reaped} lease(s) recovered, tools on :${this.tools.port}`, `슈퍼바이저 시작: 릴리스 ${this.org.tag}, 크래시된 세션 ${crashed}개 정리, 리스 ${reaped}개 회수, 도구 포트 :${this.tools.port}`))
+    await this.notifier.send("info", this.say(`supervisor started: release ${this.org.tag}, ${crashed} crashed session(s) closed, ${reaped} lease(s) recovered${unknown ? `, ${unknown} action(s) with an unknown outcome sent to the inbox` : ""}, tools on :${this.tools.port}`, `슈퍼바이저 시작: 릴리스 ${this.org.tag}, 크래시된 세션 ${crashed}개 정리, 리스 ${reaped}개 회수${unknown ? `, 결과를 모르는 행동 ${unknown}건 인박스로` : ""}, 도구 포트 :${this.tools.port}`))
+  }
+
+  /**
+   * D85: an action_log row still `started` at boot belongs to an external command the previous process launched and
+   * never heard back from. It may have taken effect, partly or fully. The kernel never runs it again by itself: the
+   * row becomes `unknown`, the ticket is blocked, and the Operator gets an urgent recovery item.
+   */
+  private recoverUnknownActions(now: number): number {
+    const rows = this.store.startedActions()
+    for (const r of rows) this.raiseUnknownOutcome(r.id, r.ticket_id, r.action, "the supervisor stopped while the command was running", now, this.store.actionOutputs(r.id))
+    return rows.length
+  }
+
+  private raiseUnknownOutcome(logId: number, ticketId: string | null, action: string, reason: string, now: number, collected: Record<string, unknown> = {}, undo?: Record<string, unknown>) {
+    const note = `${OUTCOME_UNKNOWN} ${action} (action-log ${logId}): ${reason}. It was not re-run; check whether it took effect before deciding`
+    // the row, the ticket and the inbox item change together: a crash in between leaves either all or none
+    const raised = this.store.transaction(() => {
+      if (!this.store.markActionUnknown(logId, now, reason, collected, undo)) return false
+      const probe = collected["postcheck"] as { exit?: number | null; stdout?: string; stderr?: string } | undefined
+      const t = ticketId ? this.store.ticket(ticketId) : undefined
+      if (t && (t.state === "verified" || t.state === "awaiting_approval")) this.store.transition(t.id, "blocked", "kernel", note, now)
+      this.store.inboxAdd("recovery", ticketId, {
+        title: `Outcome unknown: ${action}${ticketId ? ` for ${ticketId}` : ""}`,
+        note,
+        action,
+        action_log: logId,
+        ...(typeof collected["stdout"] === "string" && collected["stdout"] !== "" ? { stdout_tail: String(collected["stdout"]).slice(-1000) } : {}),
+        ...(typeof collected["stderr"] === "string" && collected["stderr"] !== "" ? { stderr_tail: String(collected["stderr"]).slice(-1000) } : {}),
+        ...(probe ? { postcheck: probe.exit === null || probe.exit === undefined ? "the postcheck gave no verdict (it could not run, timed out or was killed): inconclusive" : probe.exit === 0 ? "the postcheck passed after the kill: the effect is probably there (not proof)" : `the postcheck did not pass after the kill (exit ${probe.exit ?? "none"}): the effect is probably missing or partial (not proof)` } : {}),
+        approve: "you checked that it took effect and is correct: the ticket is done",
+        reject: "the ticket is declined; nothing is run again (open a new ticket to run it again)",
+      }, now, "urgent")
+      return true
+    })
+    if (!raised) return
+    void this.notifier.send("critical", this.say(`${ticketId ?? action}: ${action} may or may not have run (${reason}); it will not be re-run — decide in the inbox`, `${ticketId ?? action}: ${action}의 실행 여부를 알 수 없음 (${reason}); 다시 실행하지 않음 — 인박스에서 결정`))
   }
 
   start() {
@@ -231,15 +276,24 @@ export class Supervisor {
 
   async stop() {
     if (this.timer) clearInterval(this.timer)
+    this.stopping = true // no new executor starts from here on
+    // D85: a running executor is not abandoned: it gets runtime.executor_stop_grace, measured from here (agent sessions
+    // winding down do not extend it), then its process group is killed and the run becomes an unknown outcome through its
+    // own settle path. Nothing new starts meanwhile.
+    const graceText = this.config.runtime.executor_stop_grace ?? EXECUTOR_STOP_GRACE_DEFAULT
+    const killTimer = setTimeout(() => { if (this.pending.size > 0) this.log("stopping: grace expired; killing the running executors (their outcome becomes unknown)"); this.executorAbort.abort() }, timerMs(graceText))
+    if (this.pending.size > 0) this.log(`stopping: waiting up to ${graceText} for ${this.pending.size} running executor(s)`)
     for (const r of this.running.values()) r.abort.abort()
     await Promise.allSettled([...this.running.values()].map((r) => r.promise))
+    await Promise.allSettled([...this.pending])
+    clearTimeout(killTimer)
     for (const t of this.store.allTickets()) if (t.lease_holder) this.store.releaseLease(t.id, t.lease_holder)
     await this.tools.close()
   }
 
   /** Wait for every running session (tests). */
   async drain() {
-    while (this.running.size > 0 || this.pending.size > 0) await Promise.allSettled([...[...this.running.values()].map((r) => r.promise), ...this.pending])
+    while (this.running.size > 0 || this.pending.size > 0 || this.checking.size > 0) await Promise.allSettled([...[...this.running.values()].map((r) => r.promise), ...this.pending, ...this.checking])
   }
 
   // ── one tick ─────────────────────────────────────────────────────────────
@@ -270,13 +324,16 @@ export class Supervisor {
 
   async tick() {
     this.reloadConfig()
+    if (this.stopping) return
     const now = this.now()
     await this.notifier.heartbeat()
+    if (this.stopping) return // a tick already in heartbeat must not start jobs or sessions after stop()
     const active = this.applyInterrupts(now)
     this.store.reap(this.config.runtime.max_attempts, now)
     if (this.halted) return
     this.kernelSteps(now)
     await this.jobs(now, active)
+    if (this.stopping) return
     if (active.some((i) => i.level === "L4" || i.level === "L5")) return
     this.dispatch(now, active)
   }
@@ -339,8 +396,10 @@ export class Supervisor {
         if (cur && TRANSITIONS[cur.state].includes("blocked")) this.store.transition(t.id, "blocked", "kernel", `kernel step failed: ${String(e).slice(0, 300)}`, now)
       }
     }
-    for (const t of this.store.ticketsIn(["verified"])) guarded(t, () => this.classify(t, now))
-    for (const t of this.store.ticketsIn(["awaiting_approval"])) guarded(t, () => this.routeApproval(t, now))
+    // D85: a ticket whose external command is running is not classified or routed again until the run settles
+    const running = (t: Ticket) => this.executing.has(t.id) || this.store.ticketRunning(t.id)
+    for (const t of this.store.ticketsIn(["verified"])) if (!running(t)) guarded(t, () => this.classify(t, now))
+    for (const t of this.store.ticketsIn(["awaiting_approval"])) if (!running(t)) guarded(t, () => this.routeApproval(t, now))
     this.inboxTimeouts(now)
     this.escalateBlocked(now)
     this.inboxAlerts(now)
@@ -480,8 +539,9 @@ export class Supervisor {
     const kind = executorKind(t.action as string)
     const project = this.config.projects.find((p) => p.id === t.project)
     const repo = project?.path ? this.resolveProject(project.path) : this.root
-    // D90: a verdict counts for the commit and the statement it was made against, and for nothing else
-    const stale = this.staleVerdict(t, repo)
+    // D90: a verdict counts for the commit and the statement it was made against, and for nothing else. Not asked while
+    // this ticket's executor is already running (D85): what has started is settled by its own path, never moved from under it.
+    const stale = this.executing.has(t.id) ? undefined : this.staleVerdict(t, repo)
     if (stale) {
       this.store.transition(t.id, "ready_for_verification", "kernel", stale, now)
       return
@@ -520,34 +580,67 @@ export class Supervisor {
       void this.notifier.send("info", this.say(`${t.id} done: ${this.tx(t.title)} (${t.action}, ${tier})`, `${t.id} 완료: ${this.tx(t.title)} (${t.action}, ${tier})`))
     } else if (declared !== undefined) {
       // Operator-declared executor (D50): the kernel runs it with the declared env names only, off the tick
-      if (this.executing.has(t.id)) return
-      this.executing.add(t.id)
+      if (this.executing.has(t.id) || this.stopping) return
+      const action = t.action as string
       const cwd = declared.cwd === "company" ? this.root : repo
       const deliverable = this.deliverableOf(t)
-      const action = t.action as string
-      const run = runExecutor({ executor: declared, action, cwd, placeholders: { branch: t.branch, ticket: t.id, deliverable }, env: this.env }).then((r) => {
+      // D85: the record exists (and is committed) before the external command can have any effect. The claim is
+      // refused while an earlier run of this action on this ticket is still running or has an unknown outcome:
+      // however the ticket got here again (unblock, triage), an unknown outcome is never run a second time.
+      const claim = this.store.beginAction({ at: now, actor: "kernel", ticket_id: t.id, action, effective_tier: tier, forced_by: forcedBy, inputs: { branch: t.branch, deliverable }, expect_state: t.state })
+      if ("stale" in claim) {
+        this.log(`${t.id}: ${action} not started: the ticket is now ${claim.stale}`)
+        return
+      }
+      if ("held" in claim) {
+        this.log(`${t.id}: ${action} not started: action-log ${claim.held.id} is ${claim.held.status}`)
+        if (claim.held.status === "unknown" && (t.state === "verified" || t.state === "awaiting_approval")) {
+          this.store.transition(t.id, "blocked", "kernel", `${OUTCOME_UNKNOWN} ${action} (action-log ${claim.held.id}) already ran with an unknown outcome on this ticket; it is never run again here — open a new ticket to run it again`, now)
+        }
+        return
+      }
+      const begun = claim
+      this.executing.add(t.id)
+      const run = runExecutor({ executor: declared, action, cwd, placeholders: { branch: t.branch, ticket: t.id, deliverable }, env: this.env, idempotencyKey: begun.idem_key, attempt: begun.attempt, signal: this.executorAbort.signal, onUnknown: (o) => void this.store.checkpointAction(begun.id, o) }).then((r) => {
         const end = this.now()
+        if (r.unknown) {
+          this.raiseUnknownOutcome(begun.id, t.id, action, r.error ?? "the command was killed before it reported", end, r.outputs, r.undo)
+          return
+        }
+        // the row is settled exactly once: if it is no longer `started` (a later boot already raised it as unknown),
+        // that decision stands and this late result changes nothing but the log
+        const settle = (then: () => void) => this.store.transaction(() => {
+          if (!this.store.finishAction(begun.id, { at: end, outputs: r.outputs, undo: r.undo })) return false
+          then()
+          return true
+        })
+        const late = () => this.log(`${t.id}: ${action} finished after action-log ${begun.id} was settled; ignored`)
         const cur = this.store.ticket(t.id)
-        if (cur === undefined || END_STATES.has(cur.state)) return
+        if (cur === undefined || END_STATES.has(cur.state)) {
+          this.store.finishAction(begun.id, { at: end, outputs: r.outputs, undo: r.undo })
+          return
+        }
         if (!r.ok) {
-          this.store.logAction({ at: end, actor: "kernel", ticket_id: t.id, action, effective_tier: tier, forced_by: forcedBy, inputs: { branch: t.branch }, outputs: r.outputs, undo: r.undo })
           if (r.applied) {
             // The external action ran; blindly retrying could duplicate an irreversible effect.
-            this.store.transition(t.id, "blocked", "kernel", `postcheck failed after action applied: ${r.error}; inspect the action log before recovery`, end)
-            this.store.inboxAdd("recovery", t.id, { title: `Verify recovery for ${t.id}`, note: r.error, action }, end, "urgent")
+            if (!settle(() => {
+              this.store.transition(t.id, "blocked", "kernel", `postcheck failed after action applied: ${r.error}; inspect the action log before recovery`, end)
+              this.store.inboxAdd("recovery", t.id, { title: `Verify recovery for ${t.id}`, note: r.error, action, action_log: begun.id }, end, "urgent")
+            })) return late()
             void this.notifier.send("critical", this.say(`${t.id}: action applied but postcheck failed; recovery required`, `${t.id}: 행동은 적용됐지만 postcheck 실패; 복구 결정 필요`))
             return
           }
-          this.store.transition(t.id, cur.state === "awaiting_approval" ? "blocked" : "rejected", "kernel", `executor failed: ${r.error}`, end)
+          if (!settle(() => this.store.transition(t.id, cur.state === "awaiting_approval" ? "blocked" : "rejected", "kernel", `executor failed: ${r.error}`, end))) return late()
           this.store.bumpAttempts(t.id, this.config.runtime.max_attempts, "kernel", "executor failed", end)
           return
         }
-        const id = this.store.logAction({ at: end, actor: "kernel", ticket_id: t.id, action, effective_tier: tier, forced_by: forcedBy, inputs: { branch: t.branch, deliverable }, outputs: r.outputs, undo: r.undo })
         const window = tier === "T2" ? end + durationMs(this.config.policy.windows.t2_internal) : null
-        this.store.transition(t.id, "done", "kernel", `executed ${action} (${tier}); action-log ${id}`, end, { window_closes_at: window })
+        if (!settle(() => this.store.transition(t.id, "done", "kernel", `executed ${action} (${tier}); action-log ${begun.id}`, end, { window_closes_at: window }))) return late()
         if (project) removeTicketWorktrees(repo, t.id)
         void this.notifier.send("info", this.say(`${t.id} done: ${this.tx(t.title)} (${action}, ${tier})`, `${t.id} 완료: ${this.tx(t.title)} (${action}, ${tier})`))
       }).catch((e) => {
+        // the kernel lost track of the command (a bug, not a result): its effect is unknown, so it is never re-run
+        try { this.raiseUnknownOutcome(begun.id, t.id, action, `the kernel failed while the command ran: ${String(e)}`, this.now()) } catch (e2) { this.log(`${t.id}: could not record the unknown outcome: ${String(e2)}`) }
         void this.notifier.send("warning", this.say(`${t.id}: executor crashed: ${String(e)}`, `${t.id}: 실행기 크래시: ${String(e)}`))
       }).finally(() => this.executing.delete(t.id))
       this.pending.add(run)
@@ -642,25 +735,73 @@ export class Supervisor {
     const rc = this.store.candidate()
     if (rc === undefined || this.candidate === undefined) return
     if (this.store.getMeta(`replay:${rc.tag}`) === "pending") return
-    const onCandidate = this.store.sessionsOnRelease(rc.tag, rc.at)
+    // production canary traffic only: replay-gate sessions (D54, ids `rp-…`) also run on the candidate's tag
+    const onCandidate = this.store.sessionsOnRelease(rc.tag, rc.at).filter((s) => !s.id.startsWith("rp-"))
     const demotions = this.store.allDemotions().filter((d) => d.since >= rc.at)
     if (demotions.length > 0) {
       this.withdrawCandidate(`demotion of ${demotions.map((d) => d.action).join(", ")} during the canary`, now)
       return
     }
     if (now < rc.watch_until) return
-    const rate = (sessions: ReadonlyArray<{ ticket_id: string }>) => {
+    const verdictsOf = (sessions: ReadonlyArray<{ ticket_id: string }>) => {
       const ids = new Set(sessions.map((s) => s.ticket_id))
-      const verdicts = this.store.verdictsSince(rc.at).filter((v) => ids.has(v.ticket_id))
-      return verdicts.length === 0 ? 0 : verdicts.filter((v) => v.verdict === "reject").length / verdicts.length
+      return this.store.verdictsSince(rc.at).filter((v) => ids.has(v.ticket_id))
     }
-    const baseline = rate(this.store.sessionsOnRelease(this.org.tag, rc.at))
-    const candidateRate = rate(onCandidate)
-    if (onCandidate.length > 0 && candidateRate > baseline + this.config.policy.release.max_regression) {
-      this.withdrawCandidate(`rejection rate ${candidateRate.toFixed(2)} vs baseline ${baseline.toFixed(2)} (+${this.config.policy.release.max_regression} allowed)`, now)
+    const rate = (vs: ReadonlyArray<{ verdict: string }>) => (vs.length === 0 ? 0 : vs.filter((v) => v.verdict === "reject").length / vs.length)
+    const candidateVerdicts = verdictsOf(onCandidate)
+    const baselineVerdicts = verdictsOf(this.store.sessionsOnRelease(this.org.tag, rc.at))
+    const sample = `${onCandidate.length} candidate session(s), ${candidateVerdicts.length} candidate verdict(s), ${baselineVerdicts.length} baseline verdict(s)`
+    // D86: below the noise floor the rate difference is noise — neither promote nor withdraw on it
+    const floor = { min_sessions: this.config.policy.release.min_sessions ?? CANARY_SAMPLE_DEFAULTS.min_sessions, min_verdicts: this.config.policy.release.min_verdicts ?? CANARY_SAMPLE_DEFAULTS.min_verdicts }
+    // once the Operator has been asked, their answer governs, whatever the sample does afterwards (a demotion,
+    // above, still withdraws at any time)
+    const asked = this.store.inboxLatestFor("canary_sample", rc.tag)
+    if (asked?.status === "open") return
+    if (asked?.status === "approved") return this.promoteCandidate(now, `promoted by the Operator below the canary floor (${sample})`)
+    if (asked?.status === "rejected") return this.withdrawCandidate(`canary sample below the floor and the Operator rejected promoting it (${sample})`, now)
+    const floorMissed = onCandidate.length < floor.min_sessions || candidateVerdicts.length < floor.min_verdicts
+    // an unanswered question follows policy.release.on_sample_timeout (default: withdraw, the safe side)
+    const onTimeout = this.config.policy.release.on_sample_timeout ?? "withdraw"
+    if (asked?.status === "expired" && !(onTimeout === "hold" && !floorMissed)) {
+      if (onTimeout === "withdraw") return this.withdrawCandidate(`canary sample below the floor and the question went unanswered (${sample})`, now)
+      if (onTimeout === "promote") return this.promoteCandidate(now, `promoted: the canary sample question went unanswered and policy.release.on_sample_timeout is promote (${sample})`)
+    }
+    // the floor is on the candidate side: with canary_traffic 1 the baseline has no production sessions in the window,
+    // and its rate then counts as 0 (the strictest comparison), as before D86
+    if (floorMissed) {
+      if (this.store.getMeta(`canary_extended:${rc.tag}`) === undefined) {
+        this.store.transaction(() => {
+          this.store.setReleaseWatch(rc.tag, now + durationMs(this.config.policy.release.watch))
+          this.store.setMeta(`canary_extended:${rc.tag}`, String(now)) // timestamp: the digest counts by when the watch was extended, not when the candidate was created
+        })
+        void this.notifier.send("info", this.say(`candidate ${rc.tag}: too little evidence to judge (${sample}; need ${floor.min_sessions} sessions and ${floor.min_verdicts} verdicts on the candidate); watch extended once by ${this.config.policy.release.watch}`, `후보 ${rc.tag}: 판정할 표본 부족 (${sample}; 후보 세션 ${floor.min_sessions}개, 판정 ${floor.min_verdicts}개 필요); 감시를 ${this.config.policy.release.watch} 한 번 연장`))
+        return
+      }
+      // another process (a manual release) may have settled this candidate since it was read: ask nothing then
+      const raised = this.store.transaction(() => {
+        if (this.store.candidate()?.tag !== rc.tag) return false
+        this.store.inboxAdd("canary_sample", null, {
+          title: `Candidate ${rc.tag}: canary sample too small to judge`,
+          tag: rc.tag,
+          changes: rc.changes,
+          note: `${sample} after an extended watch${asked ? " (asked again: on_sample_timeout is hold)" : ""}; asked ${this.store.canarySampleStats(now - 30 * 86_400_000).asked + 1}× in 30 days; the floor is ${floor.min_sessions} candidate sessions and ${floor.min_verdicts} candidate verdicts (policy.release.min_sessions / min_verdicts)`,
+          approve: "promote the candidate as it is",
+          reject: "withdraw it: main returns to the current release",
+          if_unanswered: `at the inbox timeout: ${this.config.policy.release.on_sample_timeout ?? "withdraw"} (policy.release.on_sample_timeout)`,
+        }, now)
+        return true
+      })
+      if (!raised) return
+      void this.notifier.send("warning", this.say(`candidate ${rc.tag}: still too little evidence after the extended watch (${sample}); not promoted — decide in the inbox`, `후보 ${rc.tag}: 연장 감시 후에도 표본 부족 (${sample}); 승격하지 않음 — 인박스에서 결정`))
       return
     }
-    this.promoteCandidate(now, `canary ${onCandidate.length} session(s), reject ${candidateRate.toFixed(2)} vs ${baseline.toFixed(2)}`)
+    const baseline = rate(baselineVerdicts)
+    const candidateRate = rate(candidateVerdicts)
+    if (candidateRate > baseline + this.config.policy.release.max_regression) {
+      this.withdrawCandidate(`rejection rate ${candidateRate.toFixed(2)} vs baseline ${baseline.toFixed(2)} (+${this.config.policy.release.max_regression} allowed; ${sample})`, now)
+      return
+    }
+    this.promoteCandidate(now, `canary ${sample}, reject ${candidateRate.toFixed(2)} vs ${baseline.toFixed(2)}`)
   }
 
   private promoteCandidate(now: number, why: string) {
@@ -671,6 +812,11 @@ export class Supervisor {
     if (tag === undefined) return
     void this.notifier.send("info", this.say(`candidate ${rc.tag} promoted to ${tag} (${why})`, `후보 ${rc.tag}가 ${tag}로 승격 (${why})`))
     if (pending) this.createCandidate("improvement merged during the previous canary", now)
+  }
+
+  /** D86: an open "too small to judge" question about a candidate that is no longer a candidate is closed, not left to answer. */
+  private closeCanaryQuestion(tag: string, why: string, now: number) {
+    for (const i of this.store.inboxOpen()) if (i.kind === "canary_sample" && i.payload["tag"] === tag) this.store.inboxDecide(i.id, "expired", why, now)
   }
 
   /** `holdco release withdraw`. */
@@ -688,7 +834,10 @@ export class Supervisor {
       spawnSync("git", existed ? ["checkout", this.org.tag, "--", p] : ["rm", "-q", "--", p], { cwd: this.root })
     }
     if (paths.length > 0) spawnSync("git", ["commit", "-qam", `withdraw ${rc.tag}: ${why}`], { cwd: this.root })
-    this.store.setReleaseStatus(rc.tag, "withdrawn")
+    this.store.transaction(() => {
+      this.store.setReleaseStatus(rc.tag, "withdrawn")
+      this.closeCanaryQuestion(rc.tag, `superseded: the candidate was withdrawn (${why})`, now)
+    })
     this.candidate = undefined
     this.store.setMeta("release_pending", "0")
     const t = this.store.allTickets().find((x) => x.department === "improvement" && x.state === "done" && x.updated_at >= rc.at)
@@ -767,10 +916,27 @@ export class Supervisor {
     for (const i of this.store.inboxOpen()) {
       if (i.kind === "issue" || i.kind === "graduation" || i.kind === "manual_action" || i.kind === "recovery") continue
       if (now - i.created_at > timeout) {
-        this.store.inboxDecide(i.id, "expired", "no answer within the timeout: rejected by default", now)
-        if ((i.kind === "blocked" || i.kind === "triage") && i.ticket_id) {
-          const t = this.store.ticket(i.ticket_id)
-          if (t && (t.state === "blocked" || t.state === "new")) this.store.transition(t.id, "declined", "operator", `inbox #${i.id} expired: rejected by default`, now, { end_kind: t.end_kind ?? "rejected" })
+        // one item's failure never stops the others (or the rest of the tick): it is logged and the item stays closed
+        try {
+          // the item and its ticket settle together, and only if this process won the decision: a stale expiry that lost
+          // the race to an answer (or a supersede) changes nothing
+          const sample = i.kind === "canary_sample"
+          const note = sample ? `no answer within the timeout: policy.release.on_sample_timeout is ${this.config.policy.release.on_sample_timeout ?? "withdraw"}` : "no answer within the timeout: rejected by default"
+          const won = this.store.transaction(() => {
+            if (!this.store.inboxDecide(i.id, "expired", note, now)) return false
+            if ((i.kind === "blocked" || i.kind === "triage") && i.ticket_id) {
+              const t = this.store.ticket(i.ticket_id)
+              // a ticket held for an unknown outcome moves only through its recovery item: a stale item never declines it
+              if (t && (t.state === "blocked" || t.state === "new")) {
+                try { this.store.transition(t.id, "declined", "operator", `inbox #${i.id} expired: rejected by default`, now, { end_kind: t.end_kind ?? "rejected" }) } catch (e) { if (!(e instanceof HeldForRecovery)) throw e } // held: the stale item just closes
+              }
+            }
+            return true
+          })
+          if (!won) continue
+        } catch (e) {
+          this.log(`inbox #${i.id} expiry: ${String(e)}`)
+          continue
         }
         void this.notifier.send("warning", this.say(`inbox #${i.id} expired: ${this.tx(String(i.payload["title"] ?? i.kind))}`, `인박스 #${i.id} 만료: ${this.tx(String(i.payload["title"] ?? i.kind))}`))
       }
@@ -780,7 +946,7 @@ export class Supervisor {
   private escalateBlocked(now: number) {
     const after = durationMs(this.config.policy.executive.blocked_after)
     for (const t of this.store.ticketsIn(["blocked"])) {
-      if (this.store.inboxOpen().some((i) => i.ticket_id === t.id && i.kind === "blocked")) continue
+      if (this.store.inboxOpen().some((i) => i.ticket_id === t.id && (i.kind === "blocked" || i.kind === "recovery"))) continue // D85: a recovery item is the decision; "blocked → triaged" would re-run the action
       const decided = this.store.db.query<{ id: number }, [string, number]>("SELECT id FROM inbox WHERE ticket_id = ? AND kind = 'blocked' AND created_at >= ?").get(t.id, t.updated_at)
       if (decided) continue
       if (this.config.modules.executive === "none" || now - t.updated_at > after) {
@@ -1144,7 +1310,10 @@ export class Supervisor {
     this.store.addRelease(tag, now, now + durationMs(this.config.policy.release.watch), note)
     this.store.setMeta("release_pending", "0")
     if (rc) {
-      this.store.setReleaseStatus(rc.tag, "promoted", tag)
+      this.store.transaction(() => {
+        this.store.setReleaseStatus(rc.tag, "promoted", tag)
+        this.closeCanaryQuestion(rc.tag, `superseded: the candidate was promoted to ${tag}`, now)
+      })
       this.candidate = undefined
     }
     this.org = Org.load(this.root)
@@ -1608,15 +1777,16 @@ export class Supervisor {
         this.store.transition(t.id, "blocked", "kernel", `the kernel could not run the checks: ${String(e)}`, this.now())
         giveUp()
       })
-      // drain() waits for the kernel's own checks too, as it does for executors
-      this.pending.add(run)
-      void run.finally(() => this.pending.delete(run))
+      // drain() waits for the kernel's own checks; stop() does not (D85 gives its grace to executors, whose effects are external)
+      this.checking.add(run)
+      void run.finally(() => this.checking.delete(run))
       return
     }
     this.launchJudge(t, sessionId, cap, cwd, repo, base, paths, rubricRef, deps, gates, project, "")
   }
 
   private launchJudge(t: Ticket, sessionId: string, cap: number, cwd: string, repo: string, base: string, paths: ReadonlyArray<string>, rubricRef: string, deps: string | undefined, gates: ReadonlyArray<string>, project: CompanyConfig["projects"][number] | undefined, verified: string) {
+    if (this.stopping) return // verify may finish during the executor grace; do not start a judge after stop()
     const role = this.org.role("verification")
     const prompt = [
       `# Verify ticket ${t.id}: ${t.title}`,

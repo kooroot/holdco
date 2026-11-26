@@ -50,6 +50,12 @@ export type Tier = typeof Tier.Type
 
 // ── kernel floors (required-adjustable minimums; not configurable) ─────────
 
+/** D86: minimum canary sample before its rejection rate decides anything (overridable in policy.release). */
+export const CANARY_SAMPLE_DEFAULTS = { min_sessions: 3, min_verdicts: 2 } as const
+
+/** D85: how long a graceful stop waits for running executors before killing them. */
+export const EXECUTOR_STOP_GRACE_DEFAULT = "30s"
+
 export const KERNEL_FLOORS = {
   auditWeeklySample: 3,
   graduationSamples: 5,
@@ -116,6 +122,12 @@ const Runtime = Schema.Struct({
   lease_grace: Duration,
   /** A ticket that has not moved for this long with no session is diagnosed and reported (D63); default 15m. */
   stall_after: Schema.optionalKey(Duration),
+  /**
+   * D85: on a graceful stop the supervisor waits this long for running executors to finish before it kills them (each
+   * killed one becomes an unknown outcome). Default `EXECUTOR_STOP_GRACE_DEFAULT`; the service manager's own stop timeout
+   * (systemd: 90s unless set) must be longer.
+   */
+  executor_stop_grace: Schema.optionalKey(Duration),
   max_attempts: IntIn(1, 10),
   /** D71: the dashboard's port (default 7117); two companies on one machine need two. */
   dashboard_port: Schema.optionalKey(IntIn(1024, 65535)),
@@ -294,6 +306,20 @@ const Policy = Schema.Struct({
     max_regression: Ratio,
     watch: Duration,
     canary_traffic: Ratio,
+    /**
+     * D86: the noise floor. A candidate is promoted or withdrawn on its rejection rate only when at least this many
+     * candidate sessions ran and this many verdicts exist on its sessions' tickets; otherwise the watch is extended once, then
+     * the Operator decides. Defaults: `CANARY_SAMPLE_DEFAULTS`.
+     */
+    min_sessions: Schema.optionalKey(IntIn(1, 1000)),
+    min_verdicts: Schema.optionalKey(IntIn(1, 1000)),
+    /**
+     * D86: what an unanswered "sample too small" question (it expires at `policy.inbox.timeout`) does to the candidate.
+     * `withdraw` (default, the safe side), `promote` (a low-traffic company that would rather ship than lose the change
+     * to an unanswered question), or `hold` (keep it on canary traffic and ask again; if the sample reaches the floor
+     * meanwhile, the rates decide). An explicit Operator rejection always withdraws.
+     */
+    on_sample_timeout: Schema.optionalKey(Schema.Literals(["withdraw", "promote", "hold"])),
   }),
   audit: Schema.Struct({
     weekly_sample: Schema.Int.check(Schema.isGreaterThanOrEqualTo(KERNEL_FLOORS.auditWeeklySample)),
@@ -553,3 +579,8 @@ export const durationMs = (d: string): number => {
   const unit = d.slice(-1) as keyof typeof UNIT_MS
   return Number(d.slice(0, -1)) * UNIT_MS[unit]
 }
+
+/** setTimeout/setInterval delay: Bun and Node reset a delay above signed 32-bit (2^31-1 ms, ~24.8d) to 1 ms. */
+export const MAX_TIMER_MS = 2_147_483_647
+export const timerMs = (d: string): number => Math.min(durationMs(d), MAX_TIMER_MS)
+
