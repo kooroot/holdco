@@ -1342,6 +1342,62 @@ describe("the Operator steers a running session (D91)", () => {
   })
 })
 
+describe("a merge with nothing in it is not an action (D92)", () => {
+  const open = (store: Store, now: number, title: string) => store.createTicket({ department: "engineering", title, goal: "y", why: "z", done_criteria: ["a"], opened_by: "operator", project: "app", state: "triaged", action: "code.merge.app", now }).id
+  const nothing = (id: string) => ({ report: { ticket: id, status: "nothing_to_do", summary: "the default branch already does this", changed_paths: [], assumptions: [], opened_tickets: [] } })
+
+  test("a verified ticket whose branch holds no change is done without an approval, a merge or an action-log entry", async () => {
+    const c = company("empty-merge")
+    const clock = { now: Date.UTC(2026, 9, 26, 9) }
+    const engine = new FakeEngine({ senior: async ({ spec }) => nothing(spec.ticketId) })
+    const { sup, store, sent } = makeSupervisor(c, engine, clock)
+    await sup.boot()
+    const id = open(store, clock.now, "Already there")
+    await cycle(sup, clock, 5)
+    expect(engine.runs.filter((r) => r.role.kind === "verification").length).toBe(1) // still judged against its done criteria
+    expect(store.ticket(id)).toMatchObject({ state: "done", note: "verified; nothing to merge: the default branch already holds this ticket's work" })
+    expect(store.events(id).map((e) => e.to_state)).not.toContain("awaiting_approval")
+    expect(store.inboxOpen().filter((i) => i.ticket_id === id)).toEqual([])
+    expect(store.actionsSince(0)).toEqual([])
+    expect(sent.some((m) => m.includes(`${id} done`) && m.includes("nothing to merge"))).toBe(true)
+    await sup.stop()
+  })
+
+  test("a ticket whose parts did all the work comes back, finds nothing left, and closes without asking the Operator again", async () => {
+    const c = company("empty-parent")
+    const clock = { now: Date.UTC(2026, 9, 26, 9) }
+    let root = ""
+    let made: Array<string> = []
+    const engine = new FakeEngine({
+      senior: async (ctx) => {
+        if (ctx.spec.ticketId === root && made.length === 0) {
+          made = ((await ctx.call("ticket_split", { parts: [{ title: "The whole thing", goal: "g", done_criteria: ["c"] }], note: "one part carries it" })) as { held_until_ended: Array<string> }).held_until_ended
+          return { report: { ticket: root, status: "split", summary: "split", changed_paths: [], assumptions: [], opened_tickets: made } }
+        }
+        if (ctx.spec.ticketId === root) return nothing(root)
+        writeFileSync(NodePath.join(ctx.spec.cwd, "part.md"), "x\n")
+        ctx.git("add", "-A"); ctx.git("commit", "-qm", "part")
+        const t = (await ctx.call("ticket_get", { id: ctx.spec.ticketId })) as { branch: string }
+        await ctx.call("ticket_update", { state: "ready_for_verification", note: "done", branch: t.branch, action: "code.merge.app" })
+        return { report: { ticket: ctx.spec.ticketId, status: "ready", summary: "ok", branch: t.branch, action: "code.merge.app", changed_paths: ["part.md"], assumptions: [], opened_tickets: [] } }
+      },
+    })
+    const { sup, store } = makeSupervisor(c, engine, clock)
+    await sup.boot()
+    root = open(store, clock.now, "Ship it")
+    const approvals: Array<string> = []
+    for (let i = 0; i < 20 && store.ticket(root)?.state !== "done"; i++) {
+      for (const item of store.inboxOpen().filter((x) => x.kind === "t3")) { approvals.push(String(item.ticket_id)); store.inboxDecide(item.id, "approved", "ok", clock.now) }
+      await cycle(sup, clock, 2)
+    }
+    expect(store.ticket(root)?.state).toBe("done")
+    expect(approvals).toEqual(made) // the Operator approved the part's merge, and was not asked to approve an empty one for the parent
+    expect(existsSync(NodePath.join(c.app, "part.md"))).toBe(true)
+    expect(store.actionsSince(0).map((a) => a.ticket_id)).toEqual(made)
+    await sup.stop()
+  })
+})
+
 describe("tool server", () => {
   test("rejects a bad token and unknown sessions", async () => {
     const c = company("auth")

@@ -3,11 +3,13 @@
  * company repository **at the latest release tag** (D23), never from the working tree.
  */
 import { spawnSync } from "node:child_process"
-import { existsSync, readFileSync } from "node:fs"
+import { existsSync, readdirSync, readFileSync } from "node:fs"
 import * as NodePath from "node:path"
 import { parseRole } from "../engine/roles.ts"
 import type { RoleDefinition } from "../engine/types.ts"
 import type { RoleKind } from "../config/company.ts"
+import { TEMPLATES_ROOT } from "../scaffold/templates.ts"
+import { STRATEGY_KOREAN } from "../scaffold/scaffold.ts"
 
 export class OrgError extends Error {}
 
@@ -19,6 +21,34 @@ export const latestReleaseTag = (companyRoot: string): string => {
   const tag = r.stdout.split("\n").map((s) => s.trim()).find((s) => /^r\d+$/.test(s))
   if (r.status !== 0 || tag === undefined) throw new OrgError("no release tag (r0 or later); run `holdco release`")
   return tag
+}
+
+/** A document's Korean half: from its `## 한국어` heading (and the rule above it) to the end. */
+const KOREAN = /\n(?:---[ \t]*\n\s*)?## 한국어[^\n]*\n[\s\S]*$/
+const koreanOf = (text: string): string | undefined => KOREAN.exec(text)?.[0].replace(/^\n(?:---[ \t]*\n\s*)?/, "").trim()
+
+const stock = new Map<string, ReadonlyArray<string>>()
+/** The Korean halves the kernel ships for a company path: the template's (base first, then any module) and, for the strategy, the one it renders. */
+const stockKorean = (path: string): ReadonlyArray<string> => {
+  const known = stock.get(path)
+  if (known) return known
+  const modules = NodePath.join(TEMPLATES_ROOT, "modules")
+  const candidates = [NodePath.join(TEMPLATES_ROOT, "base", path), ...(existsSync(modules) ? readdirSync(modules).map((m) => NodePath.join(modules, m, path)) : [])]
+  const shipped = candidates.filter((f) => existsSync(f)).flatMap((f) => koreanOf(readFileSync(f, "utf8")) ?? [])
+  if (path === "governance/strategy.md") shipped.push(`## 한국어\n${STRATEGY_KOREAN}`)
+  stock.set(path, shipped)
+  return shipped
+}
+
+/**
+ * D92: what a session reads of a bilingual document. The Korean half the kernel shipped is a translation of the
+ * English half for the Operator, and agents work in English (D75): a session is not handed it. A Korean half that
+ * differs from the shipped one is somebody's own words — the Operator's, most likely — and is kept.
+ */
+export const forSession = (path: string, text: string): string => {
+  const ko = koreanOf(text)
+  if (ko === undefined || !stockKorean(path).includes(ko)) return text
+  return text.replace(KOREAN, "\n")
 }
 
 export class Org {
@@ -69,31 +99,36 @@ export class Org {
   instructions(role: RoleDefinition, extra: ReadonlyArray<[string, string]> = []): string {
     const parts: Array<[string, string]> = [
       ["where you are", `Company repository (read-only for you, release ${this.tag}): ${this.companyRoot}\nEvery file named below lives there; cite paths relative to it. Your working directory is your own worktree.`],
-      ["AGENTS.md", this.must("AGENTS.md")],
-      ["CONSTITUTION.md", this.must("CONSTITUTION.md")],
-      ["governance/policy.md", this.file("governance/policy.md") ?? ""],
+      ["AGENTS.md", forSession("AGENTS.md", this.must("AGENTS.md"))],
+      ["CONSTITUTION.md", forSession("CONSTITUTION.md", this.must("CONSTITUTION.md"))],
+      ["governance/policy.md", this.doc("governance/policy.md")],
     ]
-    const charter = role.kind === "ceo" ? this.file("org/ceo.md") : role.kind === "coo" ? this.file("org/coo.md") : this.file(`org/departments/${role.department}.md`)
+    const charter = this.doc(role.kind === "ceo" ? "org/ceo.md" : role.kind === "coo" ? "org/coo.md" : `org/departments/${role.department}.md`)
     if (charter) parts.push([`charter (${role.department})`, charter])
     if (role.kind === "ceo" || role.kind === "coo") {
-      parts.push(["governance/approvals.md", this.file("governance/approvals.md") ?? ""])
-      parts.push(["governance/strategy.md", this.file("governance/strategy.md") ?? ""])
+      parts.push(["governance/approvals.md", this.doc("governance/approvals.md")])
+      parts.push(["governance/strategy.md", this.doc("governance/strategy.md")])
     }
-    if (role.kind === "verification") parts.push(["evals/README.md", this.file("evals/README.md") ?? ""])
+    if (role.kind === "verification") parts.push(["evals/README.md", this.doc("evals/README.md")])
     if (role.kind === "senior" || role.kind === "improvement") {
-      parts.push(["protocols/delegation.md", this.file("protocols/delegation.md") ?? ""])
-      parts.push(["protocols/ticket-lifecycle.md", this.file("protocols/ticket-lifecycle.md") ?? ""])
-      parts.push(["protocols/brief.schema.md", this.file("protocols/brief.schema.md") ?? ""])
-      parts.push(["protocols/return.schema.md", this.file("protocols/return.schema.md") ?? ""])
-      for (const skill of this.listDir("org/skills")) parts.push([`skill: ${skill}`, this.file(`org/skills/${skill}/SKILL.md`) ?? ""])
+      parts.push(["protocols/delegation.md", this.doc("protocols/delegation.md")])
+      parts.push(["protocols/ticket-lifecycle.md", this.doc("protocols/ticket-lifecycle.md")])
+      parts.push(["protocols/brief.schema.md", this.doc("protocols/brief.schema.md")])
+      parts.push(["protocols/return.schema.md", this.doc("protocols/return.schema.md")])
+      for (const skill of this.listDir("org/skills")) parts.push([`skill: ${skill}`, this.doc(`org/skills/${skill}/SKILL.md`)])
     }
-    if (role.kind === "junior_worker" || role.kind === "junior_reader") parts.push(["protocols/return.schema.md", this.file("protocols/return.schema.md") ?? ""])
+    if (role.kind === "junior_worker" || role.kind === "junior_reader") parts.push(["protocols/return.schema.md", this.doc("protocols/return.schema.md")])
     parts.push([`role: ${role.role}`, role.prompt], ...extra)
     return parts.filter(([, body]) => body.trim().length > 0).map(([name, body]) => `<!-- ${name} -->\n${body.trim()}`).join("\n\n")
   }
   rubric(ref: string): string {
     const [file] = ref.split("#")
-    return this.file(`evals/rubrics/${file}`) ?? this.file(`evals/rubrics/${file}.md`) ?? ""
+    return this.doc(`evals/rubrics/${file}`) || this.doc(`evals/rubrics/${file}.md`)
+  }
+  /** A document as a session reads it (D92); "" when absent. */
+  doc(path: string): string {
+    const text = this.file(path)
+    return text === undefined ? "" : forSession(path, text)
   }
 }
 

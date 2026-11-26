@@ -383,6 +383,19 @@ export class Supervisor {
       this.store.bumpAttempts(t.id, this.config.runtime.max_attempts, "kernel", "gate missing", now)
       return
     }
+    // D92: a merge with nothing in it is not an action. The branch holds no change of its own — its parts already
+    // landed the work, or the session found nothing to do — so there is nothing to approve, execute or undo.
+    if (executorKind(t.action) === "merge" && t.branch !== null && paths.length === 0) {
+      const stale = this.staleVerdict(t, repo)
+      if (stale) {
+        this.store.transition(t.id, "ready_for_verification", "kernel", stale, now)
+        return
+      }
+      this.store.transition(t.id, "done", "kernel", "verified; nothing to merge: the default branch already holds this ticket's work", now)
+      if (project) removeTicketWorktrees(repo, t.id)
+      void this.notifier.send("info", this.say(`${t.id} done: ${this.tx(t.title)} (verified; nothing to merge)`, `${t.id} 완료: ${this.tx(t.title)} (검증됨; 머지할 변경 없음)`))
+      return
+    }
     let effective = tier.tier
     const envelope = action?.envelope ? this.config.envelopes.find((e) => e.id === action.envelope) : undefined
     if (effective === "T1" && envelope && this.envelopeExceeded(envelope, t.action, now)) {

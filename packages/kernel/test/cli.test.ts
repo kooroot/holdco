@@ -1,9 +1,12 @@
 /** The Operator's path through the CLI, on a company created the way create-holdco creates it. */
-import { afterAll, beforeAll, describe, expect, test } from "bun:test"
+import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test"
 import { spawnSync } from "node:child_process"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as NodePath from "node:path"
+
+// Every test here spawns the CLI several times (about a third of a second each); beside the other suites that passes the default 5s.
+setDefaultTimeout(30_000)
 
 const base = mkdtempSync(NodePath.join(tmpdir(), "holdco-cli-"))
 afterAll(() => rmSync(base, { recursive: true, force: true }))

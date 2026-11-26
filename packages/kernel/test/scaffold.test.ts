@@ -1,6 +1,6 @@
 /** Scaffolding: every preset produces a valid company repository; templates and generated files stay consistent. */
 import { afterAll, describe, expect, test } from "bun:test"
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as NodePath from "node:path"
 import { spawnSync } from "node:child_process"
@@ -11,6 +11,7 @@ import { parseRole, RoleFileError } from "../src/engine/roles.ts"
 import { Proposal } from "../src/protocol/approval.ts"
 import { scaffold } from "../src/scaffold/scaffold.ts"
 import { BUILTIN_DEPARTMENTS, presetNames, TEMPLATES_ROOT } from "../src/scaffold/templates.ts"
+import { forSession, Org } from "../src/supervisor/org.ts"
 
 const base = mkdtempSync(NodePath.join(tmpdir(), "holdco-scaffold-"))
 afterAll(() => rmSync(base, { recursive: true, force: true }))
@@ -127,3 +128,48 @@ describe("compensations", () => {
     expect(compensations(bare).length).toBe(11)
   })
 })
+
+describe("what a session is handed to read (D92)", () => {
+  const stockOf = (path: string) => readFileSync(NodePath.join(TEMPLATES_ROOT, "base", path), "utf8")
+  test("the Korean half the kernel shipped is left out; anything else is left alone", () => {
+    const constitution = stockOf("CONSTITUTION.md")
+    const read = forSession("CONSTITUTION.md", constitution)
+    expect(constitution).toContain("## 한국어")
+    expect(read).not.toContain("## 한국어")
+    expect(read.trimEnd().endsWith("---")).toBe(false) // the rule above the Korean heading goes with it
+    expect(constitution.startsWith(read.trimEnd())).toBe(true) // the English half, untouched
+    expect(read.length).toBeLessThan(constitution.length * 0.8)
+    // a Korean half somebody edited is their own words, not the translation: it stays
+    const edited = constitution.replace(/(## 한국어[^\n]*\n)/, "$1\n운영자가 추가한 조항: 금요일에는 배포하지 않는다.\n")
+    expect(forSession("CONSTITUTION.md", edited)).toBe(edited)
+    // a document the kernel ships no template for, and one with no Korean half, are returned as they are
+    expect(forSession("docs/notes.md", "# Notes\n\n## 한국어\n메모\n")).toBe("# Notes\n\n## 한국어\n메모\n")
+    expect(forSession("AGENTS.md", stockOf("AGENTS.md"))).toBe(stockOf("AGENTS.md"))
+    // module templates are found too
+    const eng = readFileSync(NodePath.join(TEMPLATES_ROOT, "modules", "engineering", "evals", "rubrics", "engineering.md"), "utf8")
+    expect(forSession("evals/rubrics/engineering.md", eng)).not.toContain("## 한국어 요약")
+  })
+
+  test("no role is handed the stock translation, each role's instructions stay within a size budget, and an edited Korean half reaches the session", () => {
+    const dir = NodePath.join(base, "read-co")
+    scaffold({ dir, preset: "full", github: "tester", kernelVersion: "0.0.0-test" })
+    const org = Org.load(dir)
+    // budgets a little above today's sizes: instructions are paid for on every session, so growth should be a decision
+    const budget: Record<string, number> = { senior: 60_000, improvement: 60_000, ceo: 38_000, coo: 34_000, verification: 33_000, junior_worker: 27_000, junior_reader: 27_000 }
+    for (const role of org.roles()) {
+      const text = org.instructions(role)
+      expect(text).not.toContain("## 한국어")
+      expect({ role: role.role, chars: text.length, within: text.length <= budget[role.kind]! }).toEqual({ role: role.role, chars: text.length, within: true })
+      for (const must of ["CONSTITUTION.md", "governance/policy.md", `role: ${role.role}`]) expect(text).toContain(`<!-- ${must} -->`)
+    }
+    expect(org.rubric("engineering.md#app")).toContain("| Correctness | 0.40 |")
+    expect(org.rubric("engineering.md#app")).not.toContain("## 한국어")
+    // the Operator writes a rule in the Korean half of the Constitution and releases it
+    const path = NodePath.join(dir, "CONSTITUTION.md")
+    writeFileSync(path, readFileSync(path, "utf8").replace(/(## 한국어[^\n]*\n)/, "$1\n운영자가 추가한 조항: 금요일에는 배포하지 않는다.\n"))
+    for (const a of [["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", "operator: a rule"], ["tag", "r1"]]) expect(spawnSync("git", a, { cwd: dir }).status).toBe(0)
+    const next = new Org(dir, "r1") // named, not looked up: two tags made in the same second have no order
+    expect(next.instructions(next.role("senior", "engineering"))).toContain("금요일에는 배포하지 않는다")
+  })
+})
+

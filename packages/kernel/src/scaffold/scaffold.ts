@@ -96,6 +96,9 @@ export const renderCompanyYaml = (config: CompanyConfig, preset: string): string
     Bun.YAML.stringify(config, null, 2),
   ].join("\n")
 
+/** The Korean note under the rendered strategy: the kernel's own words, which a session is not handed (D92). */
+export const STRATEGY_KOREAN = "미션, 이번 기간 목표(최대 3개, 측정 가능한 목표치), 포트폴리오(프로젝트 등급과 용량 비율), 실험 중단 기준, 하지 않을 것, 제약을 위 표에 채웁니다. 목표 표가 예시 한 줄뿐이면 CEO는 티켓을 열지 않습니다."
+
 /** governance/strategy.md rendered from company.yaml, so the CEO's first cycle has something to allocate against. */
 export const renderStrategy = (config: CompanyConfig): string => {
   const period = new Date().toISOString().slice(0, 7)
@@ -137,7 +140,7 @@ export const renderStrategy = (config: CompanyConfig): string => {
     `- Monthly budget: $${config.budget.monthly_usd}; per session: $${config.budget.session_max_usd} (company.yaml:budget)`,
     "",
     "## 한국어",
-    "미션, 이번 기간 목표(최대 3개, 측정 가능한 목표치), 포트폴리오(프로젝트 등급과 용량 비율), 실험 중단 기준, 하지 않을 것, 제약을 위 표에 채웁니다. 목표 표가 예시 한 줄뿐이면 CEO는 티켓을 열지 않습니다.",
+    STRATEGY_KOREAN,
     "",
   ].join("\n")
 }
