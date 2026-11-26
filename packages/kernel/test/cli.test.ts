@@ -131,6 +131,23 @@ describe("operator commands", () => {
     expect(holdco("project", "remove", "other").stdout).toContain("other removed")
     expect(readFileSync(NodePath.join(co, "company.yaml"), "utf8")).not.toContain("id: other")
   })
+  test("the Operator registers checks and checker paths; tickets name the checks (D90)", () => {
+    // D90: named checks and the checker paths
+    expect(holdco("project", "check", "app", "e2e", "bun", "run", "e2e", "--headed").stdout).toContain("app: check 'e2e' runs `bun run e2e --headed` for every ticket that requires it")
+    expect(holdco("project", "checker", "app", "scripts/check.sh,", "acceptance/**").stdout).toContain("a branch that changes scripts/check.sh, acceptance/** is checked with the default branch's version")
+    const listed = holdco("project", "list").stdout
+    expect(listed).toContain("app checks: e2e = bun run e2e --headed")
+    expect(listed).toContain("app checker paths (checked with the default branch's version; a change needs you): scripts/check.sh, acceptance/**")
+    expect(holdco("ticket", "new", "--title", "Checked", "--checks", "e2e, load").stderr).toContain("check 'load' is not registered for app (registered: e2e")
+    const checked = holdco("ticket", "new", "--title", "Checked", "--checks", "e2e")
+    expect(checked.status).toBe(0)
+    const cid = /^(\S+) opened/.exec(checked.stdout)![1]!
+    expect(JSON.parse(holdco("ticket", "show", cid).stdout)).toMatchObject({ checks: ["e2e"], statement: expect.stringMatching(/^[0-9a-f]{16}$/), check_runs: [] })
+    expect(holdco("ticket", "decline", cid).status).toBe(0)
+    expect(holdco("project", "check", "app", "e2e").stdout).toContain("app: check 'e2e' removed")
+    expect(holdco("project", "check", "app", "e2e").stderr).toContain("has no check 'e2e'")
+    expect(holdco("project", "checker", "app").stdout).toContain("app: checker paths cleared")
+  })
   test("service prints a unit for the configured host; status names the dashboard link and log", () => {
     const r = holdco("service")
     expect(r.status).toBe(0)

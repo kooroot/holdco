@@ -73,7 +73,14 @@ const ownTicket = (b: SessionBinding, host: ToolHost): Ticket => {
   if (t === undefined) throw new ToolError(`ticket ${b.ticketId} not found`)
   return t
 }
-const view = (t: Ticket) => ({ id: t.id, project: t.project, milestone: t.milestone, department: t.department, action: t.action, state: t.state, approval_stage: t.approval_stage, priority: t.priority, title: t.title, goal: t.goal, why: t.why, done_criteria: t.done_criteria, opened_by: t.opened_by, attempts: t.attempts, branch: t.branch, note: t.note, parent: t.parent, needs: t.needs, end_kind: t.end_kind, end_into: t.end_into })
+/** D90: the check names a ticket asks for, each registered for its project by the Operator — an agent picks among them, it never writes a command. */
+const registeredChecks = (host: ToolHost, project: string | null, raw: unknown): Array<string> => {
+  const names = Array.isArray(raw) ? [...new Set((raw as Array<unknown>).map(String))] : []
+  const have = Object.keys(host.config.projects.find((p) => p.id === project)?.checks ?? {})
+  for (const n of names) if (!have.includes(n)) throw new ToolError(`check '${n}' is not registered for ${project ?? "this ticket's project"} (registered: ${have.join(", ") || "none"}). Only the Operator registers checks (holdco project check); say in your report which command would prove this, and leave the criterion to the judge meanwhile`)
+  return names
+}
+const view = (t: Ticket) => ({ id: t.id, project: t.project, milestone: t.milestone, department: t.department, action: t.action, state: t.state, approval_stage: t.approval_stage, priority: t.priority, title: t.title, goal: t.goal, why: t.why, done_criteria: t.done_criteria, opened_by: t.opened_by, attempts: t.attempts, branch: t.branch, note: t.note, parent: t.parent, needs: t.needs, checks: t.checks, end_kind: t.end_kind, end_into: t.end_into })
 
 export const TOOLS: ReadonlyArray<Tool> = [
   {
@@ -103,7 +110,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
   {
     name: "ticket_create",
     description: "Open a ticket for any enabled department. It starts as `new` (the CEO triages it; without a CEO, the Operator's inbox). Improvement's tickets for itself are auto-triaged. `needs` orders the work: the ticket is not started until every ticket it needs is `done`, so open the pieces of one outcome together and let the kernel start whichever are ready. `parent` (CEO only) makes it a part of a larger ticket, which is then worked only after all its parts have ended.",
-    input: obj({ department: str("owning department"), title: str("one line"), goal: str("what done looks like"), why: str("why it matters"), done_criteria: { type: "array", items: { type: "string" }, minItems: 1 }, project: str("project id, if any"), action: str("registry action id the result will need, e.g. code.merge.app"), priority: { type: "integer", minimum: 1, maximum: 5 }, milestone: { type: "integer", description: "id of the roadmap milestone this ticket serves (roadmap_get lists them)" }, needs: { type: "array", items: { type: "string" }, description: "ids of tickets that must be done before this one is started" }, parent: str("id of the larger ticket this one is a part of (CEO only)") }, ["department", "title", "goal", "why", "done_criteria"]),
+    input: obj({ department: str("owning department"), title: str("one line"), goal: str("what done looks like"), why: str("why it matters"), done_criteria: { type: "array", items: { type: "string" }, minItems: 1 }, project: str("project id, if any"), action: str("registry action id the result will need, e.g. code.merge.app"), priority: { type: "integer", minimum: 1, maximum: 5 }, milestone: { type: "integer", description: "id of the roadmap milestone this ticket serves (roadmap_get lists them)" }, needs: { type: "array", items: { type: "string" }, description: "ids of tickets that must be done before this one is started" }, parent: str("id of the larger ticket this one is a part of (CEO only)"), checks: { type: "array", items: { type: "string" }, description: "names of the project's registered checks the result must pass; the kernel runs them and a failure rejects the ticket without a judge" } }, ["department", "title", "goal", "why", "done_criteria"]),
     kinds: ["senior", "improvement", "ceo"],
     run: (a, b, host) => {
       const dept = String(a["department"])
@@ -132,8 +139,9 @@ export const TOOLS: ReadonlyArray<Tool> = [
       }
       const refused = host.store.linkRefusal(null, parent, needs)
       if (refused) throw new ToolError(refused)
+      const checks = registeredChecks(host, project, a["checks"])
       const t = host.store.createTicket({
-        milestone, parent, needs,
+        milestone, parent, needs, checks,
         department: dept, title: String(a["title"]), goal: String(a["goal"]), why: String(a["why"]),
         done_criteria: (a["done_criteria"] as Array<string>).map(String), opened_by: b.role, project,
         action: a["action"] === undefined ? null : String(a["action"]), priority: a["priority"] === undefined ? 3 : Number(a["priority"]),
@@ -263,7 +271,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
     name: "ticket_split",
     description: `Hand your ticket back in parts when it is more than one session's work, or when a piece needs its own verification or another department. Each part becomes a ticket under yours, worked and verified on its own; yours is held until every part has ended and then comes back to a session that is told how each ended, to do what remains for the whole. Order parts with \`after\` (positions of earlier parts in this call, from 0) or \`needs\` (existing ticket ids). Parts start from the project's default branch and do not see your branch: commit what you have first and say in each part what it may rely on. Use juniors (delegate_start) instead for pieces you will integrate in this session. A ticket holds at most \`modules.juniors.max_per_task\` parts and a tree is at most ${MAX_TREE_DEPTH} deep; beyond that, ticket_update → blocked and let the CEO re-plan. After this call your ticket is no longer yours: end with the session report, status \`split\`.`,
     input: obj({
-      parts: { type: "array", minItems: 1, items: obj({ title: str("one line"), goal: str("what done looks like for this part"), done_criteria: { type: "array", items: { type: "string" }, minItems: 1 }, after: { type: "array", items: { type: "integer", minimum: 0 }, description: "positions of earlier parts in this call that must be done first" }, needs: { type: "array", items: { type: "string" }, description: "ids of existing tickets that must be done first" }, department: str("owning department, when not yours (it then waits for CEO triage)"), action: str("registry action the part's result needs, when not your ticket's") }, ["title", "goal", "done_criteria"]) },
+      parts: { type: "array", minItems: 1, items: obj({ title: str("one line"), goal: str("what done looks like for this part"), done_criteria: { type: "array", items: { type: "string" }, minItems: 1 }, after: { type: "array", items: { type: "integer", minimum: 0 }, description: "positions of earlier parts in this call that must be done first" }, needs: { type: "array", items: { type: "string" }, description: "ids of existing tickets that must be done first" }, department: str("owning department, when not yours (it then waits for CEO triage)"), action: str("registry action the part's result needs, when not your ticket's"), checks: { type: "array", items: { type: "string" }, description: "names of the project's registered checks this part must pass" } }, ["title", "goal", "done_criteria"]) },
       note: str("why it is split this way, and what remains for the whole once the parts are done"),
     }),
     kinds: ["senior"],
@@ -290,7 +298,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
         if (!enabled.includes(department)) throw new ToolError(`part ${i}: department '${department}' is not enabled`)
         const action = p["action"] === undefined ? (department === t.department ? t.action : null) : String(p["action"])
         if (action !== null && !host.config.actions.some((x) => x.id === action)) throw new ToolError(`part ${i}: unknown action '${action}'`)
-        return { title, goal, done_criteria, after, needs: Array.isArray(p["needs"]) ? (p["needs"] as Array<unknown>).map(String) : [], department, action }
+        return { title, goal, done_criteria, after, needs: Array.isArray(p["needs"]) ? (p["needs"] as Array<unknown>).map(String) : [], department, action, checks: registeredChecks(host, t.project, p["checks"]) }
       })
       const now = host.now()
       try {
@@ -299,7 +307,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
           for (const s of specs) {
             ids.push(host.store.createTicket({
               department: s.department, title: s.title, goal: s.goal, why: `part of ${t.id}: ${t.title}`, done_criteria: s.done_criteria, opened_by: b.role,
-              project: t.project, action: s.action, priority: t.priority, milestone: t.milestone, parent: t.id, needs: [...s.needs, ...s.after.map((k) => ids[k] as string)],
+              project: t.project, action: s.action, priority: t.priority, milestone: t.milestone, parent: t.id, needs: [...s.needs, ...s.after.map((k) => ids[k] as string)], checks: s.checks,
               // within the ticket's own department the work was already triaged; another department's part is the CEO's to place
               state: s.department === t.department ? "triaged" : "new", now,
             }).id)

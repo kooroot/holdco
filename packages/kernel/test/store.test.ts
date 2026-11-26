@@ -1,6 +1,6 @@
 /** The state store: legal transitions only, compare-and-set leases, reaping with attempt limits, inbox and labels. */
 import { describe, expect, test } from "bun:test"
-import { IllegalTransition, LinkError, Store, TICKET_STATES, TRANSITIONS } from "../src/store/store.ts"
+import { IllegalTransition, LinkError, statementHash, Store, TICKET_STATES, TRANSITIONS } from "../src/store/store.ts"
 
 const mk = () => {
   const s = new Store(":memory:")
@@ -246,6 +246,41 @@ describe("dead ends are kept with their kind (D89)", () => {
     expect(s.ticket(b)?.state).toBe("triaged")
     s.transition(b, "declined", "ceo", "same as a", 2, { end_kind: "merged", end_into: a })
     expect(s.ticket(b)).toMatchObject({ state: "declined", end_kind: "merged", end_into: a })
+  })
+})
+
+describe("what was judged is on record (D90)", () => {
+  test("the statement hash follows the done criteria and the required checks, and nothing else", () => {
+    const s = new Store(":memory:")
+    const t = s.createTicket({ department: "engineering", title: "t", goal: "g", why: "w", done_criteria: ["a", "b"], opened_by: "operator", project: "app", checks: ["e2e", "load", "e2e"], now: 1 })
+    expect(t.checks).toEqual(["e2e", "load"])
+    const h = statementHash(t)
+    expect(h).toMatch(/^[0-9a-f]{16}$/)
+    s.editTicket(t.id, { title: "renamed", priority: 1, goal: "reworded" }, 2)
+    expect(statementHash(s.ticket(t.id)!)).toBe(h)
+    expect(statementHash({ done_criteria: ["a", "b"], checks: ["load", "e2e"] })).toBe(h) // the order of checks is not part of the statement
+    expect(statementHash({ done_criteria: ["b", "a"], checks: ["e2e", "load"] })).not.toBe(h)
+    s.editTicket(t.id, { done_criteria: ["a", "b", "c"] }, 3)
+    expect(statementHash(s.ticket(t.id)!)).not.toBe(h)
+    s.editTicket(t.id, { done_criteria: ["a", "b"], checks: ["e2e"] }, 4)
+    expect(statementHash(s.ticket(t.id)!)).not.toBe(h)
+  })
+  test("check runs and verdicts carry the commit and statement of the verification that made them", () => {
+    const s = new Store(":memory:")
+    const t = s.createTicket({ department: "engineering", title: "t", goal: "g", why: "w", done_criteria: ["a"], opened_by: "operator", project: "app", now: 1 })
+    s.addVerdict({ ticket_id: t.id, session_id: "old", at: 1, verdict: "approve", overall: 4, confidence: "high", payload: {} })
+    expect(s.verdictFor(t.id)).toMatchObject({ commit_sha: null, statement: null }) // a verdict from before subjects were recorded
+    s.setSubject(t.id, { commit_sha: "abc", statement: statementHash(t) })
+    s.addCheckRun({ ticket_id: t.id, session_id: "s1", at: 2, name: "verify", command: "bun test", passed: false, exit_code: 1, duration_ms: 1200, commit_sha: "abc", statement: statementHash(t), overlaid: ["scripts/check.sh"], tail: "1 fail" })
+    s.addVerdict({ ticket_id: t.id, session_id: "judge-session", at: 3, verdict: "approve", overall: 4, confidence: "high", payload: {} })
+    expect(s.verdictFor(t.id)).toMatchObject({ commit_sha: "abc", statement: statementHash(t) })
+    expect(s.checkRuns(t.id)).toEqual([expect.objectContaining({ name: "verify", command: "bun test", passed: false, exit_code: 1, duration_ms: 1200, commit_sha: "abc", overlaid: ["scripts/check.sh"], tail: "1 fail" })])
+    expect(s.checkRuns("ENG-99")).toEqual([])
+  })
+  test("a verified or approval-waiting ticket can go back to Verification, and nowhere new otherwise", () => {
+    expect(TRANSITIONS.verified).toContain("ready_for_verification")
+    expect(TRANSITIONS.awaiting_approval).toContain("ready_for_verification")
+    expect(TRANSITIONS.done).toEqual(["rolled_back"])
   })
 })
 

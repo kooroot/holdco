@@ -71,7 +71,11 @@ bunx holdco project list                                  # class, share, spend 
 bunx holdco project add ../other-repo --class experiment --share 20% --verify "bun test"
 bunx holdco project set gap-trade --share 0.4 --class core
 bunx holdco project remove old-repo                       # refused while it has open tickets; --force declines them
+bunx holdco project check gap-trade e2e bun run e2e       # a named check a ticket can be required to pass (no command removes it)
+bunx holdco project checker gap-trade scripts/check.sh 'acceptance/**'   # the paths that define how the project is checked
 ```
+
+**What "done" is checked against.** Beyond `verify`, register the commands that prove specific things (`project check`): a ticket names the ones it must pass (`holdco ticket new --checks e2e`, or the CEO's and seniors' `checks`), the kernel runs them itself after `verify`, and a failure rejects the ticket before any judge is paid. Only you define the commands — agents pick among the names — because the kernel runs them outside the sandbox. Mark the files that define the check (`project checker`): a branch that changes them is checked with the default branch's version, so a change cannot loosen its own check, and its merge comes to you. Every run is kept with the commit and the criteria it ran against (the ticket's drawer, `holdco ticket show`); a verdict counts only for the commit and criteria it judged, so if either changes before the merge, the ticket is judged again first.
 
 A share is also budget: a project's share of `budget.monthly_usd` is its cap for the month, and once it is spent no new work session starts there until next month or a bigger share (`budget.project_shares: soft` keeps the steering and drops the cap). The dashboard shows spend against cap per project, the stall line says "spent its share" instead of going quiet, and the Operator is told once. `min_tier` per project (Settings → Min tier, or `--min-tier T3`) floors every action there — a payments repository stays Operator-approved while a toy project is autonomous. Two companies on one machine: set `runtime.dashboard_port` on the second.
 
@@ -164,7 +168,11 @@ bunx holdco project list                                  # 구분, 배분, 이�
 bunx holdco project add ../other-repo --class experiment --share 20% --verify "bun test"
 bunx holdco project set gap-trade --share 0.4 --class core
 bunx holdco project remove old-repo                       # 열린 티켓이 있으면 거부; --force는 전부 거절 처리
+bunx holdco project check gap-trade e2e bun run e2e       # 티켓이 통과하도록 요구할 수 있는 이름 붙은 검사 (명령을 비우면 삭제)
+bunx holdco project checker gap-trade scripts/check.sh 'acceptance/**'   # 프로젝트의 검사 방법을 정의하는 경로
 ```
+
+**"완료"를 무엇으로 확인하는가.** `verify` 외에 특정 사실을 증명하는 명령을 등록해 두면(`project check`), 티켓이 통과해야 할 검사를 이름으로 지정하고(`holdco ticket new --checks e2e`, 또는 CEO·시니어의 `checks`), 커널이 `verify` 다음에 직접 실행하며, 실패하면 심판을 부르기 전에 반려합니다. 명령은 운영자만 정의하고 에이전트는 이름만 고릅니다 — 커널이 샌드박스 밖에서 실행하기 때문입니다. 검사 방법을 정의하는 파일을 표시해 두면(`project checker`), 그 파일을 바꾼 브랜치는 기본 브랜치의 버전으로 검사되어 변경이 자기 검사를 느슨하게 만들 수 없고, 그 머지는 운영자에게 옵니다. 모든 실행은 어떤 커밋과 어떤 완료 조건에 대해 돌았는지와 함께 남습니다(티켓 서랍, `holdco ticket show`). 판정은 자신이 본 커밋과 완료 조건에 대해서만 유효하므로, 머지 전에 둘 중 하나가 바뀌면 티켓은 먼저 다시 판정됩니다.
 
 배분은 예산이기도 합니다. 프로젝트의 배분 × `budget.monthly_usd`가 그 달의 상한이고, 다 쓰면 다음 달이나 배분을 늘리기 전까지 새 작업 세션이 시작되지 않습니다(`budget.project_shares: soft`면 유도만 하고 상한은 없음). 대시보드는 프로젝트별 지출/상한을 보여주고, 정체 진단은 조용히 멈추는 대신 "배분을 다 씀"이라고 말하며, 운영자에게 한 번 알립니다. 프로젝트별 `min_tier`(설정 → 최소 등급, 또는 `--min-tier T3`)는 그 프로젝트의 모든 행동 등급 하한입니다 — 결제 저장소는 운영자 승인으로, 장난감 프로젝트는 자율로. 한 머신에 회사 둘이면 두 번째에 `runtime.dashboard_port`를 지정합니다.
 

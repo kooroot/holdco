@@ -47,10 +47,14 @@ export const Drawer = ({ id, onClose }: { id: string; onClose: () => void }) => 
     </div>
   )
   const parts = all.filter((x) => x.parent === id)
+  // D90: the checks of the latest verification — the commit they ran against, and whether the criteria changed since
+  const lastRun = d?.check_runs.at(-1)?.session_id
+  const runs = (d?.check_runs ?? []).filter((r) => r.session_id === lastRun)
   const tree: Array<[string, React.ReactNode]> = t ? [
     ...(t.parent ? [[tr("Part of"), <div>{linked([t.parent]).map(link)}</div>] as [string, React.ReactNode]] : []),
     ...(t.needs.length ? [[tr("Needs first"), <div {...ui.stack()} style={{ gap: 4 }}>{linked(t.needs).map(link)}</div>] as [string, React.ReactNode]] : []),
     ...(t.end_kind ? [[tr(t.state === "declined" ? "Dead end" : "Claims a dead end"), <div {...ui.row()} style={{ gap: 6 }}><Pill tone="signal">{getLang() === "ko" ? tr(`end.${t.end_kind}`) : t.end_kind}</Pill>{t.end_into ? linked([t.end_into]).map(link) : null}</div>] as [string, React.ReactNode]] : []),
+    ...(t.checks.length ? [[tr("Must pass"), <div {...ui.row()} style={{ gap: 4 }}>{t.checks.map((c) => <Pill key={c} mono>{c}</Pill>)}</div>] as [string, React.ReactNode]] : []),
     ...(parts.length ? [[tr("Parts"), <div {...ui.stack()} style={{ gap: 4 }}>{parts.map(link)}</div>] as [string, React.ReactNode]] : []),
   ] : []
   const v = d?.verdict as { verdict: string; overall: number; confidence: string; payload: { summary?: string; failures?: Array<{ criterion: string; evidence: string }>; gates?: Array<{ gate: string; passed: boolean }> } } | null | undefined
@@ -83,6 +87,11 @@ export const Drawer = ({ id, onClose }: { id: string; onClose: () => void }) => 
                       {v.payload.gates?.length ? <div {...ui.row()} style={{ gap: 4 }}>{v.payload.gates.map((g) => <Pill key={g.gate} tone={g.passed ? "ok" : "bad"} mono>{g.gate}</Pill>)}</div> : null}
                       {d.label ? <div {...cn(ui.small(), ui.muted())}>{tr("You graded it {v} on {t}", { v: d.label.operator_verdict, t: clock(d.label.at) })}</div> : null}</div></Card>
                   ) : d.verdict_hidden ? <div {...cn(ui.small(), ui.muted())}>{tr("Verdict withheld until you grade this ticket in the audit.")}</div> : null}
+                  {runs.length ? (
+                    <Card pad><div {...ui.stack()}><div {...ui.row()}><b>{tr("Checks run by the kernel")}</b><span {...cn(ui.muted(), ui.small())}>{tr("commit {c}", { c: runs[0]!.commit_sha.slice(0, 8) })}{runs[0]!.statement !== d.statement ? ` · ${tr("made against earlier criteria")}` : ""}</span></div>
+                      {runs.map((r) => <div key={r.id} {...ui.row()} style={{ gap: 6 }}><Pill tone={r.passed ? "ok" : "bad"} mono>{r.name}</Pill><Code>{r.command}</Code><span {...cn(ui.small(), ui.muted())}>{r.passed ? tr("passed") : tr("exit {n}", { n: r.exit_code ?? "—" })} · {(r.duration_ms / 1000).toFixed(1)}s</span></div>)}
+                      {runs[0]!.overlaid.length ? <div {...cn(ui.small(), ui.muted())}>{tr("Checked with the default branch's version of: {p}", { p: runs[0]!.overlaid.join(", ") })}</div> : null}</div></Card>
+                  ) : null}
                   <div><h3 {...ui.h3()} style={{ marginBottom: 8 }}>{tr("Timeline")}</h3>
                     {d.events.map((e, i) => <div key={i} {...st.ev()}><span {...st.at()}>{clock(e.at)}</span><div><span style={{ fontWeight: 500 }}>{tr(STATE_LABEL[e.to_state] ?? e.to_state)}</span> <span {...cn(ui.muted(), ui.small())}>{e.actor}</span>{e.note ? <div {...cn(st.nt(), ui.small())} title={e.note}>{tx(e.note)}</div> : null}</div></div>)}
                   </div>

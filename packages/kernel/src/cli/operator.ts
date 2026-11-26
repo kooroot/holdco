@@ -11,7 +11,7 @@ import { assignmentFor, authMode, CompanyConfig, type EngineId, ENGINE_IDS, ROLE
 import { defaultRoles, EXAMPLE_PRICES, formatAssignment, MODEL_DEFAULTS, MODEL_MODES, type ModelMode, parseAssignment, PRICES_CHECKED_ON } from "../config/models.ts"
 import type { Engine } from "../engine/types.ts"
 import { renderCompanyYaml } from "../scaffold/scaffold.ts"
-import { END_KINDS, END_STATES, type Hold, LinkError, Store, type Ticket } from "../store/store.ts"
+import { END_KINDS, END_STATES, type Hold, LinkError, statementHash, Store, type Ticket } from "../store/store.ts"
 import { clear, raise, readControl } from "../supervisor/control.ts"
 import { renderDigest } from "../supervisor/digest.ts"
 import { undoAction } from "../supervisor/executors.ts"
@@ -349,7 +349,11 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
           const parent = args.flag("parent") && args.flag("parent") !== "none" ? String(args.flag("parent")) : null
           const refused = store.linkRefusal(null, parent, needs)
           if (refused) throw new OperatorError(refused)
-          const t = store.createTicket({ department, title, goal, why, done_criteria: criteria, opened_by: "operator", project, action, priority: Number(args.flag("priority") ?? 3), state: "triaged", parent, needs, now })
+          // D90: checks the result must pass, by the names registered for the project
+          const checks = idList(args.flag("checks") ?? "")
+          const have = Object.keys(config.projects.find((p) => p.id === project)?.checks ?? {})
+          for (const c of checks) if (!have.includes(c)) throw new OperatorError(`check '${c}' is not registered for ${project ?? "this project"} (registered: ${have.join(", ") || "none"}; holdco project check <id> <name> <command>)`)
+          const t = store.createTicket({ department, title, goal, why, done_criteria: criteria, opened_by: "operator", project, action, priority: Number(args.flag("priority") ?? 3), state: "triaged", parent, needs, checks, now })
           const hold = store.holdOf(t)
           console.log(`${t.id} opened (triaged) for ${department}${project ? ` on ${project}` : ""}${parent ? `, part of ${parent}` : ""}${hold ? `; starts when ${hold.tickets.join(", ")} ${hold.tickets.length === 1 ? "is" : "are"} done` : ""}`)
         } else if (sub === "list") {
@@ -371,7 +375,7 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
         } else if (sub === "show") {
           const t = store.ticket(args.positional[2] ?? "")
           if (!t) throw new OperatorError("ticket not found")
-          console.log(JSON.stringify({ ...t, parts: store.children(t.id).map((c) => `${c.id} ${c.state}`), waits_on: END_STATES.has(t.state) ? null : store.holdOf(t) ?? null, events: store.events(t.id), verdict: store.verdictFor(t.id), sessions: store.sessionsForTicket(t.id).map((s) => ({ id: s.id, role: s.role, status: s.status, cost_usd: s.cost_usd, report: s.report ? JSON.parse(s.report) : null })) }, null, 2))
+          console.log(JSON.stringify({ ...t, statement: statementHash(t), check_runs: store.checkRuns(t.id).map((r) => ({ name: r.name, command: r.command, passed: r.passed, exit_code: r.exit_code, commit: r.commit_sha.slice(0, 12), statement: r.statement, overlaid: r.overlaid, at: r.at })), parts: store.children(t.id).map((c) => `${c.id} ${c.state}`), waits_on: END_STATES.has(t.state) ? null : store.holdOf(t) ?? null, events: store.events(t.id), verdict: store.verdictFor(t.id), sessions: store.sessionsForTicket(t.id).map((s) => ({ id: s.id, role: s.role, status: s.status, cost_usd: s.cost_usd, report: s.report ? JSON.parse(s.report) : null })) }, null, 2))
         } else if (sub === "unblock") {
           requireTty("ticket unblock")
           const id = args.positional[2] ?? ""
@@ -389,7 +393,7 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
             throw e
           }
           console.log(`${id} → declined (${store.ticket(id)?.end_kind}${store.ticket(id)?.end_into ? ` into ${store.ticket(id)?.end_into}` : ""})`)
-        } else throw new OperatorError("usage: holdco ticket new --title t [--dept d] [--project p] [--goal g] [--why w] [--criteria 'a; b'] [--action a] [--priority n] [--needs 'a, b'] [--parent id] | list | show <id> | link <id> [--needs 'a, b'|none] [--parent id|none] | unblock <id> --note n | decline <id> [--note n] [--kind refuted|barrier|exhausted|merged|withdrawn|rejected] [--into id]")
+        } else throw new OperatorError("usage: holdco ticket new --title t [--dept d] [--project p] [--goal g] [--why w] [--criteria 'a; b'] [--action a] [--priority n] [--needs 'a, b'] [--parent id] [--checks 'a, b'] | list | show <id> | link <id> [--needs 'a, b'|none] [--parent id|none] | unblock <id> --note n | decline <id> [--note n] [--kind refuted|barrier|exhausted|merged|withdrawn|rejected] [--into id]")
       } finally {
         store.close()
       }
@@ -542,7 +546,7 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
     case "project": {
       // D70: list | add <path> [--id --class --share --verify "cmd"] | set <id> [--share --class --verify "cmd"|none --kill …] | remove <id> [--force] | verify <id> [cmd…]
       const config = loadConfig(dir)
-      const usage = "usage: holdco project list | add <path> [--id x] [--class core|experiment|maintenance|brand] [--share 0.3] [--verify \"bun test\"] | set <id> [--share 0.3] [--class …] [--verify \"cmd\"|none] [--kill \"…\"] [--min-tier T0..T3|none] [--merge local|github] | remove <id> [--force] | verify <id> [command…]"
+      const usage = "usage: holdco project list | add <path> [--id x] [--class core|experiment|maintenance|brand] [--share 0.3] [--verify \"bun test\"] | set <id> [--share 0.3] [--class …] [--verify \"cmd\"|none] [--kill \"…\"] [--min-tier T0..T3|none] [--merge local|github] | remove <id> [--force] | verify <id> [command…] | check <id> <name> [command…] | checker <id> [glob…]"
       const pct = (x: number) => `${Math.round(x * 100)}%`
       const shareArg = (v: string | undefined): number | undefined => {
         if (v === undefined) return undefined
@@ -574,6 +578,12 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
           const spentTotal = Object.values(spent).reduce((a, b) => a + b, 0)
           console.log(`id               class        share   ${advisory ? "spent · actual share " : "spent / cap (month) "}  open  path  ·  verify  ·  min tier`)
           for (const pr of config.projects) console.log(`${pr.id.padEnd(16)} ${pr.class.padEnd(12)} ${pct(pr.share).padStart(5)}   ${(advisory ? `$${(spent[pr.id] ?? 0).toFixed(2)} · ${spentTotal > 0 ? pct((spent[pr.id] ?? 0) / spentTotal) : "—"}` : `$${(spent[pr.id] ?? 0).toFixed(2)} / $${(pr.share * config.budget.monthly_usd).toFixed(2)}`).padStart(19)}  ${String(openTicketsFor(store, pr.id).length).padStart(4)}  ${pr.path}${pr.verify ? `  ·  ${renderVerify(pr.verify)}` : ""}${pr.min_tier ? `  ·  ≥${pr.min_tier}` : ""}`)
+          // D90: what each project can be checked with beyond verify
+          for (const pr of config.projects) {
+            const checks = Object.entries(pr.checks ?? {})
+            if (checks.length) console.log(`${pr.id} checks: ${checks.map(([n, argv]) => `${n} = ${renderVerify(argv)}`).join("; ")}`)
+            if (pr.checker?.length) console.log(`${pr.id} checker paths (checked with the default branch's version; a change needs you): ${pr.checker.join(", ")}`)
+          }
           const total = config.projects.reduce((a, pr) => a + pr.share, 0)
           if (total < 0.999) console.log(`${pct(1 - total)} of effort is unallocated (the CEO treats it as free)`)
           store.close()
@@ -584,6 +594,23 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
           const argv = parseVerify(args.positional.slice(3).join(" ")) ?? []
           saveConfig(dir, setProject(config, id, { verify: argv }), `project ${id}: verify ${argv.length ? renderVerify(argv) : "cleared"}`)
           console.log(argv.length ? `${id}: Verification runs \`${renderVerify(argv)}\` before every judge; a failure rejects the ticket` : `${id}: verify command cleared`)
+          return true
+        }
+        if (sub === "check") {
+          // D90: a named command a ticket can be required to pass; the Operator defines it, agents only name it
+          const id = args.positional[2] ?? (() => { throw new OperatorError("usage: holdco project check <id> <name> [command…]   (no command removes it)") })()
+          const name = args.positional[3] ?? (() => { throw new OperatorError("usage: holdco project check <id> <name> [command…]   (no command removes it)") })()
+          const argv = parseVerify(args.positional.slice(4).join(" ")) ?? []
+          saveConfig(dir, setProject(config, id, { check: { name, argv } }), `project ${id}: check ${name} ${argv.length ? renderVerify(argv) : "removed"}`)
+          console.log(argv.length ? `${id}: check '${name}' runs \`${renderVerify(argv)}\` for every ticket that requires it; a failure rejects the ticket` : `${id}: check '${name}' removed`)
+          return true
+        }
+        if (sub === "checker") {
+          // D90: the paths that define how the project is checked
+          const id = args.positional[2] ?? (() => { throw new OperatorError("usage: holdco project checker <id> [glob…]   (no glob clears it)") })()
+          const globs = args.positional.slice(3).flatMap((g) => g.split(",")).map((g) => g.trim()).filter(Boolean)
+          saveConfig(dir, setProject(config, id, { checker: globs }), `project ${id}: checker ${globs.join(", ") || "cleared"}`)
+          console.log(globs.length ? `${id}: a branch that changes ${globs.join(", ")} is checked with the default branch's version of them, and its merge needs your approval` : `${id}: checker paths cleared`)
           return true
         }
         if (sub === "add") {

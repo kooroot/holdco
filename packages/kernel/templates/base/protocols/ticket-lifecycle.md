@@ -49,6 +49,7 @@ done_criteria: [checkable items]
 priority: 1..5              # 1 is highest; default 3
 needs: [ENG-140]            # tickets that must be `done` before this one is started
 parent: ENG-139             # the larger ticket this one is a part of (set by the CEO, the Operator, or `ticket_split`)
+checks: [e2e]               # registered checks (company.yaml:projects[].checks) the result must pass; the kernel runs them
 end_kind: refuted           # how a declined ticket ended: refuted | barrier | exhausted | merged (end_into) | withdrawn | rejected
 state, approval_stage, attempts, branch, note, interrupt_flag   # maintained by the kernel
 ```
@@ -75,6 +76,8 @@ The kernel starts sessions in this order: Verification tickets (`ready_for_verif
 
 Work starts only on the frontier: a `triaged` or `rejected` ticket is started when every ticket it `needs` is `done` and none of its parts (tickets naming it as `parent`) is still open. A held ticket is waiting, not stuck. A need that ended `declined` or `rolled_back` can never be met: the kernel moves the dependent to `blocked` with that reason, and releasing it (`ticket_unblock`, `holdco ticket unblock`) drops the dead need. A parent is worked after its parts have ended, however they ended, and its session is told how each did.
 
+What "done" is checked against: the kernel runs the project's `verify` command and then every check the ticket requires, in the verification worktree, and records each run with the commit and the criteria it ran against. Only the Operator registers a check's command; a ticket names checks, it never carries a command. If a branch changes the paths that define how the project is checked (`projects[].checker`), the kernel checks it with the default branch's version of them and the merge needs the Operator. A verdict covers the commit and the criteria it judged, and nothing else.
+
 A declined ticket is a dead end that is kept: it records how it ended (`end_kind`) and why (the note). A senior that finds its ticket cannot be done says so with `ticket_update` → `dead_end`; the ticket goes to whoever owns blocked tickets, who declines it with that kind or releases it with what to try instead. The CEO is shown the dead ends on record before it opens work.
 
 ### Deliverable convention
@@ -94,7 +97,9 @@ A declined ticket is a dead end that is kept: it records how it ended (`end_kind
 | `in_progress` → `ready_for_verification` / `blocked` | owning senior | `ticket_update` |
 | `in_progress` → `triaged`, held by its new parts | owning senior | `ticket_split` (at most `modules.juniors.max_per_task` parts, three levels deep) |
 | `in_progress` → `blocked` with a dead end claimed | owning senior | `ticket_update` → `dead_end` (`kind`: refuted, barrier, exhausted) |
+| `ready_for_verification` → `rejected` | kernel | the project's `verify` command or a check the ticket requires failed; no judge session is spent |
 | `ready_for_verification` → `verified` / `rejected` / `blocked` | Verification | `verdict_submit` |
+| `verified` / `awaiting_approval` → `ready_for_verification` | kernel | the branch or the done criteria changed after the verdict: it is judged again before anything executes |
 | `verified` → `done` (T0/T1) or `awaiting_approval` (T2/T3) | kernel | `tierForChange` + gate check; `action_request` names the action beforehand |
 | `needs_proposal` → `needs_review` / `inbox` | CEO | `proposal_submit` |
 | `needs_review` → execute / `inbox` | COO | `proposal_review` |
@@ -136,6 +141,8 @@ A declined ticket is a dead end that is kept: it records how it ended (`end_kind
 검증 → 경영진 → 생산. 생산 안에서는 프로젝트 등급 → `priority` → 오래된 순. 우선순위와 프로젝트가 CEO의 배분 수단입니다.
 
 작업은 프런티어에서만 시작합니다. `triaged`·`rejected` 티켓은 `needs`에 적힌 티켓이 모두 `done`이고 자기를 `parent`로 둔 하위 티켓이 하나도 열려 있지 않을 때 시작됩니다. 묶여 있는 티켓은 대기 중이지 막힌 것이 아닙니다. `needs`의 티켓이 `declined`·`rolled_back`으로 끝나면 영영 충족되지 않으므로 커널이 사유와 함께 `blocked`로 보내고, 풀어 주면(`ticket_unblock`, `holdco ticket unblock`) 그 선행 조건은 빠집니다. 부모 티켓은 하위 티켓이 어떻게 끝났든 모두 끝난 뒤에 작업되며, 그 세션은 각 하위 티켓의 결과를 전달받습니다.
+
+"완료"의 확인: 커널이 검증 워크트리에서 프로젝트의 `verify` 명령과 티켓이 요구하는 검사(`checks`)를 차례로 실행하고, 각 실행을 대상 커밋·완료 조건과 함께 기록합니다. 검사의 명령은 운영자만 등록하며(`company.yaml:projects[].checks`), 티켓은 검사 이름만 가집니다. 브랜치가 프로젝트의 검사 방법을 정의하는 경로(`projects[].checker`)를 바꾸면 커널은 기본 브랜치의 버전으로 검사하고, 그 머지는 운영자 승인이 필요합니다. 판정은 자신이 본 커밋과 완료 조건에 대해서만 유효하며, 실행 전에 둘 중 하나가 바뀌면 다시 판정됩니다.
 
 거절된 티켓은 보존되는 막다른 길입니다. 어떻게 끝났는지(`end_kind`: refuted 반증, barrier 외부 장벽, exhausted 방법 소진, merged 병합, withdrawn 철회, rejected 거절)와 이유(노트)를 남깁니다. 시니어는 티켓을 완수할 수 없다고 판단하면 `ticket_update` → `dead_end`로 알리고, 차단 티켓의 담당자가 그 유형으로 거절하거나 다른 시도 방향과 함께 풀어 줍니다. 시니어는 한 세션에 끝낼 수 없는 티켓을 `ticket_split`으로 하위 티켓으로 나눠 돌려줄 수 있습니다(티켓당 `modules.juniors.max_per_task`개, 깊이 3단계까지). CEO는 일을 열기 전에 기록된 막다른 길을 봅니다.
 

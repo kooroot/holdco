@@ -8,7 +8,7 @@ import * as NodePath from "node:path"
 import { Schema } from "effect"
 import { CompanyConfig } from "../../kernel/src/config/company.ts"
 import { renderCompanyYaml, scaffold } from "../../kernel/src/scaffold/scaffold.ts"
-import { Store } from "../../kernel/src/store/store.ts"
+import { statementHash, Store } from "../../kernel/src/store/store.ts"
 import { startDashboard } from "../../kernel/src/dashboard/server.ts"
 import { startAsk } from "../../kernel/src/supervisor/ask.ts"
 import type { Engine } from "../../kernel/src/engine/types.ts"
@@ -27,7 +27,7 @@ git(app, "add", "-A"); git(app, "commit", "-qm", "settlement fee + currency"); g
 const dir = NodePath.join(base, "co")
 scaffold({ dir, preset: "full", github: "operator", kernelVersion: "0.0.0", companyName: "acme", mission: "Ship acme: the product this seed pretends to run" })
 const raw = Bun.YAML.parse(readFileSync(NodePath.join(dir, "company.yaml"), "utf8")) as any
-raw.projects = [{ id: "acme", path: "../acme", class: "core", share: 0.7, locked: [] }, { id: "arcade", path: "../arcade", class: "experiment", share: 0.3, locked: [], kill_criteria: "no players by March", paused: true }]
+raw.projects = [{ id: "acme", path: "../acme", class: "core", share: 0.7, locked: [], verify: ["bun", "test"], checks: { e2e: ["bun", "run", "e2e"] }, checker: ["scripts/check.sh"] }, { id: "arcade", path: "../arcade", class: "experiment", share: 0.3, locked: [], kill_criteria: "no players by March", paused: true }]
 raw.budget.enforce = process.env["ENFORCE"] ?? "advisory" // the seed shows the subscription-login look by default (D81)
 raw.budget.shares = { engineering: 0.3, research: 0.05, gtm: 0.05, operations: 0.05, verification: 0.2, executive: 0.25, improvement: 0.1 }
 const config = Schema.decodeUnknownSync(CompanyConfig)(raw)
@@ -39,8 +39,15 @@ const now = Date.now(); const H = 3600_000
 store.setMeta("quota:claude", JSON.stringify({ engine: "claude", plan: "max", fetched_at: Date.now() - 3 * 60_000, source: "endpoint", windows: [{ id: "5h", label: "5-hour", used_pct: 42, resets_at: Date.now() + 2 * H, length_ms: 5 * H }, { id: "7d", label: "7-day", used_pct: 61, resets_at: Date.now() + 2.5 * 24 * H, length_ms: 7 * 24 * H }] }))
 store.setMeta("quota:codex", JSON.stringify({ engine: "codex", plan: "plus", fetched_at: Date.now() - 40_000, source: "session", windows: [{ id: "5h", label: "5-hour", used_pct: 93, resets_at: Date.now() + 50 * 60_000, length_ms: 5 * H }, { id: "7d", label: "weekly", used_pct: 30, resets_at: Date.now() + 5 * 24 * H, length_ms: 7 * 24 * H }] }))
 const mk = (o: any) => store.createTicket({ opened_by: "ceo", why: "strategy objective 1", done_criteria: ["tests pass", "docs updated"], now: now - 30 * H, ...o })
-const t1 = mk({ department: "engineering", title: "Settlement fee applied at checkout", goal: "Sellers see the net amount before confirming", project: "acme", state: "awaiting_approval", action: "code.merge.app" })
+const t1 = mk({ department: "engineering", title: "Settlement fee applied at checkout", goal: "Sellers see the net amount before confirming", project: "acme", state: "awaiting_approval", action: "code.merge.app", checks: ["e2e"] })
 store.db.run("UPDATE tickets SET branch='t/ENG-3', approval_stage='inbox', updated_at=? WHERE id=?", [now - 2 * H, t1.id])
+// D90: what the kernel ran for it, against which commit and which criteria
+{
+  const subject = { commit_sha: git(app, "rev-parse", "t/ENG-3"), statement: statementHash(t1) }
+  store.setSubject(t1.id, subject)
+  store.addCheckRun({ ticket_id: t1.id, session_id: "v1", at: now - 3 * H - 60_000, name: "verify", command: "bun test", passed: true, exit_code: 0, duration_ms: 8400, overlaid: [], tail: "12 pass", ...subject })
+  store.addCheckRun({ ticket_id: t1.id, session_id: "v1", at: now - 3 * H - 30_000, name: "e2e", command: "bun run e2e", passed: true, exit_code: 0, duration_ms: 41200, overlaid: [], tail: "3 flows ok", ...subject })
+}
 store.addVerdict({ ticket_id: t1.id, session_id: "v1", at: now - 3 * H, verdict: "approve", overall: 3.6, confidence: "high", payload: { summary: "Fee and currency are applied consistently; the new test covers settle(). Docs updated.", failures: [], gates: [{ gate: "ci-green", passed: true, evidence: "bun test: 12 pass" }] } })
 store.setProposal(t1.id, { ticket: t1.id, title: "Merge settlement fee", decision: "Merge t/ENG-3 into main", goal: "net amount at checkout", alternatives_rejected: ["leave fee implicit"], expected_cost: "$0 (merge)", rollback_plan: "holdco rollback reverts the merge commit", why_now: "blocks the seller onboarding objective", risk: "low; verified, 1 file + test", reversibility: "24h challenge window", evidence: ["verdict approve 3.6/4"] }, false, now - 2 * H)
 store.setReview(t1.id, { ticket: t1.id, decision: "concur", violates_policy: false, within_budget_and_capacity: true, rollback_executable: true, reasoning: "Policy allows it, the budget has room, the revert is one command." })

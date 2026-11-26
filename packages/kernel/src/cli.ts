@@ -49,11 +49,13 @@ const flag = (name: string): string | undefined => {
   return i >= 0 ? argv[i + 1] : undefined
 }
 const has = (name: string): boolean => argv.includes(`--${name}`)
-const VALUE_FLAGS: ReadonlySet<string> = new Set(["dir", "preset", "github", "name", "brief", "title", "goal", "why", "criteria", "dept", "project", "action", "priority", "note", "reason", "id", "class", "share", "kill", "mission", "timezone", "autonomy", "cap", "minutes", "port", "dashboard-port", "verify", "min-tier", "project-id", "merge", "needs", "parent", "kind", "into"])
+const VALUE_FLAGS: ReadonlySet<string> = new Set(["dir", "preset", "github", "name", "brief", "title", "goal", "why", "criteria", "dept", "project", "action", "priority", "note", "reason", "id", "class", "share", "kill", "mission", "timezone", "autonomy", "cap", "minutes", "port", "dashboard-port", "verify", "min-tier", "project-id", "merge", "needs", "parent", "kind", "into", "checks"])
 const positional: Array<string> = []
 // `holdco project verify <id> <command…>`: everything after the id is the command, flags included (`cargo test --release`).
-const rawCommand = argv[0] === "project" && argv[1] === "verify" ? argv.slice(3) : undefined
-for (let i = 0; i < (rawCommand ? 3 : argv.length); i++) {
+// D90: the same for `holdco project check <id> <name> <command…>`, after the name.
+const rawFrom = argv[0] === "project" && argv[1] === "verify" ? 3 : argv[0] === "project" && argv[1] === "check" ? 4 : undefined
+const rawCommand = rawFrom === undefined ? undefined : argv.slice(rawFrom)
+for (let i = 0; i < (rawFrom ?? argv.length); i++) {
   const a = argv[i] as string
   if (a.startsWith("--")) {
     if (VALUE_FLAGS.has(a.slice(2))) i++

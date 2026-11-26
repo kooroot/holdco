@@ -776,6 +776,27 @@
           "verify_timeout": {
             "type": "string",
             "pattern": "^[1-9][0-9]*(s|m|h|d)$"
+          },
+          "checks": {
+            "type": "object",
+            "patternProperties": {
+              "^[a-z][a-z0-9-]{0,31}$": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1
+              }
+            },
+            "additionalProperties": false
+          },
+          "checker": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
           }
         },
         "required": [

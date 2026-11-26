@@ -3,6 +3,7 @@
  * Plain `bun:sqlite`, synchronous, WAL. Every ticket transition is appended to `ticket_events`.
  */
 import { Database } from "bun:sqlite"
+import { createHash } from "node:crypto"
 import { existsSync, mkdirSync } from "node:fs"
 import * as NodePath from "node:path"
 
@@ -63,6 +64,8 @@ export interface Ticket {
   readonly parent: string | null
   /** D88: tickets that must be `done` before this one is worked. */
   readonly needs: ReadonlyArray<string>
+  /** D90: names of the project's registered checks this ticket must pass (company.yaml:projects[].checks). */
+  readonly checks: ReadonlyArray<string>
   /** D89: how a declined ticket ended; on a blocked ticket, the dead end its session claims (cleared when it is released). */
   readonly end_kind: EndKind | null
   /** D89: the ticket a `merged` one was folded into. */
@@ -194,6 +197,12 @@ CREATE TABLE IF NOT EXISTS verdicts (
   id INTEGER PRIMARY KEY AUTOINCREMENT, ticket_id TEXT NOT NULL, session_id TEXT NOT NULL, at INTEGER NOT NULL,
   verdict TEXT NOT NULL, overall REAL NOT NULL, confidence TEXT NOT NULL, payload TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS check_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, ticket_id TEXT NOT NULL, session_id TEXT NOT NULL, at INTEGER NOT NULL, name TEXT NOT NULL,
+  command TEXT NOT NULL, passed INTEGER NOT NULL, exit_code INTEGER, duration_ms INTEGER NOT NULL, commit_sha TEXT NOT NULL,
+  statement TEXT NOT NULL, overlaid TEXT NOT NULL DEFAULT '[]', tail TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS check_runs_ticket ON check_runs(ticket_id);
 CREATE TABLE IF NOT EXISTS labels (
   id INTEGER PRIMARY KEY AUTOINCREMENT, ticket_id TEXT NOT NULL, action TEXT, at INTEGER NOT NULL,
   agreement INTEGER NOT NULL, operator_verdict TEXT NOT NULL, note TEXT
@@ -223,7 +232,35 @@ CREATE TABLE IF NOT EXISTS action_log (
 `
 
 const parseTicket = (r: Record<string, unknown>): Ticket =>
-  ({ ...r, done_criteria: JSON.parse(String(r["done_criteria"])) as Array<string>, parent: (r["parent"] as string | null | undefined) ?? null, end_kind: (r["end_kind"] as EndKind | null | undefined) ?? null, end_into: (r["end_into"] as string | null | undefined) ?? null, needs: JSON.parse(String(r["needs"] ?? "[]")) as Array<string> }) as unknown as Ticket
+  ({ ...r, done_criteria: JSON.parse(String(r["done_criteria"])) as Array<string>, parent: (r["parent"] as string | null | undefined) ?? null, end_kind: (r["end_kind"] as EndKind | null | undefined) ?? null, end_into: (r["end_into"] as string | null | undefined) ?? null, checks: JSON.parse(String(r["checks"] ?? "[]")) as Array<string>, needs: JSON.parse(String(r["needs"] ?? "[]")) as Array<string> }) as unknown as Ticket
+
+/**
+ * D90: the statement a ticket is judged against — its done criteria and the checks it must pass — as a short hash.
+ * Nothing is stored for it: a verdict and every check run record the hash they were made against, and a result
+ * made against another statement (the criteria were edited since) no longer counts.
+ */
+export const statementHash = (t: Pick<Ticket, "done_criteria" | "checks">): string =>
+  createHash("sha256").update(JSON.stringify([t.done_criteria, [...t.checks].sort()])).digest("hex").slice(0, 16)
+
+/** D90: one command the kernel ran to check a ticket's branch, kept as the record of what was proven and how. */
+export interface CheckRun {
+  readonly id: number
+  readonly ticket_id: string
+  readonly session_id: string
+  readonly at: number
+  /** `verify`, or the name of a registered check. */
+  readonly name: string
+  readonly command: string
+  readonly passed: boolean
+  readonly exit_code: number | null
+  readonly duration_ms: number
+  /** The branch head that was checked, and the statement it was checked for. */
+  readonly commit_sha: string
+  readonly statement: string
+  /** Checker paths the branch changed, for which the default branch's version was used. */
+  readonly overlaid: ReadonlyArray<string>
+  readonly tail: string
+}
 
 /** D88: a parent or need that cannot be given to a ticket. */
 export class LinkError extends Error {}
@@ -260,8 +297,8 @@ export const TRANSITIONS: Readonly<Record<TicketState, ReadonlyArray<TicketState
   rejected: ["in_progress", "blocked", "declined"],
   in_progress: ["ready_for_verification", "blocked", "triaged", "rejected", "declined"],
   ready_for_verification: ["verified", "rejected", "ready_for_verification", "blocked"],
-  verified: ["done", "awaiting_approval", "blocked", "rejected"],
-  awaiting_approval: ["done", "declined", "awaiting_approval", "blocked"],
+  verified: ["done", "awaiting_approval", "blocked", "rejected", "ready_for_verification"], // back to Verification: what was judged is no longer what would be executed (D90)
+  awaiting_approval: ["done", "declined", "awaiting_approval", "blocked", "ready_for_verification"],
   blocked: ["triaged", "declined", "done", "rolled_back"], // done / rolled_back: the Operator resolving a failed postcheck (D68)
   done: ["rolled_back"],
   declined: [],
@@ -283,6 +320,9 @@ const ADDED_COLUMNS: ReadonlyArray<readonly [table: string, column: string, ddl:
   ["tickets", "needs", "TEXT NOT NULL DEFAULT '[]'"],
   ["tickets", "end_kind", "TEXT"],
   ["tickets", "end_into", "TEXT"],
+  ["tickets", "checks", "TEXT NOT NULL DEFAULT '[]'"],
+  ["verdicts", "commit_sha", "TEXT"],
+  ["verdicts", "statement", "TEXT"],
 ]
 
 export class Store {
@@ -345,6 +385,7 @@ export class Store {
     milestone?: number | null
     parent?: string | null
     needs?: ReadonlyArray<string>
+    checks?: ReadonlyArray<string>
     now: number
   }): Ticket {
     const parent = t.parent ?? null
@@ -354,9 +395,9 @@ export class Store {
     const id = this.nextTicketId(t.department)
     const state = t.state ?? "new"
     this.db.run(
-      `INSERT INTO tickets(id, project, department, action, state, priority, title, goal, why, done_criteria, opened_by, milestone, parent, needs, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, t.project ?? null, t.department, t.action ?? null, state, t.priority ?? 3, t.title, t.goal, t.why, JSON.stringify(t.done_criteria), t.opened_by, t.milestone ?? null, parent, JSON.stringify(needs), t.now, t.now],
+      `INSERT INTO tickets(id, project, department, action, state, priority, title, goal, why, done_criteria, opened_by, milestone, parent, needs, checks, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, t.project ?? null, t.department, t.action ?? null, state, t.priority ?? 3, t.title, t.goal, t.why, JSON.stringify(t.done_criteria), t.opened_by, t.milestone ?? null, parent, JSON.stringify(needs), JSON.stringify([...new Set(t.checks ?? [])]), t.now, t.now],
     )
     this.db.run("INSERT INTO ticket_events(ticket_id, at, actor, from_state, to_state, note) VALUES (?, ?, ?, NULL, ?, ?)", [id, t.now, t.opened_by, state, "opened"])
     return this.ticket(id) as Ticket
@@ -532,13 +573,13 @@ export class Store {
     this.db.run("UPDATE tickets SET milestone = ?, updated_at = ? WHERE id = ?", [milestone, now, ticketId])
   }
 
-  editTicket(id: string, patch: Partial<{ title: string; goal: string; why: string; done_criteria: ReadonlyArray<string>; priority: number; action: string | null; project: string | null; department: string; milestone: number | null }>, now: number) {
+  editTicket(id: string, patch: Partial<{ title: string; goal: string; why: string; done_criteria: ReadonlyArray<string>; checks: ReadonlyArray<string>; priority: number; action: string | null; project: string | null; department: string; milestone: number | null }>, now: number) {
     const sets: Array<string> = []
     const vals: Array<string | number | null> = []
     for (const [k, v] of Object.entries(patch)) {
       if (v === undefined) continue
       sets.push(`${k} = ?`)
-      vals.push(k === "done_criteria" ? JSON.stringify(v) : (v as string | number | null))
+      vals.push(k === "done_criteria" || k === "checks" ? JSON.stringify(v) : (v as string | number | null))
     }
     if (sets.length === 0) return
     this.db.run(`UPDATE tickets SET ${sets.join(", ")}, updated_at = ? WHERE id = ?`, [...vals, now, id])
@@ -658,11 +699,32 @@ export class Store {
   }
 
   // ── verdicts, labels, demotions, audits ──────────────────────────────────
-  addVerdict(v: { ticket_id: string; session_id: string; at: number; verdict: string; overall: number; confidence: string; payload: unknown }) {
-    this.db.run("INSERT INTO verdicts(ticket_id, session_id, at, verdict, overall, confidence, payload) VALUES (?, ?, ?, ?, ?, ?, ?)", [v.ticket_id, v.session_id, v.at, v.verdict, v.overall, v.confidence, JSON.stringify(v.payload)])
+  /**
+   * D90: what the verification of a ticket is judging — the branch head and the statement, fixed when it starts
+   * (a ticket has one verification at a time). The verdict and the check runs are recorded against these,
+   * whichever path writes the verdict.
+   */
+  setSubject(ticketId: string, subject: { commit_sha: string; statement: string }) {
+    this.setMeta(`subject:${ticketId}`, JSON.stringify(subject))
   }
-  verdictFor(ticketId: string): { verdict: string; overall: number; confidence: string; at: number; payload: string } | undefined {
-    return this.db.query<{ verdict: string; overall: number; confidence: string; at: number; payload: string }, [string]>("SELECT verdict, overall, confidence, at, payload FROM verdicts WHERE ticket_id = ? ORDER BY id DESC LIMIT 1").get(ticketId) ?? undefined
+  subject(ticketId: string): { commit_sha: string; statement: string } | undefined {
+    const raw = this.getMeta(`subject:${ticketId}`)
+    return raw ? (JSON.parse(raw) as { commit_sha: string; statement: string }) : undefined
+  }
+  addVerdict(v: { ticket_id: string; session_id: string; at: number; verdict: string; overall: number; confidence: string; payload: unknown }) {
+    const subject = this.subject(v.ticket_id)
+    this.db.run("INSERT INTO verdicts(ticket_id, session_id, at, verdict, overall, confidence, payload, commit_sha, statement) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", [v.ticket_id, v.session_id, v.at, v.verdict, v.overall, v.confidence, JSON.stringify(v.payload), subject?.commit_sha ?? null, subject?.statement ?? null])
+  }
+  verdictFor(ticketId: string): { verdict: string; overall: number; confidence: string; at: number; payload: string; commit_sha: string | null; statement: string | null } | undefined {
+    return this.db.query<{ verdict: string; overall: number; confidence: string; at: number; payload: string; commit_sha: string | null; statement: string | null }, [string]>("SELECT verdict, overall, confidence, at, payload, commit_sha, statement FROM verdicts WHERE ticket_id = ? ORDER BY id DESC LIMIT 1").get(ticketId) ?? undefined
+  }
+  addCheckRun(r: Omit<CheckRun, "id">) {
+    this.db.run("INSERT INTO check_runs(ticket_id, session_id, at, name, command, passed, exit_code, duration_ms, commit_sha, statement, overlaid, tail) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      [r.ticket_id, r.session_id, r.at, r.name, r.command, r.passed ? 1 : 0, r.exit_code, r.duration_ms, r.commit_sha, r.statement, JSON.stringify(r.overlaid), r.tail])
+  }
+  /** Every check the kernel ran for a ticket, oldest first. */
+  checkRuns(ticketId: string): Array<CheckRun> {
+    return this.db.query<Record<string, unknown>, [string]>("SELECT * FROM check_runs WHERE ticket_id = ? ORDER BY id").all(ticketId).map((r) => ({ ...r, passed: r["passed"] === 1, overlaid: JSON.parse(String(r["overlaid"])) as Array<string> }) as unknown as CheckRun)
   }
   verdictsSince(since: number): Array<{ ticket_id: string; verdict: string; overall: number; confidence: string; at: number }> {
     return this.db.query<{ ticket_id: string; verdict: string; overall: number; confidence: string; at: number }, [number]>("SELECT ticket_id, verdict, overall, confidence, at FROM verdicts WHERE at >= ? ORDER BY at").all(since)

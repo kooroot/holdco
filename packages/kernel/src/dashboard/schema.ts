@@ -22,7 +22,7 @@ export const Urgency = Schema.Literals(["routine", "urgent"])
 export const Ticket = Schema.Struct({
   id: Str, project: NullStr, department: Str, action: NullStr, state: TicketState, approval_stage: NullStr, interrupt_flag: NullStr,
   priority: Num, title: Str, goal: Str, why: Str, done_criteria: Schema.Array(Str), opened_by: Str, attempts: Num,
-  lease_holder: NullStr, lease_expires: NullNum, window_closes_at: NullNum, branch: NullStr, note: NullStr, milestone: NullNum, parent: NullStr, needs: Schema.Array(Str), end_kind: NullStr, end_into: NullStr, created_at: Num, updated_at: Num,
+  lease_holder: NullStr, lease_expires: NullNum, window_closes_at: NullNum, branch: NullStr, note: NullStr, milestone: NullNum, parent: NullStr, needs: Schema.Array(Str), checks: Schema.Array(Str), end_kind: NullStr, end_into: NullStr, created_at: Num, updated_at: Num,
 })
 export const TicketListed = Schema.Struct({ ...Ticket.fields, verdict: NullStr, cost: Num })
 
@@ -132,6 +132,9 @@ export const TicketDetail = Schema.Struct({
   diff: Schema.NullOr(Diff),
   translations: Schema.Record(Str, Str),
   cost: Num,
+  /** D90: the statement hash of the ticket now, and every check the kernel ran for it (which commit, which statement). */
+  statement: Str,
+  check_runs: Schema.Array(Schema.Struct({ id: Num, session_id: Str, at: Num, name: Str, command: Str, passed: Bool, exit_code: NullNum, duration_ms: Num, commit_sha: Str, statement: Str, overlaid: Schema.Array(Str) })),
 })
 export type TicketDetail = typeof TicketDetail.Type
 

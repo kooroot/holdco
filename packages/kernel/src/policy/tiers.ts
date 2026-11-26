@@ -53,7 +53,8 @@ export const tierForChange = (
       ? paths.filter((p) => matches(p, LOCKED) || matches(p, APPROVAL_REQUIRED))
       : paths.filter((p) => {
           const project = config.projects.find((x) => x.id === target.projectId)
-          return matches(p, PROJECT_FIXED_LOCKED) || matchesGlob(p, project?.locked ?? [])
+          // D90: a change to how the project is checked is the Operator's to approve, like a locked path
+          return matches(p, PROJECT_FIXED_LOCKED) || matchesGlob(p, project?.locked ?? []) || matchesGlob(p, project?.checker ?? [])
         })
   const floor = target.repo === "project" ? config.projects.find((x) => x.id === target.projectId)?.min_tier : undefined
   const floored = floor && ORDER.indexOf(floor) > ORDER.indexOf(base) ? floor : base

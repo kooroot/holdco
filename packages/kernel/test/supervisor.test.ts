@@ -12,7 +12,7 @@ import { Schema } from "effect"
 import { CompanyConfig } from "../src/config/company.ts"
 import { scaffold } from "../src/scaffold/scaffold.ts"
 import { renderCompanyYaml } from "../src/scaffold/scaffold.ts"
-import { Store } from "../src/store/store.ts"
+import { statementHash, Store } from "../src/store/store.ts"
 import { Supervisor } from "../src/supervisor/supervisor.ts"
 import { raise, readControl, clear } from "../src/supervisor/control.ts"
 import { DEFAULT_SCRIPTS, FakeEngine, type Script } from "./fake-engine.ts"
@@ -1076,6 +1076,172 @@ describe("split and dead ends (D89)", () => {
     const ceo = engine.runs.filter((r) => r.role.kind === "ceo" && r.ticketId === "CEO-CYCLE").at(-1)!.prompt
     expect(ceo).toContain("Dead ends on record")
     expect(ceo).toContain(`- ${x} [refuted] Bulk import through the vendor API: confirmed: the vendor has no such endpoint`)
+    await sup.stop()
+  })
+})
+
+describe("checks run by the kernel, against what was judged (D90)", () => {
+  const project = (raw: Record<string, unknown>) => (raw["projects"] as Array<Record<string, unknown>>)[0]!
+  const ready = async ({ spec, call, git }: Parameters<Script>[0]) => {
+    git("add", "-A")
+    git("commit", "-qm", `${spec.ticketId}: work`)
+    const t = (await call("ticket_get", { id: spec.ticketId })) as { branch: string }
+    await call("ticket_update", { state: "ready_for_verification", note: "done", branch: t.branch, action: "code.merge.app" })
+    return { report: { ticket: spec.ticketId, status: "ready", summary: "ok", branch: t.branch, action: "code.merge.app", changed_paths: [], assumptions: [], opened_tickets: [] } }
+  }
+  const open = (store: Store, now: number, extra: Record<string, unknown> = {}) => store.createTicket({ department: "engineering", title: "Add the feature", goal: "g", why: "w", done_criteria: ["the feature works end to end"], opened_by: "operator", project: "app", state: "triaged", action: "code.merge.app", now, ...extra }).id
+
+  test("a ticket names registered checks; the kernel runs them after verify, keeps the record, and a failure rejects without a judge", async () => {
+    const c = company("checks", (raw) => { project(raw)["verify"] = ["sh", "-c", "test -f README.md"]; project(raw)["checks"] = { feature: ["sh", "-c", "echo probing; test -f feature-ok.txt"] } })
+    const clock = { now: Date.UTC(2026, 9, 26, 9) }
+    const refusals: Array<string> = []
+    let attempt = 0
+    const engine = new FakeEngine({
+      ceo: async () => ({}),
+      senior: async (ctx) => {
+        attempt++
+        if (attempt === 1) {
+          try { await ctx.call("ticket_create", { department: "engineering", title: "x", goal: "g", why: "w", done_criteria: ["c"], project: "app", checks: ["load"] }) } catch (e) { refusals.push(String(e)) }
+          const follow = (await ctx.call("ticket_create", { department: "engineering", title: "Follow-up", goal: "g", why: "w", done_criteria: ["c"], project: "app", checks: ["feature"] })) as { checks: Array<string> }
+          expect(follow.checks).toEqual(["feature"])
+          writeFileSync(NodePath.join(ctx.spec.cwd, "half.md"), "x\n") // the check's file is missing
+        } else writeFileSync(NodePath.join(ctx.spec.cwd, "feature-ok.txt"), "x\n")
+        return ready(ctx)
+      },
+    })
+    const { sup, store } = makeSupervisor(c, engine, clock)
+    await sup.boot()
+    const id = open(store, clock.now, { checks: ["feature"] })
+    await cycle(sup, clock, 4)
+    expect(refusals[0]).toContain("check 'load' is not registered for app (registered: feature)")
+    expect(engine.runs.find((r) => r.role.kind === "senior")!.prompt).toContain("must also pass these registered checks")
+    expect(engine.runs.find((r) => r.role.kind === "senior")!.prompt).toContain("feature (`echo probing; test -f feature-ok.txt`)")
+    // first attempt: verify passed, the named check failed — rejected by the kernel, with the output, and no judge was paid
+    const rejected = store.events(id).find((e) => e.to_state === "rejected" && e.actor === "kernel")
+    expect(rejected?.note).toContain("check 'feature' failed: `echo probing; test -f feature-ok.txt` exited 1")
+    expect(rejected?.note).toContain("probing")
+    const first = store.checkRuns(id).slice(0, 2)
+    expect(first.map((r) => [r.name, r.passed, r.exit_code])).toEqual([["verify", true, 0], ["feature", false, 1]])
+    await cycle(sup, clock, 6)
+    // second attempt passes: one judge session, told what the kernel already executed
+    const judges = engine.runs.filter((r) => r.role.kind === "verification")
+    expect(judges.length).toBe(1)
+    expect(judges[0]!.prompt).toContain("ci-green: PASSED by the kernel")
+    expect(judges[0]!.prompt).toContain("## Checks PASSED by the kernel")
+    expect(judges[0]!.prompt).toContain("- feature: `echo probing; test -f feature-ok.txt` exit 0")
+    // the record: which command, against which commit and which statement
+    const t = store.ticket(id)!
+    const head = git(c.app, "rev-parse", t.branch!)
+    const last = store.checkRuns(id).slice(-2)
+    expect(last.map((r) => [r.name, r.passed])).toEqual([["verify", true], ["feature", true]])
+    expect(last.every((r) => r.commit_sha === head && r.statement === statementHash(t) && r.overlaid.length === 0)).toBe(true)
+    expect(first[0]!.commit_sha).not.toBe(head)
+    expect(store.verdictFor(id)).toMatchObject({ verdict: "approve", commit_sha: head, statement: statementHash(t) })
+    // the dashboard carries the record
+    const { ticketDetail } = await import("../src/dashboard/api.ts")
+    const detail = ticketDetail({ root: c.dir, config: () => c.config, store, now: () => clock.now, supervisor: sup, saveConfig: () => {} }, id)
+    expect(detail.statement).toBe(statementHash(t))
+    expect(detail.check_runs.length).toBe(4)
+    await sup.stop()
+  })
+
+  test("a check the Operator has since removed blocks the ticket with the reason instead of being skipped", async () => {
+    const c = company("checks-gone", (raw) => { project(raw)["checks"] = { feature: ["sh", "-c", "true"] } })
+    const clock = { now: Date.UTC(2026, 9, 26, 9) }
+    const engine = new FakeEngine({ ceo: async () => ({}), senior: async (ctx) => { writeFileSync(NodePath.join(ctx.spec.cwd, "f.md"), "x\n"); return ready(ctx) } })
+    const { sup, store } = makeSupervisor(c, engine, clock)
+    await sup.boot()
+    const id = open(store, clock.now, { checks: ["gone"] }) // as if registered when the ticket was opened
+    await cycle(sup, clock, 4)
+    expect(store.ticket(id)).toMatchObject({ state: "blocked" })
+    expect(store.ticket(id)?.note).toContain("requires check 'gone', which is not registered for project app")
+    expect(engine.runs.some((r) => r.role.kind === "verification")).toBe(false)
+    await sup.stop()
+  })
+
+  test("a branch cannot loosen its own check: checker paths are read from the default branch, and changing them needs the Operator", async () => {
+    const c = company("checker", (raw) => { project(raw)["verify"] = ["sh", "check.sh"]; project(raw)["checker"] = ["check.sh", "acceptance/**"] })
+    writeFileSync(NodePath.join(c.app, "check.sh"), "test -f required.txt\n")
+    git(c.app, "add", "-A"); git(c.app, "commit", "-qm", "the project's check")
+    const clock = { now: Date.UTC(2026, 9, 26, 9) }
+    let attempt = 0
+    const seen: Record<string, string> = {}
+    const engine = new FakeEngine({
+      ceo: DEFAULT_SCRIPTS["ceo"]!,
+      senior: async (ctx) => {
+        attempt++
+        // rewrites the check to always pass, and adds an acceptance file of its own; only the second attempt does the work
+        writeFileSync(NodePath.join(ctx.spec.cwd, "check.sh"), "exit 0\n")
+        mkdirSync(NodePath.join(ctx.spec.cwd, "acceptance"), { recursive: true })
+        writeFileSync(NodePath.join(ctx.spec.cwd, "acceptance", "new.sh"), "exit 0\n")
+        if (attempt > 1) writeFileSync(NodePath.join(ctx.spec.cwd, "required.txt"), "x\n")
+        return ready(ctx)
+      },
+      verification: async (ctx) => {
+        // the judge reads the branch as it is: the candidate's own checker files are back
+        seen["check"] = readFileSync(NodePath.join(ctx.spec.cwd, "check.sh"), "utf8")
+        seen["added"] = String(existsSync(NodePath.join(ctx.spec.cwd, "acceptance", "new.sh")))
+        seen["status"] = ctx.git("status", "--porcelain")
+        return DEFAULT_SCRIPTS["verification"]!(ctx)
+      },
+    })
+    const { sup, store } = makeSupervisor(c, engine, clock)
+    await sup.boot()
+    const id = open(store, clock.now)
+    await cycle(sup, clock, 4)
+    // attempt 1: the rewritten check would pass, the default branch's does not
+    const rejected = store.events(id).find((e) => e.to_state === "rejected" && e.actor === "kernel")
+    expect(rejected?.note).toContain("verify failed: `sh check.sh` exited 1")
+    expect(rejected?.note).toContain("Checked with the default branch's version of acceptance/new.sh, check.sh")
+    expect(engine.runs.some((r) => r.role.kind === "verification")).toBe(false)
+    expect(engine.runs.find((r) => r.role.kind === "senior")!.prompt).toContain("These paths define how the project is checked: check.sh, acceptance/**")
+    await cycle(sup, clock, 8)
+    // attempt 2 passes under the trusted checker; the record says which paths were taken from the default branch
+    expect(store.checkRuns(id).at(-1)).toMatchObject({ name: "verify", passed: true, overlaid: ["acceptance/new.sh", "check.sh"] })
+    expect(seen).toEqual({ check: "exit 0\n", added: "true", status: "" })
+    expect(engine.runs.find((r) => r.role.kind === "verification")!.prompt).toContain("## The branch changes how the project is checked")
+    // and the change to the checker itself is the Operator's to approve
+    expect(store.events(id).find((e) => e.to_state === "awaiting_approval")?.note).toBe("tier T3 (forced by acceptance/new.sh, check.sh)")
+    await sup.stop()
+  })
+
+  test("a verdict counts for the commit and the criteria it judged: move either and the ticket is judged again before anything executes", async () => {
+    const c = company("stale")
+    const clock = { now: Date.UTC(2026, 9, 26, 9) }
+    const engine = new FakeEngine({ senior: async (ctx) => { writeFileSync(NodePath.join(ctx.spec.cwd, "f.md"), "x\n"); return ready(ctx) } })
+    const { sup, store } = makeSupervisor(c, engine, clock)
+    await sup.boot()
+    const id = open(store, clock.now)
+    const approve = async () => {
+      for (let i = 0; i < 8 && !store.inboxOpen().some((x) => x.kind === "t3" && x.ticket_id === id); i++) await cycle(sup, clock, 1)
+      const item = store.inboxOpen().find((x) => x.kind === "t3" && x.ticket_id === id)!
+      store.inboxDecide(item.id, "approved", "ok", clock.now)
+      await cycle(sup, clock, 1)
+    }
+    const judged = () => engine.runs.filter((r) => r.role.kind === "verification").length
+    // 1. the branch moves after the verdict: the approval does not carry over to the new head
+    for (let i = 0; i < 8 && !store.inboxOpen().some((x) => x.kind === "t3" && x.ticket_id === id); i++) await cycle(sup, clock, 1)
+    const wt = NodePath.join(c.app, ".claude", "worktrees", `t-${id}`)
+    writeFileSync(NodePath.join(wt, "late.md"), "added after the verdict\n")
+    git(wt, "add", "-A"); git(wt, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "late change")
+    await approve()
+    expect(store.ticket(id)?.state).not.toBe("done")
+    expect(store.events(id).some((e) => e.actor === "kernel" && e.to_state === "ready_for_verification" && /the branch moved after the verdict \([0-9a-f]{8} → [0-9a-f]{8}\)/.test(e.note ?? ""))).toBe(true)
+    expect(existsSync(NodePath.join(c.app, "late.md"))).toBe(false) // nothing was merged on the stale approval
+    // 2. the criteria change after the new verdict: same thing
+    for (let i = 0; i < 8 && !store.inboxOpen().some((x) => x.kind === "t3" && x.ticket_id === id); i++) await cycle(sup, clock, 1)
+    expect(judged()).toBe(2)
+    store.editTicket(id, { done_criteria: ["the feature works end to end", "and is documented"] }, clock.now)
+    await approve()
+    expect(store.ticket(id)?.state).not.toBe("done")
+    expect(store.events(id).some((e) => e.actor === "kernel" && e.to_state === "ready_for_verification" && (e.note ?? "").startsWith("the done criteria or required checks changed after the verdict"))).toBe(true)
+    // 3. judged again against the current criteria and head, the approval executes
+    await approve()
+    await cycle(sup, clock, 1)
+    expect(judged()).toBe(3)
+    expect(store.ticket(id)?.state).toBe("done")
+    expect(existsSync(NodePath.join(c.app, "late.md"))).toBe(true)
+    expect(store.verdictFor(id)?.statement).toBe(statementHash(store.ticket(id)!))
     await sup.stop()
   })
 })

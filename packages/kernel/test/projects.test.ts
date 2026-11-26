@@ -84,6 +84,23 @@ describe("projects change at any time", () => {
     expect(setProject(v, "two", { verify: [] }).projects[1]?.verify).toBeUndefined()
     expect(() => setProject(v, "two", { share: 0.4 })).toThrow(ProjectError) // 0.7 + 0.4
   })
+  test("checks and checker paths (D90): the Operator registers named commands and the paths that define the check", () => {
+    const cfg = r.config
+    const id = cfg.projects.at(-1)!.id
+    const withCheck = setProject(cfg, id, { check: { name: "e2e", argv: ["bun", "run", "e2e"] } })
+    expect(withCheck.projects.at(-1)?.checks).toEqual({ e2e: ["bun", "run", "e2e"] })
+    const two = setProject(withCheck, id, { check: { name: "load", argv: ["sh", "-c", "k6 run load.js"] }, checker: ["scripts/check.sh", " acceptance/** ", ""] })
+    expect(two.projects.at(-1)).toMatchObject({ checks: { e2e: ["bun", "run", "e2e"], load: ["sh", "-c", "k6 run load.js"] }, checker: ["scripts/check.sh", "acceptance/**"] })
+    // an unrelated edit keeps them; an empty argv removes one check; an empty list clears the checker
+    expect(setProject(two, id, { class: "maintenance" }).projects.at(-1)).toMatchObject({ checks: two.projects.at(-1)!.checks!, checker: ["scripts/check.sh", "acceptance/**"] })
+    const less = setProject(two, id, { check: { name: "e2e", argv: [] }, checker: [] })
+    expect(less.projects.at(-1)?.checks).toEqual({ load: ["sh", "-c", "k6 run load.js"] })
+    expect(less.projects.at(-1)?.checker).toBeUndefined()
+    expect(setProject(less, id, { check: { name: "load", argv: [] } }).projects.at(-1)?.checks).toBeUndefined()
+    expect(() => setProject(cfg, id, { check: { name: "gone", argv: [] } })).toThrow(/has no check 'gone'/)
+    expect(() => setProject(cfg, id, { check: { name: "Not A Slug", argv: ["x"] } })).toThrow(/check name/)
+    expect(() => setProject(cfg, id, { check: { name: "verify", argv: ["x"] } })).toThrow(/holdco project verify/)
+  })
   test("remove: refused while tickets are open, unless forced — then they are declined and the repository is untouched", () => {
     const cfg = addProject(dir, r.config, { path: b }).config
     const t = store.createTicket({ department: "engineering", title: "On two", goal: "g", why: "w", done_criteria: ["d"], opened_by: "operator", project: "two", state: "triaged", now })

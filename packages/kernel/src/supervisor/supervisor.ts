@@ -14,7 +14,7 @@ import * as NodePath from "node:path"
 import { spawnSync } from "node:child_process"
 import { Exit, Schema } from "effect"
 import { assignmentFor, authMode, budgetMode, CompanyConfig, durationMs, type EngineId, type RoleKind } from "../config/company.ts"
-import { HOST_DENY_READ, UNREADABLE } from "../policy/paths.ts"
+import { HOST_DENY_READ, matchesGlob, UNREADABLE } from "../policy/paths.ts"
 import { effectiveTier, tierForChange, UnknownAction } from "../policy/tiers.ts"
 import { demotionDue, graduationCheck } from "../policy/graduation.ts"
 import { evaluateGuard } from "../hooks/guard.ts"
@@ -36,14 +36,14 @@ import { Return } from "../protocol/return.ts"
 import { SessionReport } from "../protocol/report.ts"
 import { CeoCycleReport, Proposal } from "../protocol/approval.ts"
 import { Verdict } from "../protocol/verdict.ts"
-import { END_STATES, Store, type Ticket, TRANSITIONS } from "../store/store.ts"
+import { END_STATES, statementHash, Store, type Ticket, TRANSITIONS } from "../store/store.ts"
 import { clear as clearInterrupt, raise as raiseInterrupt, readControl } from "./control.ts"
 import { type ExecResult, executorEnv, executorKind, mergeBranch, mergeViaGithub, runAsync, runExecutor } from "./executors.ts"
 import { consoleNotifier, type Notifier } from "./notify.ts"
 import { Org, projectInstructions } from "./org.ts"
 import { renderDigest } from "./digest.ts"
 import { type SessionBinding, ToolServer, type ToolHost } from "./tools.ts"
-import { changedPaths, createDetachedWorktree, createWorktree, defaultBranch, ensureFirstCommit, provisionDependencies, removeTicketWorktrees, removeWorktree, syncWithBase, worktreeDir } from "./worktrees.ts"
+import { changedPaths, createDetachedWorktree, createWorktree, defaultBranch, ensureFirstCommit, provisionDependencies, headOf, removeTicketWorktrees, removeWorktree, syncWithBase, takeFrom, worktreeDir } from "./worktrees.ts"
 
 export interface SupervisorOptions {
   readonly companyRoot: string
@@ -451,10 +451,26 @@ export class Supervisor {
     }
   }
 
+  /** D90: why the latest verdict no longer covers what would be executed, or undefined. Verdicts from before D90 carry no subject and are not judged here. */
+  private staleVerdict(t: Ticket, repo: string): string | undefined {
+    const v = this.store.verdictFor(t.id)
+    if (!v || v.statement === null) return undefined
+    if (v.statement !== statementHash(t)) return "the done criteria or required checks changed after the verdict: judging again against the current ones"
+    const head = t.branch ? headOf(repo, t.branch) : ""
+    if (v.commit_sha && head && v.commit_sha !== head) return `the branch moved after the verdict (${v.commit_sha.slice(0, 8)} → ${head.slice(0, 8)}): judging the new head`
+    return undefined
+  }
+
   private execute(t: Ticket, forcedBy: ReadonlyArray<string>, tier: string, now: number) {
     const kind = executorKind(t.action as string)
     const project = this.config.projects.find((p) => p.id === t.project)
     const repo = project?.path ? this.resolveProject(project.path) : this.root
+    // D90: a verdict counts for the commit and the statement it was made against, and for nothing else
+    const stale = this.staleVerdict(t, repo)
+    if (stale) {
+      this.store.transition(t.id, "ready_for_verification", "kernel", stale, now)
+      return
+    }
     const declared = this.config.executors?.[t.action as string]
     if (kind === "merge") {
       if (t.branch === null) {
@@ -1267,10 +1283,12 @@ export class Supervisor {
   /** D88/D89, for the CEO: how to order work, which tickets are held right now and by what, and the dead ends on record. */
   private treeLines(now: number): Array<string> {
     const held = this.store.ticketsIn(["triaged", "rejected"]).flatMap((t) => { const h = this.store.holdOf(t); return h ? [`${t.id} ← ${h.on === "parts" ? "its parts " : ""}${h.tickets.map((n) => `${n} (${this.store.ticket(n)?.state ?? "missing"})`).join(", ")}`] : [] })
+    const checkable = this.config.projects.filter((p) => Object.keys(p.checks ?? {}).length).map((p) => `${p.id}: ${Object.entries(p.checks ?? {}).map(([n, argv]) => `${n} (\`${renderVerify(argv)}\`)`).join(", ")}`)
     const dead = this.store.ticketsIn(["declined"]).filter((t) => t.updated_at >= now - DEAD_END_MEMORY_MS && t.end_kind !== "withdrawn" && t.end_kind !== "rejected").sort((a, b) => b.updated_at - a.updated_at)
     return [
       "- An outcome that takes several tickets: open them together and give each the tickets it `needs` (ticket_create). The kernel starts the ones that are ready, in parallel, and each of the others when what it needs is done — no cycle is spent between steps. `parent` makes a ticket a part of a larger one, which is worked only after its parts have ended, to put them together.",
       ...(held.length ? [`- Held until what they wait on is done (not stuck; nothing to do): ${held.slice(0, CEO_LIST_CAP).join("; ")}${held.length > CEO_LIST_CAP ? `; and ${held.length - CEO_LIST_CAP} more` : ""}`] : []),
+      ...(checkable.length ? [`- Checks the Operator registered — name the ones a ticket must pass in \`checks\` (ticket_create); the kernel runs them and a failure rejects the ticket without a judge. Prefer a done criterion a check covers over one only a judge can read: ${checkable.join("; ")}`] : []),
       ...(dead.length ? [
         "- Dead ends on record — work that was tried and cannot be done as stated. Do not open the same thing again; open it differently only with a reason that answers why it ended:",
         ...dead.slice(0, CEO_LIST_CAP).map((t) => `  - ${t.id} [${t.end_kind}${t.end_into ? ` into ${t.end_into}` : ""}] ${clip(t.title, 100)}: ${clip(t.note ?? "", 220)}`),
@@ -1430,6 +1448,8 @@ export class Supervisor {
       `Attempt ${t.attempts + 1} of ${this.config.runtime.max_attempts}. Your worktree is ${cwd} on branch ${branch}; commit there. Inspect the branch first: earlier attempts may have left work.${deps ? ` ${deps}.` : ""}`,
       t.state === "in_progress" && t.note ? `Last note on this ticket: ${t.note}` : "",
       project?.verify ? `The project's verify command is \`${renderVerify(project.verify)}\`: run it in your worktree before returning; the kernel runs the same command outside your sandbox and rejects the ticket if it fails. Your sandbox may refuse listening sockets (tests that start a local server): that is an environmental limit, not a defect — note it and let the kernel's run decide.` : project ? "This project has no verify command yet. If your change adds tests or a check script, say in the report what command proves the project works, so the Operator can register it (projects[].verify)." : "",
+      project && t.checks.length ? `This ticket must also pass these registered checks, which the kernel runs after verify and which reject the ticket when they fail — run them before returning: ${t.checks.map((n) => `${n} (\`${project.checks?.[n] ? renderVerify(project.checks[n] as ReadonlyArray<string>) : "not registered"}\`)`).join("; ")}.` : "",
+      project?.checker?.length ? `These paths define how the project is checked: ${project.checker.join(", ")}. If your branch changes any of them, the kernel still checks it with the default branch's version, and the merge needs the Operator. A change to the checker belongs in its own ticket.` : "",
       this.operatorNotes(t.id),
       prior.length ? `Earlier session reports:\n${prior.map((s) => s.report).join("\n")}` : "",
       "",
@@ -1487,26 +1507,66 @@ export class Supervisor {
     // every Improvement ticket cannot-score.
     const kernelOwned = this.config.executors?.[t.action ?? ""]?.undo !== undefined ? new Set([...KERNEL_GATES, "rollback-tested"]) : KERNEL_GATES
     const gates = (action?.gates ?? []).filter((g) => !kernelOwned.has(g))
+    // D90: what this session judges is fixed now — the branch head and the statement; its verdict and check runs are recorded against them
+    const head = t.branch ? headOf(repo, t.branch) : ""
+    const statement = statementHash(t)
+    this.store.setSubject(t.id, { commit_sha: head, statement })
     // D65: the project's verify command runs first, in the worktree, by the kernel. A failure rejects without
-    // spending a judge; a pass is handed to the judge as the ci-green evidence.
-    if (project?.verify && t.branch) {
-      const argv = project.verify
-      void runAsync(argv, cwd, sessionEnv(this.config, assignmentFor(this.config, "verification").engine, this.env), durationMs(project.verify_timeout ?? "10m")).then((r) => {
-        const cur = this.store.ticket(t.id)
-        if (cur?.state !== "ready_for_verification" || cur.lease_holder !== sessionId) return
-        const tail = (r.stdout + (r.stderr ? `\n${r.stderr}` : "")).trim().split("\n").slice(-40).join("\n").slice(-4000)
-        if (r.status !== 0 || r.error) {
-          const end = this.now()
-          this.log(`${t.id}: verify command failed (exit ${r.status ?? "none"}); rejected by the kernel`)
-          this.store.transition(t.id, "rejected", "kernel", `verify failed: \`${renderVerify(argv)}\` exited ${r.status ?? "with an error"}${r.error ? ` (${r.error})` : ""}\n${tail}`, end)
-          this.store.bumpAttempts(t.id, this.config.runtime.max_attempts, "kernel", "verify command failed", end)
-          this.store.releaseLease(t.id, sessionId)
-          this.running.delete(sessionId)
-          removeWorktree(repo, `v-${t.id}`) // the next attempt gets a fresh checkout of the branch head
-          return
+    // spending a judge; a pass is handed to the judge as the ci-green evidence. D90: then the checks the ticket names.
+    const commands: Array<readonly [name: string, argv: ReadonlyArray<string>]> = []
+    if (project && t.branch) {
+      if (project.verify) commands.push(["verify", project.verify])
+      for (const name of t.checks) {
+        const argv = project.checks?.[name]
+        if (argv === undefined) throw new Error(`the ticket requires check '${name}', which is not registered for project ${project.id} (holdco project check ${project.id} ${name} <command>; registered: ${Object.keys(project.checks ?? {}).join(", ") || "none"})`)
+        commands.push([name, argv])
+      }
+    }
+    if (project && commands.length) {
+      // D90: a branch that changes how the project is checked is checked with the default branch's version of those paths
+      const overlaid = paths.filter((p) => matchesGlob(p, project.checker ?? []))
+      const env = sessionEnv(this.config, assignmentFor(this.config, "verification").engine, this.env)
+      const timeout = durationMs(project.verify_timeout ?? "10m")
+      const mine = () => { const cur = this.store.ticket(t.id); return cur?.state === "ready_for_verification" && cur.lease_holder === sessionId }
+      const giveUp = () => { this.store.releaseLease(t.id, sessionId); this.running.delete(sessionId); removeWorktree(repo, `v-${t.id}`) } // the next attempt gets a fresh checkout of the branch head
+      const run = (async () => {
+        if (overlaid.length) takeFrom(cwd, base, overlaid)
+        const passed: Array<string> = []
+        let verifyTail = ""
+        for (const [name, argv] of commands) {
+          const started = Date.now()
+          const r = await runAsync(argv, cwd, env, timeout)
+          if (!mine()) return
+          const ok = r.status === 0 && !r.error
+          const tail = (r.stdout + (r.stderr ? `\n${r.stderr}` : "")).trim().split("\n").slice(-40).join("\n").slice(-4000)
+          this.store.addCheckRun({ ticket_id: t.id, session_id: sessionId, at: this.now(), name, command: renderVerify(argv), passed: ok, exit_code: r.status ?? null, duration_ms: Date.now() - started, commit_sha: head, statement, overlaid, tail })
+          if (!ok) {
+            const end = this.now()
+            const what = name === "verify" ? "verify" : `check '${name}'`
+            this.log(`${t.id}: ${what} failed (exit ${r.status ?? "none"}); rejected by the kernel`)
+            this.store.transition(t.id, "rejected", "kernel", `${what} failed: \`${renderVerify(argv)}\` exited ${r.status ?? "with an error"}${r.error ? ` (${r.error})` : ""}${overlaid.length ? `\nChecked with the default branch's version of ${overlaid.join(", ")}: this branch changes how the project is checked, and a change cannot loosen its own check. Land the checker change in its own ticket first.` : ""}\n${tail}`, end)
+            this.store.bumpAttempts(t.id, this.config.runtime.max_attempts, "kernel", name === "verify" ? "verify command failed" : `check ${name} failed`, end)
+            giveUp()
+            return
+          }
+          if (name === "verify") verifyTail = tail
+          else passed.push(`- ${name}: \`${renderVerify(argv)}\` exit 0`)
         }
-        this.launchJudge(t, sessionId, cap, cwd, repo, base, paths, rubricRef, deps, gates, project, `## ci-green: PASSED by the kernel\nThe kernel ran the project's verify command \`${renderVerify(argv)}\` in this worktree: exit 0. Record the ci-green gate as passed with this evidence. Do not run the repository's test command or any other command for ci-green, and never return cannot-score for ci-green: the gate is already executed. Run only commands that a changed file requires and the verify command could not have covered.\nOutput tail:\n${tail || "(none)"}`)
+        if (overlaid.length) takeFrom(cwd, head, overlaid) // the judge reads the branch as it is
+        this.launchJudge(t, sessionId, cap, cwd, repo, base, paths, rubricRef, deps, gates, project, [
+          ...(project.verify ? [`## ci-green: PASSED by the kernel\nThe kernel ran the project's verify command \`${renderVerify(project.verify)}\` in this worktree: exit 0. Record the ci-green gate as passed with this evidence. Do not run the repository's test command or any other command for ci-green, and never return cannot-score for ci-green: the gate is already executed. Run only commands that a changed file requires and the verify command could not have covered.\nOutput tail:\n${verifyTail || "(none)"}`] : []),
+          ...(passed.length ? [`## Checks PASSED by the kernel\nThis ticket requires these registered checks; the kernel ran each against this branch head (${head.slice(0, 12)}). They are executed: cite them as evidence for the done criteria they cover and do not run them again.\n${passed.join("\n")}`] : []),
+          ...(overlaid.length ? [`## The branch changes how the project is checked\nPaths: ${overlaid.join(", ")}. The kernel ran the commands above with the default branch's version of those paths, so the passes hold under the checker that was already trusted; the merge needs the Operator's approval. Judge whether the change to the checker itself is warranted by the ticket.`] : []),
+        ].join("\n\n"))
+      })().catch((e) => {
+        if (!mine()) return
+        this.log(`${t.id}: the kernel could not run the checks: ${String(e)}`)
+        this.store.transition(t.id, "blocked", "kernel", `the kernel could not run the checks: ${String(e)}`, this.now())
+        giveUp()
       })
+      // drain() waits for the kernel's own checks too, as it does for executors
+      this.pending.add(run)
+      void run.finally(() => this.pending.delete(run))
       return
     }
     this.launchJudge(t, sessionId, cap, cwd, repo, base, paths, rubricRef, deps, gates, project, "")

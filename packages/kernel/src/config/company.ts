@@ -251,6 +251,18 @@ const Project = Schema.Struct({
    */
   verify: Schema.optionalKey(Schema.Array(Text).check(Schema.isMinLength(1))),
   verify_timeout: Schema.optionalKey(Duration),
+  /**
+   * D90: named checks the Operator registers (name → argv, like `verify`). A ticket may require some by name;
+   * the kernel runs those after `verify`, and a failure rejects the ticket without a judge. Agents choose among
+   * the names; only the Operator defines the commands, because the kernel runs them outside the sandbox.
+   */
+  checks: Schema.optionalKey(Schema.Record(Slug, Schema.Array(Text).check(Schema.isMinLength(1)))),
+  /**
+   * D90: the paths that define how this project is checked (globs: check scripts, test config, acceptance
+   * tests). When a branch changes any of them, the kernel runs `verify` and the checks with the default
+   * branch's version of those paths — a change cannot loosen its own check — and the merge needs the Operator (T3).
+   */
+  checker: Schema.optionalKey(Schema.Array(Text)),
 })
 
 /**

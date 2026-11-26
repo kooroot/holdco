@@ -16,6 +16,13 @@ const full = load("full")
 const minimal = load("solo-dev")
 
 describe("tier for a change", () => {
+  test("a project change that touches the paths defining its check is the Operator's to approve (D90)", () => {
+    const cfg = { ...full, projects: full.projects.map((p, i) => (i === 0 ? { ...p, checker: ["scripts/check.sh", "acceptance/**"] } : p)) }
+    const target = { repo: "project" as const, projectId: cfg.projects[0]!.id }
+    expect(tierForChange(cfg, "code.merge.app", target, ["src/a.ts"]).forcedBy).toEqual([])
+    expect(tierForChange(cfg, "code.merge.app", target, ["src/a.ts", "acceptance/login.spec.ts"])).toEqual({ tier: "T3", forcedBy: ["acceptance/login.spec.ts"] })
+    expect(tierForChange(full, "code.merge.app", target, ["acceptance/login.spec.ts"]).forcedBy).toEqual([]) // no checker declared: as before
+  })
   test("ordinary skill change keeps the action tier", () =>
     expect(tierForChange(full, "improvement.merge", { repo: "company" }, [".claude/skills/write-brief/SKILL.md"]).tier).toBe("T1"))
   test("a change touching the judge's charter is T3", () => {

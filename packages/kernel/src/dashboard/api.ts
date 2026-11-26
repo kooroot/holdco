@@ -14,7 +14,7 @@ import { formatAssignment, parseAssignment } from "../config/models.ts"
 import { addProject, openTicketsFor, parseVerify, type ProjectClass, ProjectError, removeProject, renderVerify, setProject, setShares } from "../config/projects.ts"
 import { graduationCheck } from "../policy/graduation.ts"
 import type { Level } from "../schema/interrupts.ts"
-import { type ChatRow, Store, type Ticket } from "../store/store.ts"
+import { type ChatRow, statementHash, Store, type Ticket } from "../store/store.ts"
 import { clear as clearInterrupt, raise as raiseInterrupt, readControl } from "../supervisor/control.ts"
 import { undoAction } from "../supervisor/executors.ts"
 import { latestReleaseTag } from "../supervisor/org.ts"
@@ -336,6 +336,8 @@ export const ticketDetail = (ctx: DashboardContext, id: string, opts: { blind?: 
     proposal: (() => { const p = ctx.store.proposal(id); return p ? { ...p, review: p.review ?? null } : null })(), // JSON has no undefined: a proposal without a review yet carries null
     label: ctx.store.labelRows().find((l) => l.ticket_id === id) ?? null,
     comments: ctx.store.comments(id),
+    statement: statementHash(t),
+    check_runs: ctx.store.checkRuns(id).map(({ ticket_id: _t, tail: _o, ...r }) => r),
     diff: diffOf(ctx, t),
     cost: ctx.store.sessionsForTicket(id).reduce((a, s) => a + s.cost_usd, 0),
     translations: translationsFor(ctx.store, ctx.config().company.language ?? "en", [t.title, t.goal, t.why, t.note, ...t.done_criteria, ...ctx.store.events(id).map((e) => e.note), ...ctx.store.comments(id).map((c) => c.body), v && reveal ? (JSON.parse(v.payload) as { summary?: string }).summary : null]),

@@ -87,12 +87,25 @@ export interface ProjectPatch {
   readonly min_tier?: "T0" | "T1" | "T2" | "T3" | null
   /** D83: pause (true) or resume (false) the project. */
   readonly paused?: boolean
+  /** D90: register a named check (argv), or remove it (empty argv). */
+  readonly check?: { readonly name: string; readonly argv: ReadonlyArray<string> }
+  /** D90: the paths that define how the project is checked; an empty array clears them. */
+  readonly checker?: ReadonlyArray<string>
 }
 
 export const setProject = (config: CompanyConfig, id: string, patch: ProjectPatch): CompanyConfig => {
   const cur = config.projects.find((p) => p.id === id)
   if (!cur) throw new ProjectError(`no project '${id}' (${config.projects.map((p) => p.id).join(", ") || "none registered"})`)
-  const { verify: _v, verify_timeout: _t, kill_criteria: _k, min_tier: _m, paused: _p, ...rest } = cur
+  const { verify: _v, verify_timeout: _t, kill_criteria: _k, min_tier: _m, paused: _p, checks: _c, checker: _r, ...rest } = cur
+  const checks = { ...(cur.checks ?? {}) }
+  if (patch.check) {
+    if (!/^[a-z][a-z0-9-]{0,31}$/.test(patch.check.name)) throw new ProjectError(`check name '${patch.check.name}': a lowercase letter, then letters, digits and dashes, at most 32`)
+    if (patch.check.name === "verify") throw new ProjectError("'verify' is the project's verify command (holdco project verify); pick another name")
+    if (patch.check.argv.length) checks[patch.check.name] = [...patch.check.argv]
+    else if (patch.check.name in checks) delete checks[patch.check.name]
+    else throw new ProjectError(`project '${id}' has no check '${patch.check.name}' (${Object.keys(checks).join(", ") || "none registered"})`)
+  }
+  const checker = patch.checker === undefined ? cur.checker ?? [] : patch.checker.map((g) => g.trim()).filter(Boolean)
   const next: Project = {
     ...rest,
     ...(patch.share !== undefined ? { share: patch.share } : {}),
@@ -102,6 +115,8 @@ export const setProject = (config: CompanyConfig, id: string, patch: ProjectPatc
     ...(patch.kill_criteria === undefined ? (cur.kill_criteria ? { kill_criteria: cur.kill_criteria } : {}) : patch.kill_criteria === null ? {} : { kill_criteria: patch.kill_criteria }),
     ...(patch.min_tier === undefined ? (cur.min_tier ? { min_tier: cur.min_tier } : {}) : patch.min_tier === null ? {} : { min_tier: patch.min_tier }),
     ...((patch.paused ?? cur.paused) ? { paused: true } : {}),
+    ...(Object.keys(checks).length ? { checks } : {}),
+    ...(checker.length ? { checker: [...checker] } : {}),
   }
   return validated(config, config.projects.map((p) => (p.id === id ? next : p)))
 }

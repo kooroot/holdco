@@ -73,6 +73,28 @@ export const syncWithBase = (dir: string, base: string): "current" | "merged" | 
   return "conflict"
 }
 
+/** The commit a ref points at, or "" when it does not exist. */
+export const headOf = (repo: string, ref: string): string => {
+  const r = spawnSync("git", ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], { cwd: repo, encoding: "utf8" })
+  return r.status === 0 ? r.stdout.trim() : ""
+}
+
+/**
+ * D90: make `paths` in a checkout read as they do at `ref` — a path that exists there is checked out from it, one
+ * that does not is removed. Used to check a branch with the default branch's checker, and again to put the branch's
+ * own files back before the judge reads the checkout.
+ */
+export const takeFrom = (dir: string, ref: string, paths: ReadonlyArray<string>) => {
+  for (const p of paths) {
+    const at = spawnSync("git", ["cat-file", "-e", `${ref}:${p}`], { cwd: dir }).status === 0
+    if (at) git(dir, ["checkout", "--quiet", ref, "--", p])
+    else {
+      spawnSync("git", ["rm", "--quiet", "--cached", "--ignore-unmatch", "--", p], { cwd: dir })
+      rmSync(NodePath.join(dir, p), { force: true })
+    }
+  }
+}
+
 /** A worktree starts with empty submodule directories; checks that need them fail for no reason of the change. Local, no network when the main checkout has them. */
 const initSubmodules = (dir: string) => {
   if (!existsSync(NodePath.join(dir, ".gitmodules"))) return
