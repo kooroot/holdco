@@ -142,7 +142,7 @@ const KO: Record<string, string> = {
   "{id} resumed": "{id} 재개됨", "{id} paused: what is running finishes, nothing new starts": "{id} 일시정지: 실행 중인 것은 끝내고 새 작업은 시작하지 않습니다", "How far along is {id}, and what is next?": "{id} 어디까지 됐고 다음은 뭐야?",
   "The CEO is drafting; the roadmap appears here when it finishes": "CEO가 작성 중입니다. 끝나면 여기에 로드맵이 나타납니다", "The CEO is already running": "CEO가 이미 실행 중입니다",
   "working now": "지금 작업 중", "nothing running; {n} open": "실행 중 없음 · 열린 티켓 {n}", "no open work": "열린 작업 없음", "{n} waiting on you": "당신 결정 대기 {n}", "{n} blocked": "막힘 {n}", "last shipped": "최근 완료",
-  "Ask": "물어보기", "Pause": "일시정지", "Resume": "재개", "No roadmap yet: this is {d} of {n} tickets done, not how far the product is": "아직 로드맵 없음: 티켓 {d}/{n} 완료 기준일 뿐, 제품 완성도가 아닙니다", "No roadmap and no tickets yet": "로드맵도 티켓도 아직 없음",
+  "Ask": "물어보기", "Pause": "일시정지", "No roadmap yet: this is {d} of {n} tickets done, not how far the product is": "아직 로드맵 없음: 티켓 {d}/{n} 완료 기준일 뿐, 제품 완성도가 아닙니다", "No roadmap and no tickets yet": "로드맵도 티켓도 아직 없음",
   "have the CEO draft one now": "지금 CEO에게 초안 맡기기", "CEO, {t} ago": "CEO, {t} 전", "done {t} ago": "{t} 전 완료", "no tickets yet": "티켓 없음", "evidence": "근거",
   "Mark done": "완료 처리", "Marked done": "완료 처리됨", "Reopen": "다시 열기", "Reopened": "다시 열림", "Rename": "이름 바꾸기", "Earlier": "앞으로", "Later": "뒤로", "Drop: it no longer counts": "제외: 더 이상 집계하지 않음", "Dropped": "제외됨",
   "Open tickets that serve no milestone": "마일스톤 없는 열린 티켓", "they do not move the number; put each under the milestone it serves": "진행률에 반영되지 않습니다. 각각 해당 마일스톤에 넣으세요", "milestone…": "마일스톤…",
