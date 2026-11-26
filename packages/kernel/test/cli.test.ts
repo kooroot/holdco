@@ -70,6 +70,25 @@ describe("operator commands", () => {
     expect(show.project).toBe("app")
     expect(holdco("ticket", "new", "--title", "x", "--action", "nope").stderr).toContain("unknown action")
   })
+  test("the Operator orders tickets: --needs, --parent, ticket link (D88)", () => {
+    const r = holdco("ticket", "new", "--title", "Announce the feature", "--needs", "ENG-1")
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain("ENG-2 opened (triaged) for engineering on app; starts when ENG-1 is done")
+    expect(holdco("ticket", "list").stdout).toMatch(/ENG-2 .*\[waits on ENG-1\]/)
+    expect(JSON.parse(holdco("ticket", "show", "ENG-2").stdout)).toMatchObject({ needs: ["ENG-1"], parent: null, waits_on: { on: "needs", tickets: ["ENG-1"] } })
+    // a link that could never be met is refused and changes nothing
+    const loop = holdco("ticket", "link", "ENG-1", "--needs", "ENG-2")
+    expect(loop.status).toBe(1)
+    expect(loop.stderr).toContain("wait on itself")
+    expect(holdco("ticket", "new", "--title", "x", "--needs", "ENG-99").stderr).toContain("needs ENG-99: not found")
+    expect(JSON.parse(holdco("ticket", "show", "ENG-1").stdout).needs).toEqual([])
+    // a part of ENG-1: ENG-1 now waits for it
+    expect(holdco("ticket", "link", "ENG-2", "--needs", "none", "--parent", "ENG-1").stdout).toContain("ENG-2: part of ENG-1; needs nothing; ready to be worked")
+    expect(JSON.parse(holdco("ticket", "show", "ENG-1").stdout)).toMatchObject({ parts: ["ENG-2 triaged"], waits_on: { on: "parts", tickets: ["ENG-2"] } })
+    expect(holdco("ticket", "link", "ENG-2", "--parent", "none").stdout).toContain("ENG-2: no parent; needs nothing; ready to be worked")
+    expect(holdco("ticket", "link", "ENG-2").stderr).toContain("usage: holdco ticket link")
+    expect(holdco("ticket", "decline", "ENG-2", "--note", "test ticket").status).toBe(0)
+  })
   test("status, digest, interrupt and resume (resume needs a terminal)", () => {
     expect(holdco("status").stdout).toContain("supervisor not running")
     expect(holdco("status").stdout).toContain("ENG-1")

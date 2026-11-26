@@ -47,6 +47,8 @@ goal: what done looks like
 why: a strategy line or the parent ticket
 done_criteria: [checkable items]
 priority: 1..5              # 1 is highest; default 3
+needs: [ENG-140]            # tickets that must be `done` before this one is started
+parent: ENG-139             # the larger ticket this one is a part of (set by the CEO or the Operator)
 state, approval_stage, attempts, branch, note, interrupt_flag   # maintained by the kernel
 ```
 
@@ -69,6 +71,8 @@ state, approval_stage, attempts, branch, note, interrupt_flag   # maintained by 
 ### Dispatch
 
 The kernel starts sessions in this order: Verification tickets (`ready_for_verification`) → executive (CEO cycle, COO reviews) → production (`triaged`). Within production: project class (core → experiment → maintenance → brand) → `priority` → age. Priority and project are the CEO's allocation levers.
+
+Work starts only on the frontier: a `triaged` or `rejected` ticket is started when every ticket it `needs` is `done` and none of its parts (tickets naming it as `parent`) is still open. A held ticket is waiting, not stuck. A need that ended `declined` or `rolled_back` can never be met: the kernel moves the dependent to `blocked` with that reason, and releasing it (`ticket_unblock`, `holdco ticket unblock`) drops the dead need. A parent is worked after its parts have ended, however they ended, and its session is told how each did.
 
 ### Deliverable convention
 
@@ -125,6 +129,8 @@ The kernel starts sessions in this order: Verification tickets (`ready_for_verif
 ### 디스패치 순서
 
 검증 → 경영진 → 생산. 생산 안에서는 프로젝트 등급 → `priority` → 오래된 순. 우선순위와 프로젝트가 CEO의 배분 수단입니다.
+
+작업은 프런티어에서만 시작합니다. `triaged`·`rejected` 티켓은 `needs`에 적힌 티켓이 모두 `done`이고 자기를 `parent`로 둔 하위 티켓이 하나도 열려 있지 않을 때 시작됩니다. 묶여 있는 티켓은 대기 중이지 막힌 것이 아닙니다. `needs`의 티켓이 `declined`·`rolled_back`으로 끝나면 영영 충족되지 않으므로 커널이 사유와 함께 `blocked`로 보내고, 풀어 주면(`ticket_unblock`, `holdco ticket unblock`) 그 선행 조건은 빠집니다. 부모 티켓은 하위 티켓이 어떻게 끝났든 모두 끝난 뒤에 작업되며, 그 세션은 각 하위 티켓의 결과를 전달받습니다.
 
 ### 산출물 규약
 

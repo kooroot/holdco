@@ -155,7 +155,10 @@ export const snapshot = (ctx: DashboardContext) => {
     if (t.project && ["triaged", "rejected", "ready_for_verification"].includes(t.state) && config.projects.find((p) => p.id === t.project)?.paused) return w("project_paused", null, t.project)
     switch (t.state) {
       case "new": return w("ceo_triage", nextCeo(t.updated_at))
-      case "triaged": case "rejected": return w("senior_slot")
+      case "triaged": case "rejected": {
+        const hold = store.holdOf(t) // D88
+        return hold ? w(hold.on, null, hold.tickets.join(", ")) : w("senior_slot")
+      }
       case "in_progress": return w("lease", t.lease_expires, t.lease_holder)
       case "ready_for_verification": return w("verification_slot")
       case "verified": return w("kernel")

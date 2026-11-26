@@ -11,7 +11,7 @@ import { assignmentFor, authMode, CompanyConfig, type EngineId, ENGINE_IDS, ROLE
 import { defaultRoles, EXAMPLE_PRICES, formatAssignment, MODEL_DEFAULTS, MODEL_MODES, type ModelMode, parseAssignment, PRICES_CHECKED_ON } from "../config/models.ts"
 import type { Engine } from "../engine/types.ts"
 import { renderCompanyYaml } from "../scaffold/scaffold.ts"
-import { Store, type Ticket } from "../store/store.ts"
+import { END_STATES, type Hold, LinkError, Store, type Ticket } from "../store/store.ts"
 import { clear, raise, readControl } from "../supervisor/control.ts"
 import { renderDigest } from "../supervisor/digest.ts"
 import { undoAction } from "../supervisor/executors.ts"
@@ -64,7 +64,9 @@ const loadEngines = async (config: CompanyConfig, dir: string): Promise<Map<Engi
   return out
 }
 
-const fmtTicket = (t: Ticket) => `${t.id.padEnd(9)} ${t.state.padEnd(22)} ${(t.approval_stage ?? "").padEnd(14)} p${t.priority} ${t.department.padEnd(12)} ${t.title}${t.interrupt_flag ? `  [${t.interrupt_flag}]` : ""}`
+const fmtTicket = (t: Ticket, hold?: Hold) => `${t.id.padEnd(9)} ${t.state.padEnd(22)} ${(t.approval_stage ?? "").padEnd(14)} p${t.priority} ${t.department.padEnd(12)} ${t.title}${t.interrupt_flag ? `  [${t.interrupt_flag}]` : ""}${hold ? `  [waits on ${hold.on === "parts" ? "its parts " : ""}${hold.tickets.join(", ")}]` : ""}`
+/** `--needs 'ENG-1, ENG-2'` → ids; `none` clears. */
+const idList = (text: string): Array<string> => (text.trim() === "none" ? [] : text.split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean))
 const ago = (ms: number) => (ms < 3_600_000 ? `${Math.round(ms / 60_000)}m` : ms < 86_400_000 ? `${Math.round(ms / 3_600_000)}h` : `${Math.round(ms / 86_400_000)}d`)
 
 /**
@@ -343,14 +345,33 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
           if (!config.modules.departments.includes(department) && department !== "improvement") throw new OperatorError(`department '${department}' is not enabled`)
           const action = args.flag("action") ?? null
           if (action && !config.actions.some((a) => a.id === action)) throw new OperatorError(`unknown action '${action}'`)
-          const t = store.createTicket({ department, title, goal, why, done_criteria: criteria, opened_by: "operator", project, action, priority: Number(args.flag("priority") ?? 3), state: "triaged", now })
-          console.log(`${t.id} opened (triaged) for ${department}${project ? ` on ${project}` : ""}`)
+          const needs = idList(args.flag("needs") ?? "")
+          const parent = args.flag("parent") && args.flag("parent") !== "none" ? String(args.flag("parent")) : null
+          const refused = store.linkRefusal(null, parent, needs)
+          if (refused) throw new OperatorError(refused)
+          const t = store.createTicket({ department, title, goal, why, done_criteria: criteria, opened_by: "operator", project, action, priority: Number(args.flag("priority") ?? 3), state: "triaged", parent, needs, now })
+          const hold = store.holdOf(t)
+          console.log(`${t.id} opened (triaged) for ${department}${project ? ` on ${project}` : ""}${parent ? `, part of ${parent}` : ""}${hold ? `; starts when ${hold.tickets.join(", ")} ${hold.tickets.length === 1 ? "is" : "are"} done` : ""}`)
         } else if (sub === "list") {
-          for (const t of store.allTickets()) console.log(fmtTicket(t))
+          for (const t of store.allTickets()) console.log(fmtTicket(t, END_STATES.has(t.state) ? undefined : store.holdOf(t)))
+        } else if (sub === "link") {
+          // D88: the Operator re-orders the tree
+          const id = args.positional[2] ?? ""
+          if (!store.ticket(id)) throw new OperatorError("ticket not found")
+          if (args.flag("needs") === undefined && args.flag("parent") === undefined) throw new OperatorError("usage: holdco ticket link <id> [--needs 'a, b'|none] [--parent id|none]")
+          try {
+            store.setLinks(id, { ...(args.flag("needs") !== undefined ? { needs: idList(String(args.flag("needs"))) } : {}), ...(args.flag("parent") !== undefined ? { parent: args.flag("parent") === "none" ? null : String(args.flag("parent")) } : {}) }, now)
+          } catch (e) {
+            if (e instanceof LinkError) throw new OperatorError(e.message)
+            throw e
+          }
+          const t = store.ticket(id) as Ticket
+          const hold = store.holdOf(t)
+          console.log(`${id}: ${t.parent ? `part of ${t.parent}` : "no parent"}; ${t.needs.length ? `needs ${t.needs.join(", ")}` : "needs nothing"}${hold ? `; waits on ${hold.tickets.join(", ")}` : "; ready to be worked"}`)
         } else if (sub === "show") {
           const t = store.ticket(args.positional[2] ?? "")
           if (!t) throw new OperatorError("ticket not found")
-          console.log(JSON.stringify({ ...t, events: store.events(t.id), verdict: store.verdictFor(t.id), sessions: store.sessionsForTicket(t.id).map((s) => ({ id: s.id, role: s.role, status: s.status, cost_usd: s.cost_usd, report: s.report ? JSON.parse(s.report) : null })) }, null, 2))
+          console.log(JSON.stringify({ ...t, parts: store.children(t.id).map((c) => `${c.id} ${c.state}`), waits_on: END_STATES.has(t.state) ? null : store.holdOf(t) ?? null, events: store.events(t.id), verdict: store.verdictFor(t.id), sessions: store.sessionsForTicket(t.id).map((s) => ({ id: s.id, role: s.role, status: s.status, cost_usd: s.cost_usd, report: s.report ? JSON.parse(s.report) : null })) }, null, 2))
         } else if (sub === "unblock") {
           requireTty("ticket unblock")
           const id = args.positional[2] ?? ""
@@ -360,7 +381,7 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
           const id = args.positional[2] ?? ""
           store.transition(id, "declined", "operator", args.flag("note") ?? "declined by the Operator", now)
           console.log(`${id} → declined`)
-        } else throw new OperatorError("usage: holdco ticket new --title t [--dept d] [--project p] [--goal g] [--why w] [--criteria 'a; b'] [--action a] [--priority n] | list | show <id> | unblock <id> --note n | decline <id>")
+        } else throw new OperatorError("usage: holdco ticket new --title t [--dept d] [--project p] [--goal g] [--why w] [--criteria 'a; b'] [--action a] [--priority n] [--needs 'a, b'] [--parent id] | list | show <id> | link <id> [--needs 'a, b'|none] [--parent id|none] | unblock <id> --note n | decline <id>")
       } finally {
         store.close()
       }

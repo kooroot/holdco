@@ -15,7 +15,7 @@ import { renderCompanyYaml } from "../src/scaffold/scaffold.ts"
 import { Store } from "../src/store/store.ts"
 import { Supervisor } from "../src/supervisor/supervisor.ts"
 import { raise, readControl, clear } from "../src/supervisor/control.ts"
-import { FakeEngine } from "./fake-engine.ts"
+import { DEFAULT_SCRIPTS, FakeEngine, type Script } from "./fake-engine.ts"
 import { hashText } from "../src/supervisor/i18n.ts"
 import { projectProgress } from "../src/supervisor/roadmap.ts"
 import { budgetMode } from "../src/config/company.ts"
@@ -800,6 +800,119 @@ describe("worktree dependencies", () => {
     const plain = NodePath.join(base, "deps-plain")
     mkdirSync(plain)
     expect(provisionDependencies(plain, plain)).toBeUndefined()
+  })
+})
+
+describe("the work tree (D88)", () => {
+  /** A senior that works alone: one file named after the ticket, then ready for Verification. */
+  const soloSenior: Script = async ({ spec, call, git }) => {
+    writeFileSync(NodePath.join(spec.cwd, `${spec.ticketId}.md`), "x\n")
+    git("add", "-A")
+    git("commit", "-qm", `${spec.ticketId}: work`)
+    const t = (await call("ticket_get", { id: spec.ticketId })) as { branch: string }
+    await call("ticket_update", { state: "ready_for_verification", note: "done", branch: t.branch, action: "code.merge.app" })
+    return { report: { ticket: spec.ticketId, status: "ready", summary: "ok", branch: t.branch, action: "code.merge.app", changed_paths: [`${spec.ticketId}.md`], assumptions: [], opened_tickets: [] } }
+  }
+  const seniorOrder = (engine: FakeEngine) => engine.runs.filter((r) => r.role.kind === "senior").map((r) => r.ticketId).filter((id, i, all) => all.indexOf(id) === i)
+
+  test("the CEO opens an outcome as a tree and the kernel works it from the frontier: needs first, the parent after its parts", async () => {
+    const c = company("tree")
+    const clock = { now: Date.UTC(2026, 9, 26, 9) }
+    const ids: Record<string, string> = {}
+    const refusals: Array<string> = []
+    let opened = false
+    const refused = async (f: () => Promise<unknown>) => { try { await f() } catch (e) { refusals.push(String(e)) } }
+    const fields = { department: "engineering", goal: "g", why: "strategy §1", done_criteria: ["the file exists"], project: "app", action: "code.merge.app" }
+    const engine = new FakeEngine({
+      ceo: async (ctx) => {
+        // the cycle session only (the digest runs the same role), and once
+        if (ctx.spec.ticketId === "CEO-CYCLE" && !opened) {
+          opened = true
+          ids["p"] = ((await ctx.call("ticket_create", { ...fields, title: "Ship the flow" })) as { id: string }).id
+          ids["c1"] = ((await ctx.call("ticket_create", { ...fields, title: "Schema", parent: ids["p"] })) as { id: string }).id
+          const c2 = (await ctx.call("ticket_create", { ...fields, title: "Endpoint", parent: ids["p"], needs: [ids["c1"]] })) as { id: string; parent: string; needs: Array<string> }
+          ids["c2"] = c2.id
+          expect(c2).toMatchObject({ parent: ids["p"], needs: [ids["c1"]] })
+          await refused(() => ctx.call("ticket_create", { ...fields, title: "x", needs: ["ENG-99"] }))
+          await refused(() => ctx.call("ticket_create", { ...fields, title: "x", parent: ids["p"], needs: [ids["p"]] }))
+        }
+        return DEFAULT_SCRIPTS["ceo"]!(ctx)
+      },
+      senior: async (ctx) => {
+        if (ctx.spec.ticketId === ids["c1"]) {
+          await refused(() => ctx.call("ticket_create", { ...fields, title: "x", parent: ids["c1"] }))
+          // a senior orders its own follow-up with `needs`, and reads what its ticket waits on
+          const follow = (await ctx.call("ticket_create", { ...fields, title: "Announce", needs: [ids["c1"]] })) as { id: string }
+          ids["follow"] = follow.id
+        }
+        return soloSenior(ctx)
+      },
+    })
+    const { sup, store } = makeSupervisor(c, engine, clock)
+    await sup.boot()
+    await cycle(sup, clock, 3)
+    // only the frontier started: c1. c2 needs c1; the parent waits for its parts
+    expect(seniorOrder(engine)).toEqual([ids["c1"]!])
+    expect(store.ticket(ids["c2"]!)?.state).toBe("triaged")
+    expect(refusals.map((r) => r.replace(/^.*?Error: /, ""))).toEqual([
+      expect.stringContaining("needs ENG-99: not found"),
+      expect.stringContaining("wait on itself"),
+      expect.stringContaining("only the CEO sets `parent`"),
+    ])
+    // held is waiting, not stalled: the dashboard names what it waits on and the stall detector stays quiet about it
+    clock.now += 30 * 60_000
+    await cycle(sup, clock, 1)
+    const { snapshot } = await import("../src/dashboard/api.ts")
+    const snap = snapshot({ root: c.dir, config: () => c.config, store, now: () => clock.now, supervisor: sup, saveConfig: () => {} })
+    expect(snap.waiting.find((w) => w.ticket_id === ids["c2"])).toMatchObject({ on: "needs", detail: ids["c1"], stall: null })
+    expect(snap.waiting.find((w) => w.ticket_id === ids["p"])).toMatchObject({ on: "parts", detail: `${ids["c1"]}, ${ids["c2"]}`, stall: null })
+    expect(store.getMeta(`stall:${ids["c2"]}`)).toBeUndefined()
+    expect(store.getMeta(`stall:${ids["p"]}`)).toBeUndefined()
+    expect(snap.tickets.find((t) => t.id === ids["c2"])).toMatchObject({ parent: ids["p"], needs: [ids["c1"]] })
+    // the CEO is told what is held and by what, so it does not treat it as stuck
+    expect(engine.runs.filter((r) => r.role.kind === "ceo").at(-1)?.prompt).toContain(`${ids["c2"]} ← ${ids["c1"]} (`)
+    // the Operator approves each merge as it arrives; the tree drains in order
+    for (let i = 0; i < 20 && store.ticket(ids["p"]!)?.state !== "done"; i++) {
+      for (const item of store.inboxOpen().filter((x) => x.kind === "t3")) store.inboxDecide(item.id, "approved", "ok", clock.now)
+      await cycle(sup, clock, 2)
+    }
+    expect(store.ticket(ids["p"]!)?.state).toBe("done")
+    const order = seniorOrder(engine)
+    expect(order.indexOf(ids["c1"]!)).toBeLessThan(order.indexOf(ids["c2"]!))
+    expect(order.indexOf(ids["c2"]!)).toBeLessThan(order.indexOf(ids["p"]!))
+    expect(order.indexOf(ids["c1"]!)).toBeLessThan(order.indexOf(ids["follow"]!))
+    // c2 never started before c1 was done; the parent never before both parts ended
+    const at = (id: string, to: string) => store.events(id).find((e) => e.to_state === to)?.at ?? Infinity
+    expect(at(ids["c2"]!, "in_progress")).toBeGreaterThanOrEqual(at(ids["c1"]!, "done"))
+    expect(at(ids["p"]!, "in_progress")).toBeGreaterThanOrEqual(at(ids["c2"]!, "done"))
+    // each session is told what it builds on
+    const promptOf = (id: string) => engine.runs.find((r) => r.role.kind === "senior" && r.ticketId === id)?.prompt ?? ""
+    expect(promptOf(ids["c2"]!)).toContain("held until these were done")
+    expect(promptOf(ids["c2"]!)).toContain(`- ${ids["c1"]} [done] Schema`)
+    expect(promptOf(ids["p"]!)).toContain("This ticket's parts have all ended")
+    expect(promptOf(ids["p"]!)).toContain(`- ${ids["c2"]} [done] Endpoint`)
+    expect(promptOf(ids["c1"]!)).not.toContain("held until")
+    await sup.stop()
+  })
+
+  test("a need that can never be met blocks the dependent with the reason; releasing it lets it run without", async () => {
+    const c = company("tree-dead")
+    const clock = { now: Date.UTC(2026, 9, 26, 9) }
+    const engine = new FakeEngine({ ceo: async () => ({}), senior: soloSenior })
+    const { sup, store } = makeSupervisor(c, engine, clock)
+    await sup.boot()
+    const open = (title: string, needs: ReadonlyArray<string> = []) => store.createTicket({ department: "engineering", title, goal: "y", why: "z", done_criteria: ["a"], opened_by: "operator", project: "app", state: "triaged", action: "code.merge.app", needs, now: clock.now }).id
+    const a = open("a")
+    const b = open("b", [a])
+    store.transition(a, "declined", "operator", "not this quarter", clock.now)
+    await cycle(sup, clock, 1)
+    expect(store.ticket(b)).toMatchObject({ state: "blocked", note: `needs ${a} (declined), which can no longer be met: release it to go on without, or decline it` })
+    expect(seniorOrder(engine)).toEqual([])
+    store.transition(b, "triaged", "operator", "it stands on its own", clock.now)
+    expect(store.ticket(b)?.needs).toEqual([])
+    await cycle(sup, clock, 1)
+    expect(seniorOrder(engine)).toEqual([b])
+    await sup.stop()
   })
 })
 

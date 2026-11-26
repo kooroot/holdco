@@ -1,6 +1,6 @@
 /** The state store: legal transitions only, compare-and-set leases, reaping with attempt limits, inbox and labels. */
 import { describe, expect, test } from "bun:test"
-import { IllegalTransition, Store, TICKET_STATES, TRANSITIONS } from "../src/store/store.ts"
+import { IllegalTransition, LinkError, Store, TICKET_STATES, TRANSITIONS } from "../src/store/store.ts"
 
 const mk = () => {
   const s = new Store(":memory:")
@@ -102,4 +102,106 @@ describe("migrations", () => {
     s.close()
   })
 
+})
+
+describe("the work tree (D88)", () => {
+  const mkTree = () => {
+    const s = new Store(":memory:")
+    let n = 0
+    const open = (links: { parent?: string | null; needs?: ReadonlyArray<string> } = {}) => s.createTicket({ department: "engineering", title: `t${++n}`, goal: "g", why: "w", done_criteria: ["a"], opened_by: "operator", project: "app", state: "triaged", now: n, ...links }).id
+    const finish = (id: string) => { for (const to of ["in_progress", "ready_for_verification", "verified", "done"] as const) s.transition(id, to, "kernel", "", 9) }
+    return { s, open, finish }
+  }
+
+  test("a ticket is on the frontier when its needs are done and none of its parts is open", () => {
+    const { s, open, finish } = mkTree()
+    const a = open()
+    const b = open({ needs: [a] })
+    const p = open()
+    const c1 = open({ parent: p })
+    const c2 = open({ parent: p, needs: [c1] })
+    expect(s.ticket(b)).toMatchObject({ needs: [a], parent: null })
+    expect(s.children(p).map((c) => c.id)).toEqual([c1, c2])
+    expect(s.holdOf(s.ticket(a)!)).toBeUndefined()
+    expect(s.holdOf(s.ticket(b)!)).toEqual({ on: "needs", tickets: [a], dead: [] })
+    expect(s.holdOf(s.ticket(p)!)).toEqual({ on: "parts", tickets: [c1, c2], dead: [] })
+    finish(a)
+    expect(s.holdOf(s.ticket(b)!)).toBeUndefined()
+    // a part that ends without being done no longer holds its parent: the parent decides what that means
+    finish(c1)
+    s.transition(c2, "declined", "ceo", "not worth it", 9)
+    expect(s.holdOf(s.ticket(p)!)).toBeUndefined()
+  })
+
+  test("a need that ended declined or rolled back is reported as one that can never be met", () => {
+    const { s, open, finish } = mkTree()
+    const a = open()
+    const b = open()
+    const c = open({ needs: [a, b] })
+    s.transition(a, "declined", "operator", "no", 9)
+    expect(s.holdOf(s.ticket(c)!)).toEqual({ on: "needs", tickets: [a, b], dead: [a] })
+    finish(b)
+    s.transition(b, "rolled_back", "operator", "broke main", 9)
+    expect(s.holdOf(s.ticket(c)!)?.dead).toEqual([a, b])
+  })
+
+  test("releasing a blocked ticket drops the needs that can no longer be met, and says so", () => {
+    const { s, open } = mkTree()
+    const a = open()
+    const live = open()
+    const b = open({ needs: [a, live] })
+    s.transition(a, "declined", "operator", "no", 9)
+    s.transition(b, "blocked", "kernel", `needs ${a}`, 9)
+    s.transition(b, "triaged", "operator", "go on without it", 10)
+    expect(s.ticket(b)?.needs).toEqual([live])
+    expect(s.events(b).at(-1)?.note).toBe(`go on without it (released without ${a})`)
+  })
+
+  test("links that could never be met are refused: unknown, self, dead, and anything that makes a ticket wait on itself", () => {
+    const { s, open } = mkTree()
+    const a = open()
+    const b = open({ needs: [a] })
+    expect(() => open({ needs: ["ENG-99"] })).toThrow(LinkError)
+    expect(() => open({ parent: "ENG-99" })).toThrow(/parent ENG-99 not found/)
+    expect(() => s.setLinks(a, { needs: [a] }, 9)).toThrow(/cannot need itself/)
+    expect(() => s.setLinks(a, { parent: a }, 9)).toThrow(/own parent/)
+    // a needs b while b needs a
+    expect(() => s.setLinks(a, { needs: [b] }, 9)).toThrow(/wait on itself/)
+    // a part that needs its own parent: the parent waits for the part, the part for the parent
+    const p = open()
+    expect(() => open({ parent: p, needs: [p] })).toThrow(/wait on itself/)
+    // …or needs something that itself waits on the parent
+    const afterP = open({ needs: [p] })
+    expect(() => open({ parent: p, needs: [afterP] })).toThrow(/wait on itself/)
+    // a dead ticket cannot be needed, an ended one cannot take parts
+    const dead = open()
+    s.transition(dead, "declined", "operator", "no", 9)
+    expect(() => open({ needs: [dead] })).toThrow(/declined and can never be met/)
+    expect(() => open({ parent: dead })).toThrow(/a part is added to an open ticket/)
+    // nothing was created by the refused attempts, and a legal re-link works
+    expect(s.allTickets().length).toBe(5)
+    s.setLinks(b, { needs: [], parent: p }, 9)
+    expect(s.ticket(b)).toMatchObject({ needs: [], parent: p })
+    // links a ticket already has are not re-judged when another one changes
+    s.transition(a, "declined", "operator", "no", 9)
+    const c = open()
+    s.db.run("UPDATE tickets SET needs = ? WHERE id = ?", [JSON.stringify([a]), c])
+    s.setLinks(c, { parent: p }, 9)
+    expect(s.ticket(c)).toMatchObject({ needs: [a], parent: p })
+  })
+
+  test("a database from before the tree gains the columns; its tickets have no parent and need nothing", () => {
+    const { Database } = require("bun:sqlite") as typeof import("bun:sqlite")
+    const path = `${require("node:os").tmpdir()}/holdco-migrate-tree-${Date.now()}.db`
+    const old = new Database(path)
+    old.exec("CREATE TABLE tickets (id TEXT PRIMARY KEY, project TEXT, department TEXT NOT NULL, action TEXT, state TEXT NOT NULL, approval_stage TEXT, interrupt_flag TEXT, priority INTEGER NOT NULL DEFAULT 3, title TEXT NOT NULL, goal TEXT NOT NULL, why TEXT NOT NULL, done_criteria TEXT NOT NULL, opened_by TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, lease_holder TEXT, lease_expires INTEGER, window_closes_at INTEGER, branch TEXT, note TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)")
+    old.exec("INSERT INTO tickets(id, department, state, title, goal, why, done_criteria, opened_by, created_at, updated_at) VALUES ('ENG-1', 'engineering', 'triaged', 't', 'g', 'w', '[\"a\"]', 'operator', 1, 1)")
+    old.close()
+    const store = new Store(path)
+    const t = store.ticket("ENG-1")!
+    expect(t).toMatchObject({ parent: null, needs: [], done_criteria: ["a"] })
+    expect(store.holdOf(t)).toBeUndefined()
+    store.close()
+    require("node:fs").rmSync(path, { force: true })
+  })
 })

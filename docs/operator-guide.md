@@ -60,6 +60,8 @@ bunx holdco ticket new --title "Add CSV export" --goal "users can download their
   --criteria "export button on the settings page; a test covers the CSV format" --action code.merge.app
 ```
 
+Order work with `--needs` (the ticket starts when those are done) and group it with `--parent` (the parent is worked after its parts have ended); `holdco ticket link <id> --needs 'ENG-1, ENG-2' | --parent ENG-3 | --needs none` changes either later, and `holdco ticket list` shows what each held ticket waits on.
+
 Or write objectives into `governance/strategy.md` and let the CEO open tickets. A ticket's life: `triaged → in_progress (senior, 0..N juniors in their own worktrees) → ready_for_verification → verified → executed` or `awaiting_approval → your inbox`. Merges into your repository happen only after an independent Verification verdict and, until an action graduates, after approval (COO for T2, you for T3; without a COO every T2 comes to you).
 
 **Several projects, one company.** A company works on as many repositories as you register; one subscription login is one rate limit, so one company that allocates beats several that compete. Each project carries a class (core is dispatched first; experiments have kill criteria), a share of effort, its own verify command and locks. The CEO sees share against actual spend every cycle and opens the next ticket where a project is under its share. Change any of it whenever your priorities do — Settings → Projects in the dashboard (add a path, re-weight, change class or verify, remove) or:
@@ -153,7 +155,7 @@ bunx holdco init              # 대화형: 답한 대로 회사가 만들어짐 
 
 ### 4. 일 주기
 
-`holdco ticket new --title … --criteria "a; b" --action code.merge.app`로 직접 열거나, `governance/strategy.md`에 목표를 적고 CEO가 열게 둡니다. 티켓은 `triaged → in_progress(시니어 + 주니어 0~N명, 각자 워크트리) → ready_for_verification → verified → 실행` 또는 `awaiting_approval → 인박스`로 흐릅니다. 내 레포로의 머지는 독립된 검증 판정 뒤에만, 그리고 행동이 승격되기 전까지는 승인(T2는 COO, T3는 운영자, COO가 없으면 T2도 운영자) 뒤에만 일어납니다.
+`holdco ticket new --title … --criteria "a; b" --action code.merge.app`로 직접 열거나(`--needs`로 선행 티켓을, `--parent`로 상위 티켓을 지정; 나중에는 `holdco ticket link <id>`), `governance/strategy.md`에 목표를 적고 CEO가 열게 둡니다. 티켓은 `triaged → in_progress(시니어 + 주니어 0~N명, 각자 워크트리) → ready_for_verification → verified → 실행` 또는 `awaiting_approval → 인박스`로 흐릅니다. 내 레포로의 머지는 독립된 검증 판정 뒤에만, 그리고 행동이 승격되기 전까지는 승인(T2는 COO, T3는 운영자, COO가 없으면 T2도 운영자) 뒤에만 일어납니다.
 
 **프로젝트 여러 개, 회사 하나.** 회사는 등록한 만큼의 저장소에서 일합니다. 구독 로그인 하나가 레이트 리밋 하나이므로, 배분하는 회사 하나가 경쟁하는 회사 여럿보다 낫습니다. 프로젝트마다 구분(core가 먼저 배정되고 experiment는 중단 기준을 가짐), 노력 배분, 자체 검증 명령과 잠금이 있습니다. CEO는 매 사이클 배분 대비 실제 지출을 보고 배분에 못 미치는 프로젝트의 다음 티켓부터 엽니다. 우선순위가 바뀌면 언제든 바꾸세요 — 대시보드 설정 → 프로젝트(경로 추가, 재배분, 구분·검증 변경, 제거) 또는:
 

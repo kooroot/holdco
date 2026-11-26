@@ -920,6 +920,7 @@ export class Supervisor {
       "- Every ticket you open for a project names its milestone (`milestone` in ticket_create); attach the open ones that have none with ticket_milestone. Work that serves no milestone is either a missing milestone or work not worth doing.",
       "- When a milestone's tickets are all done and the outcome is really there, mark it done with milestone_update and the evidence. Never mark one done to make the number move.",
       "- Each cycle, for every project whose state changed since its status was written, write project_status: what works today, what is being built now, what comes next, what needs the Operator.",
+      ...this.treeLines(),
       "",
       "## Then: keep every objective moving — with evidence, never with busywork",
       `Open tickets: ${this.store.ticketsIn(["new", "triaged", "in_progress", "ready_for_verification", "verified", "awaiting_approval", "rejected", "blocked"]).length}. The company stops when nothing is open, so for every objective in governance/strategy.md that no open ticket serves, open the next concrete ticket with ticket_create (they start triaged): small, one deliverable, testable done criteria, and cite the objective or the product observation it answers. Check existing tickets before creating another. Open nothing for what the strategy does not name — no maintenance or refactoring to keep departments busy; when every objective is served or met, open nothing and say in the report what evidence or decision would change that. Keep the inbox small: escalate only what policy or genuinely new judgment requires.`,
@@ -1249,7 +1250,36 @@ export class Supervisor {
       return cls(a) - cls(b) || used(a) - used(b) || a.priority - b.priority || a.created_at - b.created_at
     }
     for (const t of this.store.ticketsIn(["ready_for_verification"]).sort(order)) this.tryStart(t, "verification", now, active)
-    for (const t of this.store.ticketsIn(["triaged", "rejected"]).sort(order)) this.tryStart(t, t.department === "improvement" ? "improvement" : "senior", now, active)
+    // D88: work starts only on the frontier — needs done, no part still open. A need that ended declined or
+    // rolled back will never be met, so its dependent goes to whoever decides blocked tickets instead of waiting forever.
+    for (const t of this.store.ticketsIn(["triaged", "rejected"]).sort(order)) {
+      const hold = this.store.holdOf(t)
+      if (hold === undefined) this.tryStart(t, t.department === "improvement" ? "improvement" : "senior", now, active)
+      else if (hold.dead.length && t.lease_holder === null) {
+        const why = hold.dead.map((n) => `${n} (${this.store.ticket(n)?.state ?? "missing"})`).join(", ")
+        this.store.transition(t.id, "blocked", "kernel", `needs ${why}, which can no longer be met: release it to go on without, or decline it`, now)
+      }
+    }
+  }
+
+  /** D88, for the CEO: how to order work, and which tickets are held right now and by what. */
+  private treeLines(): Array<string> {
+    const held = this.store.ticketsIn(["triaged", "rejected"]).flatMap((t) => { const h = this.store.holdOf(t); return h ? [`${t.id} ← ${h.on === "parts" ? "its parts " : ""}${h.tickets.map((n) => `${n} (${this.store.ticket(n)?.state ?? "missing"})`).join(", ")}`] : [] })
+    return [
+      "- An outcome that takes several tickets: open them together and give each the tickets it `needs` (ticket_create). The kernel starts the ones that are ready, in parallel, and each of the others when what it needs is done — no cycle is spent between steps. `parent` makes a ticket a part of a larger one, which is worked only after its parts have ended, to put them together.",
+      ...(held.length ? [`- Held until what they wait on is done (not stuck; nothing to do): ${held.slice(0, CEO_LIST_CAP).join("; ")}${held.length > CEO_LIST_CAP ? `; and ${held.length - CEO_LIST_CAP} more` : ""}`] : []),
+    ]
+  }
+
+  /** D88, for the session that works a ticket: what it needed is done, and how each of its parts ended. */
+  private builtOn(t: Ticket): Array<string> {
+    const line = (c: Ticket) => `- ${c.id} [${c.state}] ${clip(c.title, 120)}${c.state !== "done" && c.note ? ` — ${clip(c.note, 200)}` : c.branch && c.state === "done" ? ` — branch ${c.branch}, merged` : ""}`
+    const needs = t.needs.map((n) => this.store.ticket(n)).filter((x): x is Ticket => x !== undefined)
+    const parts = this.store.children(t.id)
+    return [
+      ...(needs.length ? ["This ticket was held until these were done; build on them, do not redo them:", ...needs.map(line)] : []),
+      ...(parts.length ? ["This ticket's parts have all ended. Your job is what remains for the whole to meet the done criteria above: check them against what the parts left; a part that did not end `done` is a dead end to work around or a gap to close here:", ...parts.map(line)] : []),
+    ]
   }
 
   /** The session gate (03-runtime §3): interrupts, budget share, slots. */
@@ -1380,6 +1410,7 @@ export class Supervisor {
       `Department: ${t.department}${project ? ` · Project: ${project.id} (${project.class})` : " · Repository: the company itself (your worktree is a branch of release " + this.org.tag + ")"}`,
       `Goal: ${t.goal}`, `Why: ${t.why}`, `Done criteria:`, ...t.done_criteria.map((c) => `- ${c}`),
       t.action ? `Registry action the result needs: ${t.action}` : "Registry action: choose the right one from governance/policy.md and pass it to ticket_update.",
+      ...this.builtOn(t),
       `Attempt ${t.attempts + 1} of ${this.config.runtime.max_attempts}. Your worktree is ${cwd} on branch ${branch}; commit there. Inspect the branch first: earlier attempts may have left work.${deps ? ` ${deps}.` : ""}`,
       t.state === "in_progress" && t.note ? `Last note on this ticket: ${t.note}` : "",
       project?.verify ? `The project's verify command is \`${renderVerify(project.verify)}\`: run it in your worktree before returning; the kernel runs the same command outside your sandbox and rejects the ticket if it fails. Your sandbox may refuse listening sockets (tests that start a local server): that is an environmental limit, not a defect — note it and let the kernel's run decide.` : project ? "This project has no verify command yet. If your change adds tests or a check script, say in the report what command proves the project works, so the Operator can register it (projects[].verify)." : "",

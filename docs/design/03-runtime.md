@@ -86,6 +86,8 @@ each tick:
     for ticket in stage, ordered by (project class: core > experiment > maintenance > brand,
                                      priority, age):
       skip if flagged by an interrupt
+      skip if held (triaged/rejected only, D88): a need not `done`, or a part still open;
+        a need that ended declined/rolled_back → blocked with the reason
       if not gate.admit(owner role):  continue          (§3)
       cap = min(budget.session_max_usd, owner's remaining share)
       if acquireLease(ticket):                           (§7)

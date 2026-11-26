@@ -22,7 +22,7 @@ export const Urgency = Schema.Literals(["routine", "urgent"])
 export const Ticket = Schema.Struct({
   id: Str, project: NullStr, department: Str, action: NullStr, state: TicketState, approval_stage: NullStr, interrupt_flag: NullStr,
   priority: Num, title: Str, goal: Str, why: Str, done_criteria: Schema.Array(Str), opened_by: Str, attempts: Num,
-  lease_holder: NullStr, lease_expires: NullNum, window_closes_at: NullNum, branch: NullStr, note: NullStr, milestone: NullNum, created_at: Num, updated_at: Num,
+  lease_holder: NullStr, lease_expires: NullNum, window_closes_at: NullNum, branch: NullStr, note: NullStr, milestone: NullNum, parent: NullStr, needs: Schema.Array(Str), created_at: Num, updated_at: Num,
 })
 export const TicketListed = Schema.Struct({ ...Ticket.fields, verdict: NullStr, cost: Num })
 
@@ -80,7 +80,7 @@ export const Settings = Schema.Struct({
   runtime: Schema.Struct({ tick: Str, max_concurrent_sessions: Num, max_attempts: Num }), actions: Schema.Array(Schema.Struct({ id: Str, department: Str, tier: Tier })),
 })
 
-/** What an open ticket waits on: `on` is a key the UI words (session, ceo_triage, ceo_proposal, coo_review, operator, senior_slot, verification_slot, lease, kernel); `eta` when that is expected to move. */
+/** What an open ticket waits on: `on` is a key the UI words (session, ceo_triage, ceo_proposal, coo_review, operator, senior_slot, verification_slot, lease, kernel; D88: needs, parts — `detail` lists the tickets); `eta` when that is expected to move. */
 export const Waiting = Schema.Struct({ ticket_id: Str, title: Str, state: TicketState, on: Str, eta: NullNum, detail: NullStr, stall: Schema.NullOr(Schema.Struct({ since: Num, reason: Str })) })
 
 export const Snapshot = Schema.Struct({

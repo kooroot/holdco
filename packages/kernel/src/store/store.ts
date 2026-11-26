@@ -21,6 +21,8 @@ export const TICKET_STATES = [
 ] as const
 export type TicketState = (typeof TICKET_STATES)[number]
 export const END_STATES: ReadonlySet<TicketState> = new Set(["done", "declined", "rolled_back"])
+/** D88: ended without being done, so a ticket that needs one of these can never start. */
+const NEVER_DONE: ReadonlySet<TicketState | undefined> = new Set(["declined", "rolled_back", undefined])
 
 export type ApprovalStage = "needs_proposal" | "needs_review" | "inbox" | null
 
@@ -46,6 +48,10 @@ export interface Ticket {
   readonly note: string | null
   /** D83: the roadmap milestone this ticket serves, if any. */
   readonly milestone: number | null
+  /** D88: the ticket this one is a part of. A parent is not worked while a part is open. */
+  readonly parent: string | null
+  /** D88: tickets that must be `done` before this one is worked. */
+  readonly needs: ReadonlyArray<string>
   readonly created_at: number
   readonly updated_at: number
 }
@@ -202,7 +208,29 @@ CREATE TABLE IF NOT EXISTS action_log (
 `
 
 const parseTicket = (r: Record<string, unknown>): Ticket =>
-  ({ ...r, done_criteria: JSON.parse(String(r["done_criteria"])) as Array<string> }) as unknown as Ticket
+  ({ ...r, done_criteria: JSON.parse(String(r["done_criteria"])) as Array<string>, parent: (r["parent"] as string | null | undefined) ?? null, needs: JSON.parse(String(r["needs"] ?? "[]")) as Array<string> }) as unknown as Ticket
+
+/** D88: a parent or need that cannot be given to a ticket. */
+export class LinkError extends Error {}
+
+/**
+ * D88: what keeps a ticket off the frontier. `needs`: tickets it needs that are not `done` (`dead` are the
+ * ones that ended declined or rolled back, so will never be). `parts`: its own parts that are still open.
+ */
+export interface Hold {
+  readonly on: "needs" | "parts"
+  readonly tickets: ReadonlyArray<string>
+  readonly dead: ReadonlyArray<string>
+}
+
+/** The one place the frontier is decided: a ticket is worked when its needs are done and none of its parts is open. */
+export const holdOf = (t: Ticket, get: (id: string) => Ticket | undefined, children: (id: string) => ReadonlyArray<Ticket>): Hold | undefined => {
+  const unmet = t.needs.filter((n) => get(n)?.state !== "done")
+  if (unmet.length) return { on: "needs", tickets: unmet, dead: unmet.filter((n) => NEVER_DONE.has(get(n)?.state)) }
+  const open = children(t.id).filter((c) => !END_STATES.has(c.state)).map((c) => c.id)
+  if (open.length) return { on: "parts", tickets: open, dead: [] }
+  return undefined
+}
 
 export class IllegalTransition extends Error {
   constructor(readonly ticketId: string, readonly from: string, readonly to: string) {
@@ -236,6 +264,8 @@ const ADDED_COLUMNS: ReadonlyArray<readonly [table: string, column: string, ddl:
   ["inbox", "urgency", "TEXT NOT NULL DEFAULT 'routine'"],
   ["inbox", "batched_at", "INTEGER"],
   ["tickets", "milestone", "INTEGER"],
+  ["tickets", "parent", "TEXT"],
+  ["tickets", "needs", "TEXT NOT NULL DEFAULT '[]'"],
 ]
 
 export class Store {
@@ -296,14 +326,20 @@ export class Store {
     priority?: number
     state?: TicketState
     milestone?: number | null
+    parent?: string | null
+    needs?: ReadonlyArray<string>
     now: number
   }): Ticket {
+    const parent = t.parent ?? null
+    const needs = [...new Set(t.needs ?? [])]
+    const refused = this.linkRefusal(null, parent, needs)
+    if (refused) throw new LinkError(refused)
     const id = this.nextTicketId(t.department)
     const state = t.state ?? "new"
     this.db.run(
-      `INSERT INTO tickets(id, project, department, action, state, priority, title, goal, why, done_criteria, opened_by, milestone, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, t.project ?? null, t.department, t.action ?? null, state, t.priority ?? 3, t.title, t.goal, t.why, JSON.stringify(t.done_criteria), t.opened_by, t.milestone ?? null, t.now, t.now],
+      `INSERT INTO tickets(id, project, department, action, state, priority, title, goal, why, done_criteria, opened_by, milestone, parent, needs, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, t.project ?? null, t.department, t.action ?? null, state, t.priority ?? 3, t.title, t.goal, t.why, JSON.stringify(t.done_criteria), t.opened_by, t.milestone ?? null, parent, JSON.stringify(needs), t.now, t.now],
     )
     this.db.run("INSERT INTO ticket_events(ticket_id, at, actor, from_state, to_state, note) VALUES (?, ?, ?, NULL, ?, ?)", [id, t.now, t.opened_by, state, "opened"])
     return this.ticket(id) as Ticket
@@ -320,6 +356,65 @@ export class Store {
   allTickets(): Array<Ticket> {
     return this.db.query<Record<string, unknown>, []>("SELECT * FROM tickets ORDER BY created_at ASC").all().map(parseTicket)
   }
+  // ── the work tree (D88) ──────────────────────────────────────────────────
+  /** The parts of a ticket, oldest first. */
+  children(id: string): Array<Ticket> {
+    return this.db.query<Record<string, unknown>, [string]>("SELECT * FROM tickets WHERE parent = ? ORDER BY created_at ASC, id ASC").all(id).map(parseTicket)
+  }
+  /** What keeps a ticket from being worked, or undefined when it is on the frontier. */
+  holdOf(t: Ticket): Hold | undefined {
+    return holdOf(t, (id) => this.ticket(id), (id) => this.children(id))
+  }
+  /**
+   * Why `parent` and `needs` cannot be given to ticket `id` (null for a ticket not yet created), or undefined.
+   * A ticket waits on its needs and on its parts, so a need that itself waits on this ticket, or on the
+   * parent this ticket is a part of, could never be met. Links the ticket already has are not re-judged.
+   */
+  linkRefusal(id: string | null, parent: string | null, needs: ReadonlyArray<string>): string | undefined {
+    const cur = id === null ? undefined : this.ticket(id)
+    if (parent !== null && parent !== cur?.parent) {
+      const p = this.ticket(parent)
+      if (p === undefined) return `parent ${parent} not found`
+      if (parent === id) return "a ticket cannot be its own parent"
+      if (END_STATES.has(p.state)) return `parent ${parent} is ${p.state}; a part is added to an open ticket`
+    }
+    for (const n of needs) {
+      if (cur?.needs.includes(n)) continue
+      const t = this.ticket(n)
+      if (t === undefined) return `needs ${n}: not found`
+      if (n === id) return "a ticket cannot need itself"
+      if (NEVER_DONE.has(t.state)) return `needs ${n}: it is ${t.state} and can never be met`
+    }
+    // waits-on edges: a ticket → its needs and its parts, with this ticket's proposed links laid over the stored ones
+    const self = id ?? "(new)"
+    const waitsOn = (x: string): Array<string> => {
+      const parts = this.children(x).map((c) => c.id).filter((c) => c !== self)
+      const out = [...(x === self ? needs : this.ticket(x)?.needs ?? []), ...parts]
+      if (x === parent) out.push(self)
+      return out
+    }
+    const seen = new Set<string>()
+    const stack = waitsOn(self)
+    while (stack.length) {
+      const x = stack.pop() as string
+      if (x === self) return `that would make ${id ?? "the new ticket"} wait on itself (${[parent ? `part of ${parent}` : "", needs.length ? `needs ${needs.join(", ")}` : ""].filter(Boolean).join("; ")})`
+      if (seen.has(x)) continue
+      seen.add(x)
+      stack.push(...waitsOn(x))
+    }
+    return undefined
+  }
+  /** Replace a ticket's parent and needs (the Operator's edit); throws LinkError when the tree would deadlock. */
+  setLinks(id: string, links: { parent?: string | null; needs?: ReadonlyArray<string> }, now: number) {
+    const t = this.ticket(id)
+    if (t === undefined) throw new Error(`ticket ${id} not found`)
+    const parent = links.parent === undefined ? t.parent : links.parent
+    const needs = links.needs === undefined ? t.needs : [...new Set(links.needs)]
+    const refused = this.linkRefusal(id, parent, needs)
+    if (refused) throw new LinkError(refused)
+    this.db.run("UPDATE tickets SET parent = ?, needs = ?, updated_at = ? WHERE id = ?", [parent, JSON.stringify(needs), now, id])
+  }
+
   /** Move a ticket, append the event. Throws on an illegal transition. */
   transition(id: string, to: TicketState, actor: string, note: string, now: number, patch: Partial<Record<"approval_stage" | "action" | "branch" | "department" | "window_closes_at" | "priority" | "project", unknown>> = {}) {
     const t = this.ticket(id)
@@ -327,7 +422,17 @@ export class Store {
     if (!TRANSITIONS[t.state].includes(to)) throw new IllegalTransition(id, t.state, to)
     const sets = ["state = ?", "updated_at = ?", "lease_holder = NULL", "lease_expires = NULL", "note = ?"]
     const vals: Array<unknown> = [to, now, note]
-    if (t.state === "blocked" && to === "triaged") sets.push("attempts = 0") // whoever released it (Operator or CEO) made a decision: the ticket gets its attempts back
+    if (t.state === "blocked" && to === "triaged") {
+      sets.push("attempts = 0") // whoever released it (Operator or CEO) made a decision: the ticket gets its attempts back
+      // D88: …and decided it goes on without the needs that can no longer be met
+      const dead = this.holdOf(t)?.dead ?? []
+      if (dead.length) {
+        sets.push("needs = ?")
+        vals.push(JSON.stringify(t.needs.filter((n) => !dead.includes(n))))
+        note = `${note}${note ? " " : ""}(released without ${dead.join(", ")})`
+        vals[2] = note
+      }
+    }
     for (const [k, v] of Object.entries(patch)) {
       sets.push(`${k} = ?`)
       vals.push(v)

@@ -71,7 +71,7 @@ const ownTicket = (b: SessionBinding, host: ToolHost): Ticket => {
   if (t === undefined) throw new ToolError(`ticket ${b.ticketId} not found`)
   return t
 }
-const view = (t: Ticket) => ({ id: t.id, project: t.project, milestone: t.milestone, department: t.department, action: t.action, state: t.state, approval_stage: t.approval_stage, priority: t.priority, title: t.title, goal: t.goal, why: t.why, done_criteria: t.done_criteria, opened_by: t.opened_by, attempts: t.attempts, branch: t.branch, note: t.note })
+const view = (t: Ticket) => ({ id: t.id, project: t.project, milestone: t.milestone, department: t.department, action: t.action, state: t.state, approval_stage: t.approval_stage, priority: t.priority, title: t.title, goal: t.goal, why: t.why, done_criteria: t.done_criteria, opened_by: t.opened_by, attempts: t.attempts, branch: t.branch, note: t.note, parent: t.parent, needs: t.needs })
 
 export const TOOLS: ReadonlyArray<Tool> = [
   {
@@ -84,7 +84,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
       if (t === undefined) throw new ToolError(`ticket ${String(id)} not found`)
       if (SENIORS.includes(b.kind) && t.department !== b.department) throw new ToolError("not your department's ticket")
       if (b.kind === "verification" && t.id !== b.ticketId) throw new ToolError("Verification sees only the ticket under review")
-      return { ...view(t), events: host.store.events(t.id) }
+      return { ...view(t), parts: host.store.children(t.id).map((c) => ({ id: c.id, state: c.state, title: c.title })), waits_on: host.store.holdOf(t) ?? null, events: host.store.events(t.id) }
     },
   },
   {
@@ -100,8 +100,8 @@ export const TOOLS: ReadonlyArray<Tool> = [
   },
   {
     name: "ticket_create",
-    description: "Open a ticket for any enabled department. It starts as `new` (the CEO triages it; without a CEO, the Operator's inbox). Improvement's tickets for itself are auto-triaged.",
-    input: obj({ department: str("owning department"), title: str("one line"), goal: str("what done looks like"), why: str("why it matters"), done_criteria: { type: "array", items: { type: "string" }, minItems: 1 }, project: str("project id, if any"), action: str("registry action id the result will need, e.g. code.merge.app"), priority: { type: "integer", minimum: 1, maximum: 5 }, milestone: { type: "integer", description: "id of the roadmap milestone this ticket serves (roadmap_get lists them)" } }, ["department", "title", "goal", "why", "done_criteria"]),
+    description: "Open a ticket for any enabled department. It starts as `new` (the CEO triages it; without a CEO, the Operator's inbox). Improvement's tickets for itself are auto-triaged. `needs` orders the work: the ticket is not started until every ticket it needs is `done`, so open the pieces of one outcome together and let the kernel start whichever are ready. `parent` (CEO only) makes it a part of a larger ticket, which is then worked only after all its parts have ended.",
+    input: obj({ department: str("owning department"), title: str("one line"), goal: str("what done looks like"), why: str("why it matters"), done_criteria: { type: "array", items: { type: "string" }, minItems: 1 }, project: str("project id, if any"), action: str("registry action id the result will need, e.g. code.merge.app"), priority: { type: "integer", minimum: 1, maximum: 5 }, milestone: { type: "integer", description: "id of the roadmap milestone this ticket serves (roadmap_get lists them)" }, needs: { type: "array", items: { type: "string" }, description: "ids of tickets that must be done before this one is started" }, parent: str("id of the larger ticket this one is a part of (CEO only)") }, ["department", "title", "goal", "why", "done_criteria"]),
     kinds: ["senior", "improvement", "ceo"],
     run: (a, b, host) => {
       const dept = String(a["department"])
@@ -120,8 +120,18 @@ export const TOOLS: ReadonlyArray<Tool> = [
         if (!m || m.project !== project) throw new ToolError(`milestone ${milestone} is not on ${project ?? "this ticket's project"}'s roadmap (roadmap_get lists them)`)
         if (m.status !== "open") throw new ToolError(`milestone ${milestone} is ${m.status}; pick an open one or add the next`)
       }
+      // D88: where the ticket sits in the tree
+      const needs = Array.isArray(a["needs"]) ? (a["needs"] as Array<unknown>).map(String) : []
+      const parent = a["parent"] === undefined || a["parent"] === null || a["parent"] === "" ? null : String(a["parent"])
+      if (parent !== null) {
+        if (b.kind !== "ceo") throw new ToolError("only the CEO sets `parent`; to order your ticket after another, use `needs`")
+        const p = host.store.ticket(parent)
+        if (p && !["new", "triaged", "rejected", "blocked"].includes(p.state)) throw new ToolError(`${parent} is ${p.state}: a part is added before work on it starts, or after it comes back`)
+      }
+      const refused = host.store.linkRefusal(null, parent, needs)
+      if (refused) throw new ToolError(refused)
       const t = host.store.createTicket({
-        milestone,
+        milestone, parent, needs,
         department: dept, title: String(a["title"]), goal: String(a["goal"]), why: String(a["why"]),
         done_criteria: (a["done_criteria"] as Array<string>).map(String), opened_by: b.role, project,
         action: a["action"] === undefined ? null : String(a["action"]), priority: a["priority"] === undefined ? 3 : Number(a["priority"]),
