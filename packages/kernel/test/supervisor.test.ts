@@ -916,6 +916,170 @@ describe("the work tree (D88)", () => {
   })
 })
 
+describe("split and dead ends (D89)", () => {
+  const soloSenior: Script = async ({ spec, call, git }) => {
+    writeFileSync(NodePath.join(spec.cwd, `${spec.ticketId}.md`), "x\n")
+    git("add", "-A")
+    git("commit", "-qm", `${spec.ticketId}: work`)
+    const t = (await call("ticket_get", { id: spec.ticketId })) as { branch: string }
+    await call("ticket_update", { state: "ready_for_verification", note: "done", branch: t.branch, action: "code.merge.app" })
+    return { report: { ticket: spec.ticketId, status: "ready", summary: "ok", branch: t.branch, action: "code.merge.app", changed_paths: [`${spec.ticketId}.md`], assumptions: [], opened_tickets: [] } }
+  }
+  const open = (store: Store, now: number, title: string, links: { parent?: string } = {}) => store.createTicket({ department: "engineering", title, goal: "y", why: "z", done_criteria: ["a"], opened_by: "operator", project: "app", state: "triaged", action: "code.merge.app", priority: 2, now, ...links }).id
+  const seniorRuns = (engine: FakeEngine, id: string) => engine.runs.filter((r) => r.role.kind === "senior" && r.ticketId === id)
+
+  test("a senior hands its ticket back in parts; they are worked in order and the ticket comes back on top of their work", async () => {
+    const c = company("split")
+    const clock = { now: Date.UTC(2026, 9, 26, 9) }
+    const refusals: Array<string> = []
+    const refused = async (f: () => Promise<unknown>) => { try { await f() } catch (e) { refusals.push(String(e)) } }
+    let root = ""
+    let made: Array<string> = []
+    let sawPartsWork = false
+    const part = (title: string, extra: Record<string, unknown> = {}) => ({ title, goal: `${title} works`, done_criteria: [`${title} is covered by a test`], ...extra })
+    const engine = new FakeEngine({
+      senior: async (ctx) => {
+        if (ctx.spec.ticketId !== root) return soloSenior(ctx)
+        if (made.length === 0) {
+          writeFileSync(NodePath.join(ctx.spec.cwd, "scaffold.md"), "shared types\n")
+          ctx.git("add", "-A")
+          ctx.git("commit", "-qm", "scaffold")
+          await refused(() => ctx.call("ticket_split", { parts: [part("a"), part("b", { after: [1] })], note: "n" }))
+          await refused(() => ctx.call("ticket_split", { parts: [part("a"), part("b"), part("c"), part("d")], note: "n" }))
+          await refused(() => ctx.call("ticket_split", { parts: [part("a", { department: "sales" })], note: "n" }))
+          const r = (await ctx.call("ticket_split", { parts: [part("Schema"), part("Endpoint", { after: [0] })], note: "two layers; wiring them is left for this ticket" })) as { held_until_ended: Array<string> }
+          made = r.held_until_ended
+          // the ticket is no longer this session's
+          await refused(() => ctx.call("ticket_update", { state: "ready_for_verification", note: "x", branch: "t/x", action: "code.merge.app" }))
+          return { report: { ticket: root, status: "split", summary: "split in two", changed_paths: ["scaffold.md"], assumptions: [], opened_tickets: made } }
+        }
+        // back after the parts: the branch holds its own earlier commit and what the parts merged
+        sawPartsWork = existsSync(NodePath.join(ctx.spec.cwd, "scaffold.md")) && made.every((id) => existsSync(NodePath.join(ctx.spec.cwd, `${id}.md`)))
+        return soloSenior(ctx)
+      },
+    })
+    const { sup, store } = makeSupervisor(c, engine, clock)
+    await sup.boot()
+    root = open(store, clock.now, "Ship the flow")
+    await cycle(sup, clock, 2)
+    expect(refusals.map((r) => r.replace(/^.*?Error: /, ""))).toEqual([
+      expect.stringContaining("part 1: `after` names positions of earlier parts"),
+      expect.stringContaining("would have 4 parts; the limit is 3"),
+      expect.stringContaining("department 'sales' is not enabled"),
+      expect.stringContaining("ticket is triaged, not in_progress"),
+    ])
+    // a split is not a failed attempt; the ticket is held by its parts, which inherit where it sits
+    expect(store.ticket(root)).toMatchObject({ state: "triaged", attempts: 0 })
+    expect(store.events(root).some((e) => e.note?.startsWith(`split into ${made.join(", ")}: two layers`))).toBe(true)
+    expect(store.allTickets().length).toBe(3) // the refused splits created nothing
+    const [a, b] = made.map((id) => store.ticket(id)!)
+    expect(a).toMatchObject({ parent: root, needs: [], department: "engineering", project: "app", action: "code.merge.app", priority: 2, why: `part of ${root}: Ship the flow`, opened_by: "engineering-senior" })
+    expect(b).toMatchObject({ parent: root, needs: [a!.id] })
+    expect(["triaged", "in_progress", "ready_for_verification"]).toContain(a!.state) // triaged on creation: no CEO cycle in between
+    expect(b!.state).toBe("triaged")
+    for (let i = 0; i < 20 && store.ticket(root)?.state !== "done"; i++) {
+      for (const item of store.inboxOpen().filter((x) => x.kind === "t3")) store.inboxDecide(item.id, "approved", "ok", clock.now)
+      await cycle(sup, clock, 2)
+    }
+    expect(store.ticket(root)).toMatchObject({ state: "done", attempts: 0 })
+    expect(seniorRuns(engine, root).length).toBe(2)
+    expect(sawPartsWork).toBe(true)
+    const second = seniorRuns(engine, root)[1]!.prompt
+    expect(second).toContain("This ticket's parts have all ended")
+    expect(second).toContain(`- ${a!.id} [done] Schema`)
+    expect(second).toContain("The kernel merged the default branch (with the parts' work) into your branch.")
+    const at = (id: string, to: string, nth = 0) => store.events(id).filter((e) => e.to_state === to)[nth]?.at ?? Infinity
+    expect(at(b!.id, "in_progress")).toBeGreaterThanOrEqual(at(a!.id, "done"))
+    expect(at(root, "in_progress", 1)).toBeGreaterThanOrEqual(at(b!.id, "done"))
+    await sup.stop()
+  })
+
+  test("the session report: dead_end must say which kind and why; split needs nothing more", async () => {
+    const { SessionReport } = await import("../src/protocol/report.ts")
+    const ok = (r: unknown) => Schema.decodeUnknownExit(SessionReport)(r)._tag === "Success"
+    const base = { ticket: "ENG-1", summary: "s", changed_paths: [], assumptions: [], opened_tickets: [] }
+    expect(ok({ ...base, status: "split" })).toBe(true)
+    expect(ok({ ...base, status: "dead_end" })).toBe(false)
+    expect(ok({ ...base, status: "dead_end", end: { kind: "withdrawn", why: "w" } })).toBe(false) // not a session's to claim
+    expect(ok({ ...base, status: "dead_end", end: { kind: "exhausted", why: "three approaches, each fails the load test" } })).toBe(true)
+  })
+
+  test("a tree is at most three deep: a senior that far down does the work or goes to the CEO", async () => {
+    const c = company("split-deep")
+    const clock = { now: Date.UTC(2026, 9, 26, 9) }
+    let refusal = ""
+    const engine = new FakeEngine({
+      ceo: async () => ({}),
+      senior: async (ctx) => {
+        try { await ctx.call("ticket_split", { parts: [{ title: "deeper", goal: "g", done_criteria: ["c"] }], note: "n" }) } catch (e) { refusal = String(e) }
+        return soloSenior(ctx)
+      },
+    })
+    const { sup, store } = makeSupervisor(c, engine, clock)
+    await sup.boot()
+    const l0 = open(store, clock.now, "root")
+    const l1 = open(store, clock.now, "l1", { parent: l0 })
+    const l2 = open(store, clock.now, "l2", { parent: l1 })
+    const l3 = open(store, clock.now, "l3", { parent: l2 })
+    await cycle(sup, clock, 2) // the first tick's slots go to the CEO's own sessions
+    expect(engine.runs.filter((r) => r.role.kind === "senior").map((r) => r.ticketId)).toEqual([l3]) // only the leaf is on the frontier
+    expect(refusal).toContain(`${l3} is already 3 deep; a tree is at most 3 deep`)
+    expect(store.children(l3)).toEqual([])
+    await sup.stop()
+  })
+
+  test("a senior that cannot do the ticket says so; the CEO confirms it; the dead end is kept with its kind and shown before work is opened", async () => {
+    const c = company("deadend")
+    const clock = { now: Date.UTC(2026, 9, 26, 9) }
+    const refusals: Array<string> = []
+    let confirm = false
+    const engine = new FakeEngine({
+      ceo: async (ctx) => {
+        if (confirm && ctx.spec.ticketId === "CEO-CYCLE") {
+          const blocked = (await ctx.call("ticket_list", { states: ["blocked"] })) as Array<{ id: string; end_kind: string | null }>
+          for (const t of blocked.filter((x) => x.end_kind)) await ctx.call("ticket_unblock", { id: t.id, decision: "declined", note: "confirmed: the vendor has no such endpoint" })
+        }
+        return {}
+      },
+      senior: async ({ spec, call }) => {
+        const t = (await call("ticket_get", { id: spec.ticketId })) as { title: string }
+        if (t.title === "by report") return { report: { ticket: spec.ticketId, status: "dead_end", summary: "cannot", end: { kind: "barrier", why: "the sandbox has no access to the billing console" }, changed_paths: [], assumptions: [], opened_tickets: [] } }
+        try { await call("ticket_update", { state: "dead_end", note: "x" }) } catch (e) { refusals.push(String(e)) }
+        await call("ticket_update", { state: "dead_end", kind: "refuted", note: "the vendor API has no bulk endpoint (docs/api.md §3); the goal assumes one" })
+        return { report: { ticket: spec.ticketId, status: "dead_end", summary: "refuted", end: { kind: "refuted", why: "no bulk endpoint" }, changed_paths: [], assumptions: [], opened_tickets: [] } }
+      },
+    })
+    const { sup, store } = makeSupervisor(c, engine, clock)
+    await sup.boot()
+    const parent = open(store, clock.now, "Import in bulk and report")
+    const x = open(store, clock.now, "Bulk import through the vendor API", { parent })
+    const y = open(store, clock.now, "by report")
+    await cycle(sup, clock, 2)
+    expect(refusals[0]).toContain("dead_end needs `kind`: refuted, barrier, exhausted")
+    // claimed, not yet decided: blocked with the claim, no attempt spent
+    expect(store.ticket(x)).toMatchObject({ state: "blocked", end_kind: "refuted", attempts: 0, note: "dead end (refuted): the vendor API has no bulk endpoint (docs/api.md §3); the goal assumes one" })
+    // a session that only reports it, without the tool, lands in the same place
+    expect(store.ticket(y)).toMatchObject({ state: "blocked", end_kind: "barrier", note: "dead end (barrier): the sandbox has no access to the billing console" })
+    expect(engine.runs.filter((r) => r.role.kind === "ceo" && r.ticketId === "CEO-CYCLE").at(-1)?.prompt ?? "").not.toContain("Dead ends on record")
+    confirm = true
+    clock.now += 3 * 60_000
+    await cycle(sup, clock, 2)
+    expect(store.ticket(x)).toMatchObject({ state: "declined", end_kind: "refuted", note: "confirmed: the vendor has no such endpoint" })
+    // the blocked list told the CEO what the session claimed
+    expect(engine.runs.filter((r) => r.role.kind === "ceo" && r.ticketId === "CEO-CYCLE").map((r) => r.prompt).some((p) => p.includes(`- ${x} [engineering] [its session claims a dead end: refuted`))).toBe(true)
+    // the part ended, so the parent is worked — and is told the part was a dead end, not just "declined"
+    await cycle(sup, clock, 2)
+    expect(seniorRuns(engine, parent)[0]?.prompt).toContain(`- ${x} [dead end: refuted] Bulk import through the vendor API — confirmed: the vendor has no such endpoint`)
+    // the next CEO cycle is shown the dead end before it opens work
+    clock.now += 3 * 60_000
+    await cycle(sup, clock, 1)
+    const ceo = engine.runs.filter((r) => r.role.kind === "ceo" && r.ticketId === "CEO-CYCLE").at(-1)!.prompt
+    expect(ceo).toContain("Dead ends on record")
+    expect(ceo).toContain(`- ${x} [refuted] Bulk import through the vendor API: confirmed: the vendor has no such endpoint`)
+    await sup.stop()
+  })
+})
+
 describe("tool server", () => {
   test("rejects a bad token and unknown sessions", async () => {
     const c = company("auth")

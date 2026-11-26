@@ -43,7 +43,7 @@ import { consoleNotifier, type Notifier } from "./notify.ts"
 import { Org, projectInstructions } from "./org.ts"
 import { renderDigest } from "./digest.ts"
 import { type SessionBinding, ToolServer, type ToolHost } from "./tools.ts"
-import { changedPaths, createDetachedWorktree, createWorktree, defaultBranch, ensureFirstCommit, provisionDependencies, removeTicketWorktrees, removeWorktree } from "./worktrees.ts"
+import { changedPaths, createDetachedWorktree, createWorktree, defaultBranch, ensureFirstCommit, provisionDependencies, removeTicketWorktrees, removeWorktree, syncWithBase, worktreeDir } from "./worktrees.ts"
 
 export interface SupervisorOptions {
   readonly companyRoot: string
@@ -79,6 +79,8 @@ interface Running {
 const MIN_SESSION_USD = 0.05
 /** D78: the CEO prompt lists at most this many tickets per section; a bigger backlog is paged across cycles. */
 export const CEO_LIST_CAP = 25
+/** D89: how long a dead end is shown to the CEO before it opens work. */
+const DEAD_END_MEMORY_MS = 90 * 86_400_000
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}…` : s)
 /** D72: how often the engines' usage endpoints are asked for the plan windows. */
 export const QUOTA_POLL_MS = 5 * 60_000
@@ -430,14 +432,14 @@ export class Supervisor {
     const since = this.store.db.query<{ at: number | null }, [string]>("SELECT MAX(at) AS at FROM ticket_events WHERE ticket_id = ? AND to_state = 'awaiting_approval'").get(t.id)?.at ?? 0
     const manual = this.store.db.query<{ status: string }, [string, number]>("SELECT status FROM inbox WHERE ticket_id = ? AND kind = 'manual_action' AND created_at >= ? ORDER BY id DESC LIMIT 1").get(t.id, since)
     if (manual?.status === "approved") { this.store.transition(t.id, "done", "operator", "performed by the Operator", now); return }
-    if (manual?.status === "rejected" || manual?.status === "expired") { this.store.transition(t.id, "declined", "operator", `manual action ${manual.status}`, now); return }
+    if (manual?.status === "rejected" || manual?.status === "expired") { this.store.transition(t.id, "declined", "operator", `manual action ${manual.status}`, now, { end_kind: "rejected" }); return }
     const decided = this.store.db.query<{ status: string }, [string, number]>("SELECT status FROM inbox WHERE ticket_id = ? AND kind IN ('t3','t2_objection','coo_timeout') AND created_at >= ? ORDER BY id DESC LIMIT 1").get(t.id, since)
     if (decided?.status === "approved") {
       this.execute(t, [], tier, now)
       return
     }
     if (decided?.status === "rejected" || decided?.status === "expired") {
-      this.store.transition(t.id, "declined", "operator", `inbox ${decided.status}`, now)
+      this.store.transition(t.id, "declined", "operator", `inbox ${decided.status}`, now, { end_kind: "rejected" })
       return
     }
     if (tier === "T2" && review?.decision === "concur") {
@@ -737,7 +739,7 @@ export class Supervisor {
         this.store.inboxDecide(i.id, "expired", "no answer within the timeout: rejected by default", now)
         if ((i.kind === "blocked" || i.kind === "triage") && i.ticket_id) {
           const t = this.store.ticket(i.ticket_id)
-          if (t && (t.state === "blocked" || t.state === "new")) this.store.transition(t.id, "declined", "operator", `inbox #${i.id} expired: rejected by default`, now)
+          if (t && (t.state === "blocked" || t.state === "new")) this.store.transition(t.id, "declined", "operator", `inbox #${i.id} expired: rejected by default`, now, { end_kind: t.end_kind ?? "rejected" })
         }
         void this.notifier.send("warning", this.say(`inbox #${i.id} expired: ${this.tx(String(i.payload["title"] ?? i.kind))}`, `인박스 #${i.id} 만료: ${this.tx(String(i.payload["title"] ?? i.kind))}`))
       }
@@ -911,7 +913,7 @@ export class Supervisor {
       ...proposals.slice(0, CEO_LIST_CAP).map((t) => `- ${t.id} [${t.department}] ${t.title} — action ${t.action}, branch ${t.branch}, verdict ${this.store.verdictFor(t.id)?.verdict ?? "none"}`),
       "",
       `## Blocked tickets (${blocked.length}) — use ticket_unblock with a decision, or leave for the Operator${blocked.length > CEO_LIST_CAP ? `; first ${CEO_LIST_CAP}` : ""}`,
-      ...blocked.slice(0, CEO_LIST_CAP).map((t) => `- ${t.id} [${t.department}] ${t.title}: ${clip(t.note ?? "", 300)}`),
+      ...blocked.slice(0, CEO_LIST_CAP).map((t) => `- ${t.id} [${t.department}]${t.end_kind ? ` [its session claims a dead end: ${t.end_kind} — decline it to keep that on record, or release it with what to try instead]` : ""} ${t.title}: ${clip(t.note ?? "", 300)}`),
       "",
       "## Roadmaps (D83) — the Operator reads these to see how far each project is; keep them true",
       ...progressLines(this.store, this.config, { detail: true }),
@@ -920,7 +922,7 @@ export class Supervisor {
       "- Every ticket you open for a project names its milestone (`milestone` in ticket_create); attach the open ones that have none with ticket_milestone. Work that serves no milestone is either a missing milestone or work not worth doing.",
       "- When a milestone's tickets are all done and the outcome is really there, mark it done with milestone_update and the evidence. Never mark one done to make the number move.",
       "- Each cycle, for every project whose state changed since its status was written, write project_status: what works today, what is being built now, what comes next, what needs the Operator.",
-      ...this.treeLines(),
+      ...this.treeLines(now),
       "",
       "## Then: keep every objective moving — with evidence, never with busywork",
       `Open tickets: ${this.store.ticketsIn(["new", "triaged", "in_progress", "ready_for_verification", "verified", "awaiting_approval", "rejected", "blocked"]).length}. The company stops when nothing is open, so for every objective in governance/strategy.md that no open ticket serves, open the next concrete ticket with ticket_create (they start triaged): small, one deliverable, testable done criteria, and cite the objective or the product observation it answers. Check existing tickets before creating another. Open nothing for what the strategy does not name — no maintenance or refactoring to keep departments busy; when every objective is served or met, open nothing and say in the report what evidence or decision would change that. Keep the inbox small: escalate only what policy or genuinely new judgment requires.`,
@@ -1262,23 +1264,33 @@ export class Supervisor {
     }
   }
 
-  /** D88, for the CEO: how to order work, and which tickets are held right now and by what. */
-  private treeLines(): Array<string> {
+  /** D88/D89, for the CEO: how to order work, which tickets are held right now and by what, and the dead ends on record. */
+  private treeLines(now: number): Array<string> {
     const held = this.store.ticketsIn(["triaged", "rejected"]).flatMap((t) => { const h = this.store.holdOf(t); return h ? [`${t.id} ← ${h.on === "parts" ? "its parts " : ""}${h.tickets.map((n) => `${n} (${this.store.ticket(n)?.state ?? "missing"})`).join(", ")}`] : [] })
+    const dead = this.store.ticketsIn(["declined"]).filter((t) => t.updated_at >= now - DEAD_END_MEMORY_MS && t.end_kind !== "withdrawn" && t.end_kind !== "rejected").sort((a, b) => b.updated_at - a.updated_at)
     return [
       "- An outcome that takes several tickets: open them together and give each the tickets it `needs` (ticket_create). The kernel starts the ones that are ready, in parallel, and each of the others when what it needs is done — no cycle is spent between steps. `parent` makes a ticket a part of a larger one, which is worked only after its parts have ended, to put them together.",
       ...(held.length ? [`- Held until what they wait on is done (not stuck; nothing to do): ${held.slice(0, CEO_LIST_CAP).join("; ")}${held.length > CEO_LIST_CAP ? `; and ${held.length - CEO_LIST_CAP} more` : ""}`] : []),
+      ...(dead.length ? [
+        "- Dead ends on record — work that was tried and cannot be done as stated. Do not open the same thing again; open it differently only with a reason that answers why it ended:",
+        ...dead.slice(0, CEO_LIST_CAP).map((t) => `  - ${t.id} [${t.end_kind}${t.end_into ? ` into ${t.end_into}` : ""}] ${clip(t.title, 100)}: ${clip(t.note ?? "", 220)}`),
+      ] : []),
     ]
   }
 
-  /** D88, for the session that works a ticket: what it needed is done, and how each of its parts ended. */
-  private builtOn(t: Ticket): Array<string> {
-    const line = (c: Ticket) => `- ${c.id} [${c.state}] ${clip(c.title, 120)}${c.state !== "done" && c.note ? ` — ${clip(c.note, 200)}` : c.branch && c.state === "done" ? ` — branch ${c.branch}, merged` : ""}`
+  /** D88/D89, for the session that works a ticket: what it needed is done, and how each of its parts ended. */
+  private builtOn(t: Ticket, synced?: "current" | "merged" | "conflict"): Array<string> {
+    const ended = (c: Ticket) => (c.state === "declined" && c.end_kind ? `dead end: ${c.end_kind}${c.end_into ? ` into ${c.end_into}` : ""}` : c.state)
+    const line = (c: Ticket) => `- ${c.id} [${ended(c)}] ${clip(c.title, 120)}${c.state !== "done" && c.note ? ` — ${clip(c.note, 200)}` : c.branch && c.state === "done" ? ` — branch ${c.branch}, merged` : ""}`
     const needs = t.needs.map((n) => this.store.ticket(n)).filter((x): x is Ticket => x !== undefined)
     const parts = this.store.children(t.id)
     return [
       ...(needs.length ? ["This ticket was held until these were done; build on them, do not redo them:", ...needs.map(line)] : []),
-      ...(parts.length ? ["This ticket's parts have all ended. Your job is what remains for the whole to meet the done criteria above: check them against what the parts left; a part that did not end `done` is a dead end to work around or a gap to close here:", ...parts.map(line)] : []),
+      ...(parts.length ? [
+        "This ticket's parts have all ended. Your job is what remains for the whole to meet the done criteria above: check them against what the parts left; a part that did not end `done` is a dead end to work around or a gap to close here. If nothing remains, report `nothing_to_do`:",
+        ...parts.map(line),
+        ...(synced === "merged" ? ["The kernel merged the default branch (with the parts' work) into your branch."] : synced === "conflict" ? ["Your branch is behind the default branch (where the parts' work is) and the kernel could not merge it cleanly: merge the default branch into yours first."] : []),
+      ] : []),
     ]
   }
 
@@ -1390,6 +1402,7 @@ export class Supervisor {
     let cwd: string
     let projectRoot: string | undefined
     let branch: string
+    let synced: "current" | "merged" | "conflict" | undefined
     if (kind === "improvement") {
       branch = `imp/${t.id}`
       cwd = createWorktree(this.root, `imp-${t.id}`, branch, this.org.tag)
@@ -1400,7 +1413,10 @@ export class Supervisor {
       const first = ensureFirstCommit(projectRoot) // D80: a project registered before its first commit gets one from the kernel
       if (first) { this.log(`${project.id}: ${first}`); void this.notifier.send("info", this.say(`${project.id}: ${first}`, `${project.id}: 첫 커밋 생성 (저장소가 비어 있었음)`)) }
       branch = `t/${t.id}`
+      const had = existsSync(worktreeDir(projectRoot, `t-${t.id}`))
       cwd = createWorktree(projectRoot, `t-${t.id}`, branch, defaultBranch(projectRoot))
+      // D89: a ticket that comes back after its parts starts from what they merged, not from where it was split
+      if (had && this.store.children(t.id).length) synced = syncWithBase(cwd, defaultBranch(projectRoot))
     }
     this.store.db.run("UPDATE tickets SET branch = ? WHERE id = ? AND branch IS NULL", [branch, t.id])
     const deps = provisionDependencies(cwd, projectRoot ?? this.root, this.log)
@@ -1410,7 +1426,7 @@ export class Supervisor {
       `Department: ${t.department}${project ? ` · Project: ${project.id} (${project.class})` : " · Repository: the company itself (your worktree is a branch of release " + this.org.tag + ")"}`,
       `Goal: ${t.goal}`, `Why: ${t.why}`, `Done criteria:`, ...t.done_criteria.map((c) => `- ${c}`),
       t.action ? `Registry action the result needs: ${t.action}` : "Registry action: choose the right one from governance/policy.md and pass it to ticket_update.",
-      ...this.builtOn(t),
+      ...this.builtOn(t, synced),
       `Attempt ${t.attempts + 1} of ${this.config.runtime.max_attempts}. Your worktree is ${cwd} on branch ${branch}; commit there. Inspect the branch first: earlier attempts may have left work.${deps ? ` ${deps}.` : ""}`,
       t.state === "in_progress" && t.note ? `Last note on this ticket: ${t.note}` : "",
       project?.verify ? `The project's verify command is \`${renderVerify(project.verify)}\`: run it in your worktree before returning; the kernel runs the same command outside your sandbox and rejects the ticket if it fails. Your sandbox may refuse listening sockets (tests that start a local server): that is an environmental limit, not a defect — note it and let the kernel's run decide.` : project ? "This project has no verify command yet. If your change adds tests or a check script, say in the report what command proves the project works, so the Operator can register it (projects[].verify)." : "",
@@ -1418,7 +1434,9 @@ export class Supervisor {
       prior.length ? `Earlier session reports:\n${prior.map((s) => s.report).join("\n")}` : "",
       "",
       this.config.modules.juniors.enabled ? `Commit before delegating: juniors branch from your branch's HEAD and never see uncommitted files. Team: list the ticket's independent parts first; two or more → one junior each, started together (consecutive delegate_start, one delegate_wait), up to ${this.config.modules.juniors.max_per_task}. Solo only when the work is small or cannot be split. Record the choice in the report's \`team\`.` : "",
-      "Finish by calling ticket_update (ready_for_verification with branch and action, or blocked with the decision needed), then return the structured session report.",
+      kind === "senior"
+        ? "Finish by calling ticket_update (ready_for_verification with branch and action; blocked with the decision needed; dead_end with its kind and the evidence when it cannot be done) or ticket_split (it is more than one session's work), then return the structured session report."
+        : "Finish by calling ticket_update (ready_for_verification with branch and action, or blocked with the decision needed), then return the structured session report.",
     ].filter((l) => l !== "").join("\n")
     const extra: Array<[string, string]> = []
     if (projectRoot) {
@@ -1439,6 +1457,9 @@ export class Supervisor {
         this.store.transition(t.id, "ready_for_verification", "kernel", `from session report: ${rep.summary}`, now, { branch: rep.branch, action: rep.action ?? t.action })
       } else if (o.status === "success" && rep?.status === "blocked") {
         this.store.transition(t.id, "blocked", "kernel", rep.needs_decision ?? rep.summary, now)
+      } else if (o.status === "success" && rep?.status === "dead_end" && rep.end) {
+        // D89: the claim, kept with the ticket; whoever owns blocked tickets confirms it or sends it back
+        this.store.transition(t.id, "blocked", "kernel", `dead end (${rep.end.kind}): ${rep.end.why}`, now, { end_kind: rep.end.kind })
       } else if (o.status === "success" && rep?.status === "nothing_to_do") {
         this.store.transition(t.id, "ready_for_verification", "kernel", `nothing to do: ${rep.summary}`, now, { action: t.action ?? "code.branch" })
       } else if (o.status === "aborted") {

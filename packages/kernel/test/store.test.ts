@@ -205,3 +205,47 @@ describe("the work tree (D88)", () => {
     require("node:fs").rmSync(path, { force: true })
   })
 })
+
+describe("dead ends are kept with their kind (D89)", () => {
+  const mk3 = () => {
+    const s = new Store(":memory:")
+    const open = () => s.createTicket({ department: "engineering", title: "t", goal: "g", why: "w", done_criteria: ["a"], opened_by: "operator", project: "app", state: "triaged", now: 1 }).id
+    return { s, open }
+  }
+  test("a declined ticket always says how it ended: the kind given, else the one its session claimed, else withdrawn", () => {
+    const { s, open } = mk3()
+    const plain = open()
+    s.transition(plain, "declined", "operator", "changed my mind", 2)
+    expect(s.ticket(plain)).toMatchObject({ end_kind: "withdrawn", end_into: null })
+    const claimed = open()
+    s.transition(claimed, "in_progress", "kernel", "", 2)
+    s.transition(claimed, "blocked", "engineering-senior", "dead end (refuted): no such endpoint", 3, { end_kind: "refuted" })
+    expect(s.ticket(claimed)).toMatchObject({ state: "blocked", end_kind: "refuted" })
+    s.transition(claimed, "declined", "ceo", "confirmed", 4)
+    expect(s.ticket(claimed)?.end_kind).toBe("refuted")
+    const overruled = open()
+    s.transition(overruled, "blocked", "engineering-senior", "dead end (exhausted): three tries", 3, { end_kind: "exhausted" })
+    s.transition(overruled, "declined", "ceo", "it is a vendor limit", 4, { end_kind: "barrier" })
+    expect(s.ticket(overruled)?.end_kind).toBe("barrier")
+  })
+  test("a claim does not outlive the block it was made with", () => {
+    const { s, open } = mk3()
+    const t = open()
+    s.transition(t, "blocked", "engineering-senior", "dead end (exhausted): out of ideas", 2, { end_kind: "exhausted" })
+    s.transition(t, "triaged", "ceo", "try the batch API instead", 3)
+    expect(s.ticket(t)).toMatchObject({ state: "triaged", end_kind: null })
+    s.transition(t, "declined", "operator", "never mind", 4)
+    expect(s.ticket(t)?.end_kind).toBe("withdrawn")
+  })
+  test("merged names the ticket it was folded into", () => {
+    const { s, open } = mk3()
+    const a = open()
+    const b = open()
+    expect(() => s.transition(b, "declined", "ceo", "same as a", 2, { end_kind: "merged" })).toThrow(LinkError)
+    expect(() => s.transition(b, "declined", "ceo", "same as a", 2, { end_kind: "merged", end_into: b })).toThrow(LinkError)
+    expect(s.ticket(b)?.state).toBe("triaged")
+    s.transition(b, "declined", "ceo", "same as a", 2, { end_kind: "merged", end_into: a })
+    expect(s.ticket(b)).toMatchObject({ state: "declined", end_kind: "merged", end_into: a })
+  })
+})
+

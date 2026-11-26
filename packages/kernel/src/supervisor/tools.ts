@@ -15,7 +15,7 @@ import { Return } from "../protocol/return.ts"
 import { Verdict } from "../protocol/verdict.ts"
 import { Proposal, Review, Triage } from "../protocol/approval.ts"
 import { crossCheck } from "../validate.ts"
-import type { Store, Ticket } from "../store/store.ts"
+import { CLAIMABLE_ENDS, END_KINDS, type EndKind, LinkError, type Store, type Ticket } from "../store/store.ts"
 import { effectiveTier, UnknownAction } from "../policy/tiers.ts"
 import { projectProgress, setProjectStatus } from "./roadmap.ts"
 import { RESERVED_T3_NAMESPACES } from "../config/company.ts"
@@ -62,6 +62,8 @@ const decode = <S extends Schema.Codec<any, any, never, never>>(schema: S, value
 }
 
 export class ToolError extends Error {}
+/** D89: how deep a ticket may be split (a root is depth 0); deeper work goes back to the CEO. */
+export const MAX_TREE_DEPTH = 3
 /** A roadmap is the few outcomes that matter, not a backlog. */
 export const MAX_MILESTONES = 12
 
@@ -71,7 +73,7 @@ const ownTicket = (b: SessionBinding, host: ToolHost): Ticket => {
   if (t === undefined) throw new ToolError(`ticket ${b.ticketId} not found`)
   return t
 }
-const view = (t: Ticket) => ({ id: t.id, project: t.project, milestone: t.milestone, department: t.department, action: t.action, state: t.state, approval_stage: t.approval_stage, priority: t.priority, title: t.title, goal: t.goal, why: t.why, done_criteria: t.done_criteria, opened_by: t.opened_by, attempts: t.attempts, branch: t.branch, note: t.note, parent: t.parent, needs: t.needs })
+const view = (t: Ticket) => ({ id: t.id, project: t.project, milestone: t.milestone, department: t.department, action: t.action, state: t.state, approval_stage: t.approval_stage, priority: t.priority, title: t.title, goal: t.goal, why: t.why, done_criteria: t.done_criteria, opened_by: t.opened_by, attempts: t.attempts, branch: t.branch, note: t.note, parent: t.parent, needs: t.needs, end_kind: t.end_kind, end_into: t.end_into })
 
 export const TOOLS: ReadonlyArray<Tool> = [
   {
@@ -229,8 +231,8 @@ export const TOOLS: ReadonlyArray<Tool> = [
   },
   {
     name: "ticket_update",
-    description: "Move your own ticket: `ready_for_verification` (work is on the branch, give the branch and the action it needs) or `blocked` (a decision is needed; say which).",
-    input: obj({ state: { type: "string", enum: ["ready_for_verification", "blocked"] }, note: str("what was done, or what decision is needed"), branch: str("branch holding the work"), action: str("registry action the result needs, e.g. code.merge.app") }, ["state", "note"]),
+    description: "Move your own ticket: `ready_for_verification` (work is on the branch, give the branch and the action it needs), `blocked` (a decision is needed; say which), or `dead_end` (it cannot be done: give `kind` — refuted: the goal is wrong or impossible as stated; barrier: something outside the company's reach stops it; exhausted: every approach you could try failed — and the evidence in `note`). A dead end is a result, not a failure: it is kept with its reason so nobody tries the same thing again. Whoever owns blocked tickets confirms it or sends it back.",
+    input: obj({ state: { type: "string", enum: ["ready_for_verification", "blocked", "dead_end"] }, note: str("what was done, what decision is needed, or why it is a dead end (with the evidence)"), branch: str("branch holding the work"), action: str("registry action the result needs, e.g. code.merge.app"), kind: { type: "string", enum: [...CLAIMABLE_ENDS], description: "with dead_end: which kind" } }, ["state", "note"]),
     kinds: ["senior", "improvement"],
     run: (a, b, host) => {
       const t = ownTicket(b, host)
@@ -245,20 +247,90 @@ export const TOOLS: ReadonlyArray<Tool> = [
           throw e
         }
       }
+      if (a["state"] === "dead_end") {
+        const kind = String(a["kind"] ?? "") as EndKind
+        if (!CLAIMABLE_ENDS.includes(kind)) throw new ToolError(`dead_end needs \`kind\`: ${CLAIMABLE_ENDS.join(", ")}`)
+        host.store.transition(t.id, "blocked", b.role, `dead end (${kind}): ${String(a["note"])}`, host.now(), { branch: a["branch"] === undefined ? t.branch : String(a["branch"]), action, end_kind: kind })
+        host.onTicketChanged?.(t.id)
+        return view(host.store.ticket(t.id) as Ticket)
+      }
       host.store.transition(t.id, a["state"] as "ready_for_verification" | "blocked", b.role, String(a["note"]), host.now(), { branch: a["branch"] === undefined ? t.branch : String(a["branch"]), action })
       host.onTicketChanged?.(t.id)
       return view(host.store.ticket(t.id) as Ticket)
     },
   },
   {
+    name: "ticket_split",
+    description: `Hand your ticket back in parts when it is more than one session's work, or when a piece needs its own verification or another department. Each part becomes a ticket under yours, worked and verified on its own; yours is held until every part has ended and then comes back to a session that is told how each ended, to do what remains for the whole. Order parts with \`after\` (positions of earlier parts in this call, from 0) or \`needs\` (existing ticket ids). Parts start from the project's default branch and do not see your branch: commit what you have first and say in each part what it may rely on. Use juniors (delegate_start) instead for pieces you will integrate in this session. A ticket holds at most \`modules.juniors.max_per_task\` parts and a tree is at most ${MAX_TREE_DEPTH} deep; beyond that, ticket_update → blocked and let the CEO re-plan. After this call your ticket is no longer yours: end with the session report, status \`split\`.`,
+    input: obj({
+      parts: { type: "array", minItems: 1, items: obj({ title: str("one line"), goal: str("what done looks like for this part"), done_criteria: { type: "array", items: { type: "string" }, minItems: 1 }, after: { type: "array", items: { type: "integer", minimum: 0 }, description: "positions of earlier parts in this call that must be done first" }, needs: { type: "array", items: { type: "string" }, description: "ids of existing tickets that must be done first" }, department: str("owning department, when not yours (it then waits for CEO triage)"), action: str("registry action the part's result needs, when not your ticket's") }, ["title", "goal", "done_criteria"]) },
+      note: str("why it is split this way, and what remains for the whole once the parts are done"),
+    }),
+    kinds: ["senior"],
+    run: (a, b, host) => {
+      const t = ownTicket(b, host)
+      if (t.state !== "in_progress") throw new ToolError(`ticket is ${t.state}, not in_progress`)
+      const parts = (a["parts"] as Array<Record<string, unknown>> | undefined) ?? []
+      if (parts.length === 0) throw new ToolError("a split needs at least one part")
+      const cap = host.config.modules.juniors.max_per_task
+      const have = host.store.children(t.id).length
+      if (have + parts.length > cap) throw new ToolError(`${t.id} would have ${have + parts.length} parts; the limit is ${cap} (modules.juniors.max_per_task). Split into fewer, larger parts, or ticket_update → blocked and let the CEO re-plan`)
+      let depth = 0
+      for (let p = t.parent; p !== null; p = host.store.ticket(p)?.parent ?? null) depth++
+      if (depth + 1 > MAX_TREE_DEPTH) throw new ToolError(`${t.id} is already ${depth} deep; a tree is at most ${MAX_TREE_DEPTH} deep. Do the work here, or ticket_update → blocked and let the CEO re-plan`)
+      const enabled = [...host.config.modules.departments, "improvement"]
+      const specs = parts.map((p, i) => {
+        const title = String(p["title"] ?? "").trim()
+        const goal = String(p["goal"] ?? "").trim()
+        const done_criteria = Array.isArray(p["done_criteria"]) ? (p["done_criteria"] as Array<unknown>).map(String).filter((c) => c.trim()) : []
+        if (!title || !goal || done_criteria.length === 0) throw new ToolError(`part ${i}: title, goal and at least one done criterion are required`)
+        const after = Array.isArray(p["after"]) ? (p["after"] as Array<unknown>).map(Number) : []
+        for (const k of after) if (!Number.isInteger(k) || k < 0 || k >= i) throw new ToolError(`part ${i}: \`after\` names positions of earlier parts in this call (0..${i - 1}); got ${k}`)
+        const department = p["department"] === undefined ? t.department : String(p["department"])
+        if (!enabled.includes(department)) throw new ToolError(`part ${i}: department '${department}' is not enabled`)
+        const action = p["action"] === undefined ? (department === t.department ? t.action : null) : String(p["action"])
+        if (action !== null && !host.config.actions.some((x) => x.id === action)) throw new ToolError(`part ${i}: unknown action '${action}'`)
+        return { title, goal, done_criteria, after, needs: Array.isArray(p["needs"]) ? (p["needs"] as Array<unknown>).map(String) : [], department, action }
+      })
+      const now = host.now()
+      try {
+        const made = host.store.transaction(() => {
+          const ids: Array<string> = []
+          for (const s of specs) {
+            ids.push(host.store.createTicket({
+              department: s.department, title: s.title, goal: s.goal, why: `part of ${t.id}: ${t.title}`, done_criteria: s.done_criteria, opened_by: b.role,
+              project: t.project, action: s.action, priority: t.priority, milestone: t.milestone, parent: t.id, needs: [...s.needs, ...s.after.map((k) => ids[k] as string)],
+              // within the ticket's own department the work was already triaged; another department's part is the CEO's to place
+              state: s.department === t.department ? "triaged" : "new", now,
+            }).id)
+          }
+          host.store.transition(t.id, "triaged", b.role, `split into ${ids.join(", ")}: ${String(a["note"])}`, now)
+          return ids
+        })
+        for (const id of [t.id, ...made]) host.onTicketChanged?.(id)
+        return { ticket: t.id, held_until_ended: made, parts: made.map((id) => view(host.store.ticket(id) as Ticket)) }
+      } catch (e) {
+        if (e instanceof LinkError) throw new ToolError(e.message)
+        throw e
+      }
+    },
+  },
+  {
     name: "ticket_unblock",
-    description: "CEO: release a blocked ticket back to its department with a decision, or decline it.",
-    input: obj({ id: str("ticket id"), decision: { type: "string", enum: ["triaged", "declined"] }, note: str("the decision that unblocks it, or why it is declined") }),
+    description: "CEO: release a blocked ticket back to its department with a decision, or decline it. A declined ticket is a dead end that is kept: give `kind` (refuted, barrier, exhausted, merged — with `into` —, withdrawn, rejected); without one it keeps the kind its session claimed, else `withdrawn`.",
+    input: obj({ id: str("ticket id"), decision: { type: "string", enum: ["triaged", "declined"] }, note: str("the decision that unblocks it, or why it is declined"), kind: { type: "string", enum: [...END_KINDS], description: "with declined: how it ended" }, into: str("with kind merged: the ticket it was folded into") }, ["id", "decision", "note"]),
     kinds: ["ceo"],
     run: (a, b, host) => {
       const t = host.store.ticket(String(a["id"]))
       if (t?.note?.startsWith("postcheck failed after action applied:")) throw new ToolError("postcheck recovery requires the Operator; do not automatically retry an applied action")
-      host.store.transition(String(a["id"]), a["decision"] as "triaged" | "declined", b.role, String(a["note"]), host.now())
+      const kind = a["kind"] === undefined ? undefined : String(a["kind"])
+      if (kind !== undefined && !(END_KINDS as ReadonlyArray<string>).includes(kind)) throw new ToolError(`kind is one of: ${END_KINDS.join(", ")}`)
+      try {
+        host.store.transition(String(a["id"]), a["decision"] as "triaged" | "declined", b.role, String(a["note"]), host.now(), a["decision"] === "declined" && kind !== undefined ? { end_kind: kind, end_into: a["into"] === undefined ? null : String(a["into"]) } : {})
+      } catch (e) {
+        if (e instanceof LinkError) throw new ToolError(e.message)
+        throw e
+      }
       host.onTicketChanged?.(String(a["id"]))
       return view(host.store.ticket(String(a["id"])) as Ticket)
     },
@@ -273,7 +345,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
       const t = host.store.ticket(tr.ticket)
       if (t === undefined) throw new ToolError(`ticket ${tr.ticket} not found`)
       if (tr.decision === "decline") {
-        host.store.transition(t.id, "declined", b.role, tr.note, host.now())
+        host.store.transition(t.id, "declined", b.role, tr.note, host.now(), { end_kind: "rejected" })
       } else if (tr.decision === "unblock") {
         host.store.transition(t.id, "triaged", b.role, tr.note, host.now())
       } else {

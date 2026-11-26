@@ -60,7 +60,7 @@ bunx holdco ticket new --title "Add CSV export" --goal "users can download their
   --criteria "export button on the settings page; a test covers the CSV format" --action code.merge.app
 ```
 
-Order work with `--needs` (the ticket starts when those are done) and group it with `--parent` (the parent is worked after its parts have ended); `holdco ticket link <id> --needs 'ENG-1, ENG-2' | --parent ENG-3 | --needs none` changes either later, and `holdco ticket list` shows what each held ticket waits on.
+Order work with `--needs` (the ticket starts when those are done) and group it with `--parent` (the parent is worked after its parts have ended); `holdco ticket link <id> --needs 'ENG-1, ENG-2' | --parent ENG-3 | --needs none` changes either later, and `holdco ticket list` shows what each held ticket waits on. A senior can hand a ticket back in parts itself, or claim it cannot be done; a ticket you decline is kept as a dead end with how it ended — `holdco ticket decline <id> --kind refuted|barrier|exhausted|merged|withdrawn|rejected [--into <id>]` (default: what its session claimed, else `withdrawn`).
 
 Or write objectives into `governance/strategy.md` and let the CEO open tickets. A ticket's life: `triaged → in_progress (senior, 0..N juniors in their own worktrees) → ready_for_verification → verified → executed` or `awaiting_approval → your inbox`. Merges into your repository happen only after an independent Verification verdict and, until an action graduates, after approval (COO for T2, you for T3; without a COO every T2 comes to you).
 

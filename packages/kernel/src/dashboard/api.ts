@@ -388,7 +388,7 @@ export const act = async (ctx: DashboardContext, a: Action): Promise<Record<stri
       store.inboxDecide(a.id, a.decision, a.note ?? (a.decision === "approved" ? "approved from the dashboard" : "rejected from the dashboard"), now)
       if ((item.kind === "blocked" || item.kind === "triage") && item.ticket_id) {
         const t = store.ticket(item.ticket_id)
-        if (t && (t.state === "blocked" || t.state === "new")) store.transition(t.id, a.decision === "approved" ? "triaged" : "declined", "operator", a.note ?? `${a.decision} from the dashboard`, now)
+        if (t && (t.state === "blocked" || t.state === "new")) store.transition(t.id, a.decision === "approved" ? "triaged" : "declined", "operator", a.note ?? `${a.decision} from the dashboard`, now, a.decision === "approved" ? {} : { end_kind: t.end_kind ?? "rejected" })
       }
       if (item.kind === "graduation" && a.decision === "approved" && typeof item.payload["action"] === "string") return act(ctx, { kind: "promote", action: item.payload["action"] })
       if (item.kind === "recovery" && item.ticket_id) {

@@ -60,6 +60,19 @@ export const createWorktree = (repo: string, name: string, branch: string, base:
   return dir
 }
 
+/**
+ * D89: bring a ticket branch that already has a worktree up to date with `base` — a ticket handed back in parts
+ * comes back after its parts were merged there. `conflict` leaves the worktree as it was, for the session to merge.
+ */
+export const syncWithBase = (dir: string, base: string): "current" | "merged" | "conflict" => {
+  const run = (args: ReadonlyArray<string>) => spawnSync("git", ["-c", "user.name=holdco", "-c", "user.email=holdco@localhost", "-c", "commit.gpgsign=false", ...args], { cwd: dir, encoding: "utf8" })
+  if (run(["merge-base", "--is-ancestor", base, "HEAD"]).status === 0) return "current"
+  if (run(["status", "--porcelain"]).stdout.trim() !== "") return "conflict" // uncommitted work from an earlier session: not the kernel's to merge over
+  if (run(["merge", "--no-edit", base]).status === 0) return "merged"
+  run(["merge", "--abort"])
+  return "conflict"
+}
+
 /** A worktree starts with empty submodule directories; checks that need them fail for no reason of the change. Local, no network when the main checkout has them. */
 const initSubmodules = (dir: string) => {
   if (!existsSync(NodePath.join(dir, ".gitmodules"))) return

@@ -87,7 +87,12 @@ describe("operator commands", () => {
     expect(JSON.parse(holdco("ticket", "show", "ENG-1").stdout)).toMatchObject({ parts: ["ENG-2 triaged"], waits_on: { on: "parts", tickets: ["ENG-2"] } })
     expect(holdco("ticket", "link", "ENG-2", "--parent", "none").stdout).toContain("ENG-2: no parent; needs nothing; ready to be worked")
     expect(holdco("ticket", "link", "ENG-2").stderr).toContain("usage: holdco ticket link")
-    expect(holdco("ticket", "decline", "ENG-2", "--note", "test ticket").status).toBe(0)
+    // D89: declining records how it ended
+    expect(holdco("ticket", "decline", "ENG-2", "--kind", "nonsense").stderr).toContain("--kind is one of: refuted, barrier, exhausted, merged, withdrawn, rejected")
+    expect(holdco("ticket", "decline", "ENG-2", "--kind", "merged").stderr).toContain("merged needs the ticket")
+    expect(holdco("ticket", "decline", "ENG-2", "--note", "same work as ENG-1", "--kind", "merged", "--into", "ENG-1").stdout).toContain("ENG-2 → declined (merged into ENG-1)")
+    expect(holdco("ticket", "list").stdout).toMatch(/ENG-2 .*\[merged → ENG-1\]/)
+    expect(JSON.parse(holdco("ticket", "show", "ENG-2").stdout)).toMatchObject({ state: "declined", end_kind: "merged", end_into: "ENG-1" })
   })
   test("status, digest, interrupt and resume (resume needs a terminal)", () => {
     expect(holdco("status").stdout).toContain("supervisor not running")

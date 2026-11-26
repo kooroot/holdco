@@ -218,7 +218,7 @@ export const askContext = (src: AskSource, question: string, history: ReadonlyAr
 
   const finished = S.tickets.filter((t) => END.has(t.state) && t.updated_at >= now - 14 * 86_400_000).sort((a, b) => b.updated_at - a.updated_at)
   out.push("", `FINISHED IN THE LAST 14 DAYS (${finished.length}${finished.length > 40 ? ", newest 40" : ""}):`)
-  for (const t of finished.slice(0, 40)) out.push(`- ${t.id} [${t.project ?? "—"} · ${t.state} ${ago(now - t.updated_at)}${t.verdict ? ` · judge ${t.verdict}` : ""}] ${clip(t.title, 120)}`)
+  for (const t of finished.slice(0, 40)) out.push(`- ${t.id} [${t.project ?? "—"} · ${t.state}${t.end_kind ? ` (dead end: ${t.end_kind}${t.end_into ? ` into ${t.end_into}` : ""})` : ""} ${ago(now - t.updated_at)}${t.verdict ? ` · judge ${t.verdict}` : ""}] ${clip(t.title, 120)}`)
   if (finished.length === 0) out.push("(none)")
 
   out.push("", `INBOX — decisions waiting for the Operator (${S.inbox.length}):`)

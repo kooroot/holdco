@@ -3,13 +3,13 @@ import { useEffect, useState } from "react"
 import { style, vars } from "../../zyzz.config.ts"
 import { ago, clock, STATE_LABEL, usd } from "../format.ts"
 import { toast, useAct, useSnapshot, useTicket } from "../hooks.ts"
-import { useNewTicket } from "../nav.ts"
+import { useNewTicket, useOpenTicket } from "../nav.ts"
 import { cn, Button, Card, Code, Kv, Pill, Tabs, Td, VerdictPill, ui } from "../ui.tsx"
 import { Diff } from "./Diff.tsx"
 import { Files } from "./Files.tsx"
 import { Live } from "./Live.tsx"
 import { etaText, waitingText } from "./Waiting.tsx"
-import { t as tr, useLang, tx } from "../i18n.ts"
+import { getLang, t as tr, useLang, tx } from "../i18n.ts"
 
 const st = {
   scrim: style({ position: "fixed", inset: "0 !custom", backgroundColor: "rgba(0,0,0,.25) !custom", zIndex: 39 }),
@@ -37,6 +37,22 @@ export const Drawer = ({ id, onClose }: { id: string; onClose: () => void }) => 
   const t = d?.ticket
   const wait = snap.data?.waiting.find((w) => w.ticket_id === id)
   const canEdit = t ? !["done", "declined", "rolled_back"].includes(t.state) : false
+  // D88: where this ticket sits in the tree — what it is a part of, what it needs first, and its own parts
+  const openTicket = useOpenTicket()
+  const all = snap.data?.tickets ?? []
+  const linked = (ids: ReadonlyArray<string>) => ids.map((x) => all.find((y) => y.id === x) ?? { id: x, state: "?", title: "" })
+  const link = (x: { id: string; state: string; title: string }) => (
+    <div key={x.id} {...ui.row()} style={{ gap: 6, cursor: "pointer" }} onClick={() => openTicket(x.id)} title={x.title}>
+      <Code>{x.id}</Code><Pill tone={x.state === "done" ? "ok" : x.state === "blocked" || x.state === "declined" || x.state === "rolled_back" ? "signal" : undefined}>{tr(STATE_LABEL[x.state] ?? x.state)}</Pill><span {...cn(ui.small(), ui.muted())} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tx(x.title)}</span>
+    </div>
+  )
+  const parts = all.filter((x) => x.parent === id)
+  const tree: Array<[string, React.ReactNode]> = t ? [
+    ...(t.parent ? [[tr("Part of"), <div>{linked([t.parent]).map(link)}</div>] as [string, React.ReactNode]] : []),
+    ...(t.needs.length ? [[tr("Needs first"), <div {...ui.stack()} style={{ gap: 4 }}>{linked(t.needs).map(link)}</div>] as [string, React.ReactNode]] : []),
+    ...(t.end_kind ? [[tr(t.state === "declined" ? "Dead end" : "Claims a dead end"), <div {...ui.row()} style={{ gap: 6 }}><Pill tone="signal">{getLang() === "ko" ? tr(`end.${t.end_kind}`) : t.end_kind}</Pill>{t.end_into ? linked([t.end_into]).map(link) : null}</div>] as [string, React.ReactNode]] : []),
+    ...(parts.length ? [[tr("Parts"), <div {...ui.stack()} style={{ gap: 4 }}>{parts.map(link)}</div>] as [string, React.ReactNode]] : []),
+  ] : []
   const v = d?.verdict as { verdict: string; overall: number; confidence: string; payload: { summary?: string; failures?: Array<{ criterion: string; evidence: string }>; gates?: Array<{ gate: string; passed: boolean }> } } | null | undefined
   return (
     <>
@@ -55,7 +71,7 @@ export const Drawer = ({ id, onClose }: { id: string; onClose: () => void }) => 
               <Tabs tabs={[["overview", tr("Overview")], ["live", tr(d.sessions.some((x) => x.ended_at === null) ? "Live ●" : "Log")], ["files", tr("Files")], ["diff", tr("Diff")]]} value={tab} onChange={setTab} right={canEdit ? <Button sm onClick={() => { snap.data; setNew(true); sessionStorage.setItem("holdco.edit", id) }}>{tr("Edit")}</Button> : null} />
               {tab === "overview" ? (
                 <div {...ui.stack()}>
-                  <Kv rows={[[tr("Goal"), tx(t.goal)], [tr("Why"), tx(t.why)], [tr("Done when"), <ul {...ui.criteria()}>{t.done_criteria.map((c, i) => <li key={i}>{tx(c)}</li>)}</ul>], ...(t.branch ? [[tr("Branch"), <Code>{t.branch}</Code>] as [string, React.ReactNode]] : []), [tr("Cost"), tr("{c} across {n} sessions", { c: usd(d.cost), n: d.sessions.length })], [tr("Attempts"), String(t.attempts)], ...(wait ? [[tr("Waiting on"), `${waitingText(wait)}${etaText(wait, snap.data?.now ?? Date.now()) ? ` · ${etaText(wait, snap.data?.now ?? Date.now())}` : ""}`] as [string, React.ReactNode]] : [])]} />
+                  <Kv rows={[[tr("Goal"), tx(t.goal)], [tr("Why"), tx(t.why)], [tr("Done when"), <ul {...ui.criteria()}>{t.done_criteria.map((c, i) => <li key={i}>{tx(c)}</li>)}</ul>], ...tree, ...(t.branch ? [[tr("Branch"), <Code>{t.branch}</Code>] as [string, React.ReactNode]] : []), [tr("Cost"), tr("{c} across {n} sessions", { c: usd(d.cost), n: d.sessions.length })], [tr("Attempts"), String(t.attempts)], ...(wait ? [[tr("Waiting on"), `${waitingText(wait)}${etaText(wait, snap.data?.now ?? Date.now()) ? ` · ${etaText(wait, snap.data?.now ?? Date.now())}` : ""}`] as [string, React.ReactNode]] : [])]} />
                   {t.state === "blocked" ? (
                     <Card pad><div {...ui.stack()}><b>{tr("Decision needed")}</b><p {...ui.small()} style={{ whiteSpace: "pre-wrap", margin: 0 }}>{tx(t.note)}</p>
                       <input {...ui.input()} value={decision} onChange={(e) => setDecision(e.target.value)} placeholder={tr("your decision, in one line (the senior reads it)")} />

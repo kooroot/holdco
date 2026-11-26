@@ -64,7 +64,7 @@ Every state has exactly one owner, and the supervisor dispatches that owner. No 
 |---|---|---|
 | `new` | CEO (triage, each cycle) | → `triaged` or `declined`. Without a CEO: a triage item in the Operator's daily inbox |
 | `triaged`, `rejected` | producing department senior | session in the ticket worktree `t-<id>` (§8) |
-| `in_progress` | that session | `ticket_update` → `ready_for_verification` or `blocked` |
+| `in_progress` | that session | `ticket_update` → `ready_for_verification` or `blocked` (D89: or `dead_end`, blocked with the claimed kind); `ticket_split` → `triaged`, held by its new parts |
 | `ready_for_verification` | Verification | session in a fresh read-only worktree `v-<id>` of the PR head; `verdict_submit` → `verified` or `rejected` (a rejection counts as an attempt) |
 | `verified` | kernel | `tierForChange` on the diff. T0/T1 with gates met → executor runs the action → `done`. T2/T3 → `awaiting_approval` (stage `needs_proposal`) |
 | `awaiting_approval` / `needs_proposal` | CEO (batched in the next cycle) | proposal per `approvals.md` §2 → `needs_review`. Without a CEO the kernel drafts the proposal from the ticket and PR |

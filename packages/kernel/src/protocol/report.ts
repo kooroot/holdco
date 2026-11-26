@@ -5,7 +5,8 @@
 import { Schema } from "effect"
 import { Text } from "./text.ts"
 
-export const ReportStatus = Schema.Literals(["ready", "partial", "blocked", "nothing_to_do"])
+/** D89: `split` — the ticket was handed back in parts (ticket_split); `dead_end` — the session claims it cannot be done (`end`). */
+export const ReportStatus = Schema.Literals(["ready", "partial", "blocked", "nothing_to_do", "split", "dead_end"])
 
 export const SessionReport = Schema.Struct({
   ticket: Text(1),
@@ -21,12 +22,15 @@ export const SessionReport = Schema.Struct({
   assumptions: Schema.Array(Schema.String),
   /** What a decision-maker must settle before work can continue (status `blocked`). */
   needs_decision: Schema.optionalKey(Text(1)),
+  /** D89: the dead end claimed (status `dead_end`): which kind, and the evidence in one or two sentences. */
+  end: Schema.optionalKey(Schema.Struct({ kind: Schema.Literals(["refuted", "barrier", "exhausted"]), why: Text(1) })),
   /** Tickets this session opened for other departments, by id. */
   opened_tickets: Schema.Array(Schema.String),
   /** How the senior sized the team (delegation.md §2); Improvement reads it against time and cost. */
   team: Schema.optionalKey(Schema.Struct({ pattern: Schema.Literals(["solo", "split", "compete", "sequential"]), juniors: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)), reason: Schema.optionalKey(Schema.String) })),
 }).check(
   Schema.makeFilter((r) => (r.status === "blocked" && r.needs_decision === undefined ? "status 'blocked' requires needs_decision" : undefined)),
+  Schema.makeFilter((r) => (r.status === "dead_end" && r.end === undefined ? "status 'dead_end' requires end {kind, why}" : undefined)),
   Schema.makeFilter((r) => (r.status === "ready" && r.branch === undefined && r.changed_paths.length > 0 ? "status 'ready' with changes requires branch" : undefined)),
 )
 export type SessionReport = typeof SessionReport.Type

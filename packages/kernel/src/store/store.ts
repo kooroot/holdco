@@ -24,6 +24,17 @@ export const END_STATES: ReadonlySet<TicketState> = new Set(["done", "declined",
 /** D88: ended without being done, so a ticket that needs one of these can never start. */
 const NEVER_DONE: ReadonlySet<TicketState | undefined> = new Set(["declined", "rolled_back", undefined])
 
+/**
+ * D89: why a ticket ended without being done. `refuted`: the goal turned out wrong or impossible as stated;
+ * `barrier`: something outside the company's reach stops it; `exhausted`: every approach tried failed;
+ * `merged`: folded into another ticket (`end_into`); `withdrawn`: whoever asked no longer wants it;
+ * `rejected`: triage or an approval said no.
+ */
+export const END_KINDS = ["refuted", "barrier", "exhausted", "merged", "withdrawn", "rejected"] as const
+export type EndKind = (typeof END_KINDS)[number]
+/** The kinds a working session may claim; the rest are decisions of whoever owns the ticket. */
+export const CLAIMABLE_ENDS: ReadonlyArray<EndKind> = ["refuted", "barrier", "exhausted"]
+
 export type ApprovalStage = "needs_proposal" | "needs_review" | "inbox" | null
 
 export interface Ticket {
@@ -52,6 +63,10 @@ export interface Ticket {
   readonly parent: string | null
   /** D88: tickets that must be `done` before this one is worked. */
   readonly needs: ReadonlyArray<string>
+  /** D89: how a declined ticket ended; on a blocked ticket, the dead end its session claims (cleared when it is released). */
+  readonly end_kind: EndKind | null
+  /** D89: the ticket a `merged` one was folded into. */
+  readonly end_into: string | null
   readonly created_at: number
   readonly updated_at: number
 }
@@ -208,7 +223,7 @@ CREATE TABLE IF NOT EXISTS action_log (
 `
 
 const parseTicket = (r: Record<string, unknown>): Ticket =>
-  ({ ...r, done_criteria: JSON.parse(String(r["done_criteria"])) as Array<string>, parent: (r["parent"] as string | null | undefined) ?? null, needs: JSON.parse(String(r["needs"] ?? "[]")) as Array<string> }) as unknown as Ticket
+  ({ ...r, done_criteria: JSON.parse(String(r["done_criteria"])) as Array<string>, parent: (r["parent"] as string | null | undefined) ?? null, end_kind: (r["end_kind"] as EndKind | null | undefined) ?? null, end_into: (r["end_into"] as string | null | undefined) ?? null, needs: JSON.parse(String(r["needs"] ?? "[]")) as Array<string> }) as unknown as Ticket
 
 /** D88: a parent or need that cannot be given to a ticket. */
 export class LinkError extends Error {}
@@ -266,6 +281,8 @@ const ADDED_COLUMNS: ReadonlyArray<readonly [table: string, column: string, ddl:
   ["tickets", "milestone", "INTEGER"],
   ["tickets", "parent", "TEXT"],
   ["tickets", "needs", "TEXT NOT NULL DEFAULT '[]'"],
+  ["tickets", "end_kind", "TEXT"],
+  ["tickets", "end_into", "TEXT"],
 ]
 
 export class Store {
@@ -416,7 +433,7 @@ export class Store {
   }
 
   /** Move a ticket, append the event. Throws on an illegal transition. */
-  transition(id: string, to: TicketState, actor: string, note: string, now: number, patch: Partial<Record<"approval_stage" | "action" | "branch" | "department" | "window_closes_at" | "priority" | "project", unknown>> = {}) {
+  transition(id: string, to: TicketState, actor: string, note: string, now: number, patch: Partial<Record<"approval_stage" | "action" | "branch" | "department" | "window_closes_at" | "priority" | "project" | "end_kind" | "end_into", unknown>> = {}) {
     const t = this.ticket(id)
     if (t === undefined) throw new Error(`ticket ${id} not found`)
     if (!TRANSITIONS[t.state].includes(to)) throw new IllegalTransition(id, t.state, to)
@@ -433,7 +450,14 @@ export class Store {
         vals[2] = note
       }
     }
-    for (const [k, v] of Object.entries(patch)) {
+    // D89: a declined ticket always says how it ended (the claim it was blocked with, unless the decider names another);
+    // a claim does not outlive the block it was made with
+    const end = to === "declined" ? { end_kind: patch.end_kind ?? t.end_kind ?? "withdrawn", end_into: patch.end_into ?? null } : "end_kind" in patch ? {} : { end_kind: null, end_into: null }
+    if (to === "declined" && end.end_kind === "merged") {
+      const into = end.end_into === null ? undefined : this.ticket(String(end.end_into))
+      if (into === undefined || into.id === id) throw new LinkError(`merged needs the ticket ${id} was folded into (\`into\`), and it must exist`)
+    }
+    for (const [k, v] of Object.entries({ ...patch, ...end })) {
       sets.push(`${k} = ?`)
       vals.push(v)
     }

@@ -48,10 +48,20 @@ store.inboxAdd("t3", t1.id, { title: "Merge settlement fee into acme main", tier
 const t2 = mk({ department: "research", title: "Compare x402 vs ERC-7715 for delegated payments", goal: "A recommendation with a decision table", project: "acme", state: "blocked", action: "research.report", now: now - 20 * H })
 store.db.run("UPDATE tickets SET note=?, updated_at=? WHERE id=?", ["Both standards fit; which chain do we launch on first? The answer changes the recommendation. Options: (a) Base first, (b) Ethereum mainnet first.", now - 14 * H, t2.id])
 store.inboxAdd("blocked", t2.id, { title: `${t2.id} is blocked: which chain launches first?`, note: "Both standards fit; the launch chain decides the recommendation.", approve: "releases it with your note", reject: "declines it" }, now - 1 * H, "urgent")
-mk({ department: "engineering", title: "Seller dashboard: payout history", goal: "Paginated payout list", project: "acme", state: "in_progress", action: "code.merge.app", now: now - 5 * H })
+const hist = mk({ department: "engineering", title: "Seller dashboard: payout history", goal: "Paginated payout list", project: "acme", state: "in_progress", action: "code.merge.app", now: now - 5 * H })
 mk({ department: "gtm", title: "Launch post: settlement in one click", goal: "Draft for the company account", project: "acme", state: "ready_for_verification", action: "content.publish.company", now: now - 4 * H })
 mk({ department: "operations", title: "Staging deploy of fee change", goal: "staging runs t/ENG-3", project: "acme", state: "triaged", action: "deploy.staging", now: now - 1 * H })
 for (let i = 0; i < 4; i++) { const d = mk({ department: "engineering", title: ["Webhook retry with backoff", "Rate limit on quote endpoint", "Fix rounding in fee()", "Typed errors for settle()"][i], goal: "done", project: "acme", state: "done", action: "code.merge.app", now: now - (40 + i * 9) * H }); store.addVerdict({ ticket_id: d.id, session_id: `v${i}`, at: now - (39 + i * 9) * H, verdict: i === 2 ? "reject" : "approve", overall: 3.2, confidence: i === 3 ? "low" : "high", payload: { summary: "ok", failures: [], gates: [] } }); store.db.run("UPDATE tickets SET branch=? WHERE id=?", ["t/ENG-3", d.id]) }
+// D88/D89: a ticket its senior handed back in parts — one done, one a dead end kept with its reason, one held by what it needs
+{
+  const part = (o: any) => mk({ department: "engineering", project: "acme", action: "code.merge.app", opened_by: "engineering-senior", now: now - 8 * H, ...o })
+  const root = mk({ department: "engineering", title: "Bulk payouts", goal: "A seller pays out a batch in one action", project: "acme", state: "triaged", action: "code.merge.app", now: now - 9 * H })
+  const schema = part({ title: "Batch payout schema", goal: "Batches are stored with their items", parent: root.id, state: "done", why: `part of ${root.id}: Bulk payouts` })
+  const bank = part({ title: "Bulk transfer through the bank API", goal: "One API call pays a batch", parent: root.id, needs: [schema.id], state: "triaged", why: `part of ${root.id}: Bulk payouts` })
+  store.transition(bank.id, "blocked", "engineering-senior", "dead end (refuted): the bank API has no bulk endpoint (docs §3); the goal assumes one", now - 6 * H, { end_kind: "refuted" })
+  store.transition(bank.id, "declined", "ceo", "confirmed: the bank API has no bulk endpoint; pay the items one by one behind a queue instead", now - 5 * H)
+  part({ title: "Batch payout screen", goal: "A seller reviews and confirms a batch", parent: root.id, needs: [schema.id, hist.id], state: "triaged", why: `part of ${root.id}: Bulk payouts` })
+}
 // D83: a roadmap for acme (the CEO's), tickets under its milestones, and a status line
 {
   const ms = (title: string, detail: string, status: "open" | "done" = "open") => store.milestoneAdd({ project: "acme", title, detail, status, ...(status === "done" ? { evidence: "main: src/checkout" } : {}), by: "ceo", now: now - 40 * H }).id

@@ -11,7 +11,7 @@ import { assignmentFor, authMode, CompanyConfig, type EngineId, ENGINE_IDS, ROLE
 import { defaultRoles, EXAMPLE_PRICES, formatAssignment, MODEL_DEFAULTS, MODEL_MODES, type ModelMode, parseAssignment, PRICES_CHECKED_ON } from "../config/models.ts"
 import type { Engine } from "../engine/types.ts"
 import { renderCompanyYaml } from "../scaffold/scaffold.ts"
-import { END_STATES, type Hold, LinkError, Store, type Ticket } from "../store/store.ts"
+import { END_KINDS, END_STATES, type Hold, LinkError, Store, type Ticket } from "../store/store.ts"
 import { clear, raise, readControl } from "../supervisor/control.ts"
 import { renderDigest } from "../supervisor/digest.ts"
 import { undoAction } from "../supervisor/executors.ts"
@@ -64,7 +64,7 @@ const loadEngines = async (config: CompanyConfig, dir: string): Promise<Map<Engi
   return out
 }
 
-const fmtTicket = (t: Ticket, hold?: Hold) => `${t.id.padEnd(9)} ${t.state.padEnd(22)} ${(t.approval_stage ?? "").padEnd(14)} p${t.priority} ${t.department.padEnd(12)} ${t.title}${t.interrupt_flag ? `  [${t.interrupt_flag}]` : ""}${hold ? `  [waits on ${hold.on === "parts" ? "its parts " : ""}${hold.tickets.join(", ")}]` : ""}`
+const fmtTicket = (t: Ticket, hold?: Hold) => `${t.id.padEnd(9)} ${t.state.padEnd(22)} ${(t.approval_stage ?? "").padEnd(14)} p${t.priority} ${t.department.padEnd(12)} ${t.title}${t.interrupt_flag ? `  [${t.interrupt_flag}]` : ""}${t.end_kind ? `  [${t.state === "declined" ? "" : "claims "}${t.end_kind}${t.end_into ? ` → ${t.end_into}` : ""}]` : ""}${hold ? `  [waits on ${hold.on === "parts" ? "its parts " : ""}${hold.tickets.join(", ")}]` : ""}`
 /** `--needs 'ENG-1, ENG-2'` → ids; `none` clears. */
 const idList = (text: string): Array<string> => (text.trim() === "none" ? [] : text.split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean))
 const ago = (ms: number) => (ms < 3_600_000 ? `${Math.round(ms / 60_000)}m` : ms < 86_400_000 ? `${Math.round(ms / 3_600_000)}h` : `${Math.round(ms / 86_400_000)}d`)
@@ -379,9 +379,17 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
           console.log(`${id} → triaged`)
         } else if (sub === "decline") {
           const id = args.positional[2] ?? ""
-          store.transition(id, "declined", "operator", args.flag("note") ?? "declined by the Operator", now)
-          console.log(`${id} → declined`)
-        } else throw new OperatorError("usage: holdco ticket new --title t [--dept d] [--project p] [--goal g] [--why w] [--criteria 'a; b'] [--action a] [--priority n] [--needs 'a, b'] [--parent id] | list | show <id> | link <id> [--needs 'a, b'|none] [--parent id|none] | unblock <id> --note n | decline <id>")
+          // D89: a declined ticket is a dead end that is kept, with its kind
+          const kind = args.flag("kind")
+          if (kind !== undefined && !(END_KINDS as ReadonlyArray<string>).includes(kind)) throw new OperatorError(`--kind is one of: ${END_KINDS.join(", ")}`)
+          try {
+            store.transition(id, "declined", "operator", args.flag("note") ?? "declined by the Operator", now, kind === undefined ? {} : { end_kind: kind, end_into: args.flag("into") ?? null })
+          } catch (e) {
+            if (e instanceof LinkError) throw new OperatorError(e.message)
+            throw e
+          }
+          console.log(`${id} → declined (${store.ticket(id)?.end_kind}${store.ticket(id)?.end_into ? ` into ${store.ticket(id)?.end_into}` : ""})`)
+        } else throw new OperatorError("usage: holdco ticket new --title t [--dept d] [--project p] [--goal g] [--why w] [--criteria 'a; b'] [--action a] [--priority n] [--needs 'a, b'] [--parent id] | list | show <id> | link <id> [--needs 'a, b'|none] [--parent id|none] | unblock <id> --note n | decline <id> [--note n] [--kind refuted|barrier|exhausted|merged|withdrawn|rejected] [--into id]")
       } finally {
         store.close()
       }
@@ -405,7 +413,7 @@ export const runOperator = async (cmd: string, args: Args, dir: string): Promise
           const note = args.flag("note") ?? `${sub} by the Operator`
           store.inboxDecide(id, sub === "approve" ? "approved" : "rejected", note, now)
           const t = item.ticket_id ? store.ticket(item.ticket_id) : undefined
-          if (t && (item.kind === "triage" || item.kind === "blocked")) store.transition(t.id, sub === "approve" ? "triaged" : "declined", "operator", note, now)
+          if (t && (item.kind === "triage" || item.kind === "blocked")) store.transition(t.id, sub === "approve" ? "triaged" : "declined", "operator", note, now, sub === "approve" ? {} : { end_kind: t.end_kind ?? "rejected" })
           if (item.kind === "graduation" && sub === "approve") await runOperator("promote", { ...args, positional: ["promote", String(item.payload["action"])] }, dir)
           console.log(`#${id} ${sub}d${t ? `; ${t.id} is now ${store.ticket(t.id)?.state}` : ""}${["t3", "t2_objection", "manual_action"].includes(item.kind) ? " (the supervisor acts on the next tick)" : ""}`)
         } else throw new OperatorError("usage: holdco inbox [list] | approve <id> [--note n] | reject <id> [--note n]")
