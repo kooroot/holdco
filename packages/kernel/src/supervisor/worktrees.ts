@@ -237,8 +237,13 @@ export const listWorktrees = (repo: string): Array<string> => {
   return r.status === 0 ? r.stdout.split("\n").filter((l) => l.startsWith("worktree ")).map((l) => l.slice(9)) : []
 }
 
+/**
+ * Every path a branch touches versus `base`. `--no-renames`: a moved file is reported as the path it left and the
+ * path it arrived at. With rename detection git names only the new path, so a locked or checker file moved out of
+ * its glob would not be seen as changed (D90: a change cannot loosen its own check by moving it).
+ */
 export const changedPaths = (repo: string, base: string, branch: string): Array<string> => {
-  const r = spawnSync("git", ["diff", "--name-only", `${base}...${branch}`], { cwd: repo, encoding: "utf8" })
+  const r = spawnSync("git", ["diff", "--name-only", "--no-renames", `${base}...${branch}`], { cwd: repo, encoding: "utf8" })
   return r.status === 0 ? r.stdout.split("\n").filter((s) => s.length > 0) : []
 }
 

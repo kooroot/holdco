@@ -1205,6 +1205,45 @@ describe("checks run by the kernel, against what was judged (D90)", () => {
     await sup.stop()
   })
 
+  test("moving a checker file out of its glob does not escape the check: the path it left is still checked from the default branch", async () => {
+    // verify discovers its checks by name, as a test runner does, so a moved check would still be picked up
+    const c = company("checker-moved", (raw) => { project(raw)["verify"] = ["sh", "-c", "for f in $(find . -name '*.check.sh' -not -path './.git/*'); do sh \"$f\" || exit 1; done"]; project(raw)["checker"] = ["acceptance/**"] })
+    const body = (last: string) => `# acceptance check\n# line two\n# line three\n# line four\n# line five\n${last}\n`
+    mkdirSync(NodePath.join(c.app, "acceptance"), { recursive: true })
+    writeFileSync(NodePath.join(c.app, "acceptance", "req.check.sh"), body("test -f required.txt"))
+    git(c.app, "add", "-A"); git(c.app, "commit", "-qm", "the project's acceptance check")
+    const clock = { now: Date.UTC(2026, 9, 26, 9) }
+    let attempt = 0
+    const engine = new FakeEngine({
+      ceo: DEFAULT_SCRIPTS["ceo"]!,
+      senior: async (ctx) => {
+        attempt++
+        // moves the check out of acceptance/ and loosens it (similar enough that git sees a rename); only the second attempt does the work
+        if (existsSync(NodePath.join(ctx.spec.cwd, "acceptance", "req.check.sh"))) {
+          mkdirSync(NodePath.join(ctx.spec.cwd, "moved"), { recursive: true })
+          ctx.git("mv", "acceptance/req.check.sh", "moved/req.check.sh")
+          writeFileSync(NodePath.join(ctx.spec.cwd, "moved", "req.check.sh"), body("true"))
+        }
+        if (attempt > 1) writeFileSync(NodePath.join(ctx.spec.cwd, "required.txt"), "x\n")
+        return ready(ctx)
+      },
+    })
+    const { sup, store } = makeSupervisor(c, engine, clock)
+    await sup.boot()
+    const id = open(store, clock.now)
+    await cycle(sup, clock, 4)
+    // attempt 1: the moved, loosened check passes; the one it left behind on the default branch does not
+    const rejected = store.events(id).find((e) => e.to_state === "rejected" && e.actor === "kernel")
+    expect(rejected?.note).toContain("verify failed")
+    expect(rejected?.note).toContain("Checked with the default branch's version of acceptance/req.check.sh")
+    expect(engine.runs.some((r) => r.role.kind === "verification")).toBe(false)
+    await cycle(sup, clock, 8)
+    // attempt 2 passes under the trusted check, and moving it is the Operator's to approve
+    expect(store.checkRuns(id).at(-1)).toMatchObject({ name: "verify", passed: true, overlaid: ["acceptance/req.check.sh"] })
+    expect(store.events(id).find((e) => e.to_state === "awaiting_approval")?.note).toBe("tier T3 (forced by acceptance/req.check.sh)")
+    await sup.stop()
+  })
+
   test("a verdict counts for the commit and the criteria it judged: move either and the ticket is judged again before anything executes", async () => {
     const c = company("stale")
     const clock = { now: Date.UTC(2026, 9, 26, 9) }
